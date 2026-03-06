@@ -6,11 +6,13 @@ Clawvato is an always-on personal AI agent that runs locally on macOS. It acts a
 ## Quick Reference
 
 ```bash
-npm run build      # TypeScript compile
-npm test           # Run all tests (vitest)
-npm run lint       # Type-check without emitting
-npm run dev        # Run CLI via tsx (no build needed)
-npx tsx src/cli/index.ts status   # Check system status
+npm install                            # Install dependencies (first time / after pulling)
+npm run build                          # TypeScript compile
+npm test                               # Run all tests (vitest) — 14 files, 169 tests
+npm run lint                           # Type-check without emitting
+npx tsx src/cli/index.ts setup         # First-time interactive setup wizard
+npx tsx src/cli/index.ts start         # Start agent (Socket Mode, ~11s to connect)
+npx tsx src/cli/index.ts status        # Check system status
 ```
 
 ## Architecture
@@ -18,31 +20,43 @@ npx tsx src/cli/index.ts status   # Check system status
 ### Directory Structure
 ```
 src/
-  agent/         # Claude Agent SDK bootstrap + Plan-Then-Execute loop
-    index.ts     # Agent creation, Anthropic client setup
-    loop.ts      # Agent loop with checkpoint interruption
-  cli/           # Commander.js CLI (start, status, config, credentials, audit, trust-level)
+  agent/         # Claude Agent SDK bootstrap + agent orchestration
+    index.ts     # Agent creation, Anthropic client setup, batch processing
+    hooks.ts     # PreToolUse/PostToolUse hook factories, interrupt bridge
+  cli/           # Commander.js CLI (setup, start, status, config, credentials, audit, trust-level)
+    index.ts     # Command registration
+    setup.ts     # Interactive setup wizard (credentials + connection test)
+    start.ts     # Agent startup orchestration
+    status.ts    # Status reporting
   db/            # SQLite via node:sqlite (DatabaseSync) + FTS5 + schema.sql
   hooks/         # PreToolUse / PostToolUse hooks (audit, security)
+    pre-tool-use.ts   # Sender verify, rate limit, path validate, training wheels
+    post-tool-use.ts  # Audit logging, output sanitization, secret scanning
+    audit-logger.ts   # Immutable action trail + graduation recording
   security/      # sender-verify, output-sanitizer, path-validator, rate-limiter
   slack/         # Slack event handling and interaction model
     event-queue.ts       # Message accumulation with debounce + typing awareness
     handler.ts           # Slack event routing, reaction lifecycle
     interrupt-classifier.ts  # Four-way interrupt classification (Haiku)
-  memory/        # Memory retrieval + consolidation (Track C)
+    socket-mode.ts       # @slack/bolt Socket Mode adapter, WebClient creation
   mcp/           # MCP server configurations
+    slack/server.ts      # In-process Slack MCP server (5 tools)
   training-wheels/  # Trust level enforcement + pattern graduation
     policy-engine.ts  # Trust level policy evaluation
     graduation.ts     # Pattern tracking + graduation criteria
-  workflows/     # Durable workflow state machine (Track C)
-  proactive/     # Proactive behaviors (Track D)
+  memory/        # Memory retrieval + consolidation (NOT YET IMPLEMENTED)
+  workflows/     # Durable workflow state machine (NOT YET IMPLEMENTED)
+  proactive/     # Proactive behaviors (NOT YET IMPLEMENTED)
   config.ts      # Zod-validated config, file + env fallback
   credentials.ts # macOS Keychain via keytar, env fallback
   logger.ts      # Pino structured logging with lazy init proxy
   index.ts       # Public API re-exports
 tests/
-  security/      # Security module tests
-  slack/         # Event queue, interrupt classifier tests
+  agent/         # Agent hooks tests
+  cli/           # Setup wizard tests
+  mcp/           # Slack MCP server tests
+  security/      # Output sanitizer, path validator, rate limiter, sender verify tests
+  slack/         # Event queue, interrupt classifier, socket mode tests
   training-wheels/  # Policy engine, graduation tests
   config.test.ts # Config loading/validation tests
   db.test.ts     # Database schema, CRUD, FTS5 tests
@@ -50,7 +64,7 @@ config/
   default.json   # Default configuration values
   launchd.plist  # macOS process management
 docs/
-  BUILD_PLAN.md  # 5-track implementation plan
+  BUILD_PLAN.md  # 8-track implementation plan
   MEMORY_ARCHITECTURE.md  # Memory system design
   RESEARCH_SYNTHESIS.md   # Research findings
   SPEC_INTEGRATIONS.md    # Integration specs
@@ -135,18 +149,24 @@ export const logger = new Proxy({} as pino.Logger, {
 4. CLI flags (passed to `loadConfig()`)
 
 ### Credential Resolution
-1. macOS Keychain via `keytar` (service: `com.clawvato`)
+1. macOS Keychain via `keytar` (service: `clawvato`) — uses CJS→ESM interop (`imported.default ?? imported`)
 2. Environment variable fallback (e.g., `ANTHROPIC_API_KEY`)
 3. Throws if neither found (via `requireCredential()`)
 
 ## Build Tracks (from BUILD_PLAN.md)
-- **Track A** (Complete): Foundation — DB, config, security, CLI, hooks, tests
-- **Track B** (In Progress): Agent loop, event queue, interrupt classifier, training wheels, Slack handler
-  - Done: event-queue, handler, interrupt-classifier, agent loop, policy-engine, graduation
-  - Remaining: Slack Socket Mode connection, Anthropic API integration, Gmail MCP
-- **Track C**: Memory — retrieval, consolidation, embeddings, workflows
-- **Track D**: Proactive — calendar, Drive, GitHub, scheduling
-- **Track E**: Polish — monitoring, backup, plugin system
+- **Track A** ✅ Complete: Foundation — DB, config, security, CLI, hooks, tests
+- **Track B** ✅ Complete: Slack MCP + Agent Core — event-queue, handler, interrupt-classifier, agent loop, policy-engine, graduation, socket-mode, setup wizard, Slack MCP server (5 tools), Agent SDK integration
+  - Verified: Setup wizard runs, Slack Socket Mode connects (~11s), auth.test passes, agent initializes with Sonnet
+- **Track C** ⬜ Not Started: Google Workspace MCP — Gmail, Drive, Calendar servers + OAuth2
+- **Track D** ⬜ Not Started: Memory + Embeddings — retrieval, consolidation, fact extraction, sqlite-vec
+- **Track E** ⬜ Not Started: Workflow Engine + Scheduling — durable state machine, async workflows
+- **Track F** ⬜ Not Started (partially done in Track A): Security + Training Wheels — undo system remaining
+- **Track G** ⬜ Not Started: GitHub + Filesystem + Web Research — official MCP servers + plugin manager
+- **Track H** ⬜ Not Started: Proactive Intelligence — pattern detection, daily briefing, suggestions
+
+### Test Status
+- **14 test files, 169 tests, all passing** (as of 2026-03-06)
+- Full coverage across: agent hooks, CLI setup, config, DB, MCP slack server, security (4 modules), slack (3 modules), training wheels (2 modules)
 
 ## Common Tasks
 
@@ -221,11 +241,36 @@ Cancel acknowledged          → remove 🧠, ✅ on cancel message
 - No token-level streaming simulation
 - No "urgency" or "mood" detection from messages
 
+## Running the Agent
+
+### First-Time Setup
+```bash
+npm install
+npx tsx src/cli/index.ts setup   # Interactive wizard — needs Anthropic key + Slack tokens
+```
+
+### Starting the Agent
+```bash
+npx tsx src/cli/index.ts start   # Socket Mode takes ~11 seconds to connect
+```
+Wait for `"Slack Socket Mode connection established"` before testing. DM the bot or @mention it.
+
+### Other Commands
+```bash
+npx tsx src/cli/index.ts status          # Check agent status
+npx tsx src/cli/index.ts config show     # Show config (secrets redacted)
+npx tsx src/cli/index.ts credentials list # Check credential availability
+npx tsx src/cli/index.ts audit           # Show action audit log
+npx tsx src/cli/index.ts trust-level     # Show/set trust level
+```
+
 ## Gotchas
 - `node:sqlite` is experimental in Node — the `ExperimentalWarning` in test output is expected
 - Schema SQL uses triggers with `;` inside bodies — never split schema on semicolons
 - FTS5 `IF NOT EXISTS` is supported but triggers may need error-catching on re-init
-- The `keytar` dependency requires a native build — if it fails, credentials fall back to env vars
+- **keytar CJS→ESM interop**: `keytar` is a CJS native module. Dynamic `import('keytar')` wraps exports in `{ default: ... }`. The `getKeytar()` function in `credentials.ts` handles this with `imported.default ?? imported`. If keytar's native build fails entirely, credentials fall back to env vars.
 - Config `trustLevel` must be 0-3 — Zod enforces this at load time
 - **DB interfaces MUST use snake_case** to match SQLite column names — `node:sqlite`'s `.get()`/`.all()` return raw column names (e.g., `action_type`, not `actionType`). Use `as unknown as YourType` to cast, and make sure the interface matches the DB schema exactly.
 - `user_typing` events fire every ~3s with no "stopped typing" event — use a 4s grace period to detect the gap
+- **Socket Mode startup is slow** (~11 seconds) — this is normal for Bolt's WebSocket handshake. The process hangs at `app.start()` during this time.
+- **Slack app setup**: When creating the Slack app from manifest, ensure Socket Mode is enabled and the app-level token has the `connections:write` scope. Duplicate app entries in the Slack admin can occur if the app is created multiple times — delete extras via api.slack.com/apps.

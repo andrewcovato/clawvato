@@ -6,11 +6,18 @@
  * event filtering behavior.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { SlackHandler } from '../../src/slack/handler.js';
+import { loadConfig } from '../../src/config.js';
 
 // We can't instantiate a Bolt App without real tokens, so we test
 // the SlackHandler integration patterns that socket-mode.ts wires up.
+
+// Reset config before each test to avoid contamination from user's
+// ~/.clawvato/config.json (which may have ownerSlackUserId set after setup).
+beforeEach(() => {
+  loadConfig({ ownerSlackUserId: '' });
+});
 
 function createMockReactions() {
   return {
