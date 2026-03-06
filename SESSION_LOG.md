@@ -83,33 +83,98 @@
 
 ---
 
-## Next Session — Track B: Agent Loop
+## Session 3 — Slack Interaction Model + Track B Start (2026-03-06)
+
+### Accomplished
+
+**Slack Interaction Architecture** (Design + Spec)
+- Designed fluid, interruptible Slack interaction model — learned from previous project's failures
+- Core principle: "smallest possible signal at each step — reactions over messages, silence over acknowledgment"
+- Message accumulation window (2-15s debounce + user_typing awareness)
+- Four-way interrupt classification: additive, redirect, cancel, unrelated
+- Reaction lifecycle: ⏳ → 🧠 → 👍/✅ → response
+- Milestone-based progress (not percentages) — edit ACK at tool-call boundaries
+- Updated AGENT_SPEC.md with full interaction model section + anti-patterns
+- Updated CLAUDE.md with hard-won interaction principles
+
+**Event Queue** (`src/slack/event-queue.ts`)
+- Debounce-based message accumulation with per-conversation buffering
+- Three user-tunable modes: Snappy (2s), Patient (4s), Wait for me (15s)
+- user_typing event integration with 4s grace period
+- 30s hard cap to prevent indefinite waiting
+- 10 tests passing
+
+**Slack Event Handler** (`src/slack/handler.ts`)
+- Routes Socket Mode events through the accumulation queue
+- Single-principal authority filtering (owner messages only)
+- Reaction lifecycle management (⏳ → 🧠 → response)
+- Active task tracking for milestone updates
+- Interface-based design for testability (SlackReactionAPI, SlackMessageAPI)
+
+**Interrupt Classifier** (`src/slack/interrupt-classifier.ts`)
+- Fast-path regex detection for obvious cancels (no LLM needed)
+- Haiku-based four-way classification for ambiguous interrupts
+- Confidence threshold with "ask the user" fallback when uncertain
+- 11 tests passing (including edge cases: bad JSON, invalid types, API failures)
+
+**Agent Loop** (`src/agent/loop.ts`)
+- Plan-Then-Execute with checkpoint interruption between tool calls
+- Dependency-injected design (classify, plan, executeTool, checkForInterrupts)
+- Handles all four interrupt types: inject context, abort+restart, cancel, queue
+- Milestone updates via SlackHandler integration
+
+**Training Wheels Policy Engine** (`src/training-wheels/policy-engine.ts`)
+- Action categorization: read, write, outbound, destructive
+- Trust level evaluation (levels 0-3) with graduated pattern support
+- Non-graduatable action patterns (delete, revoke, external share)
+- Confirmation type selection (reaction vs block_kit)
+- 16 tests passing
+
+**Graduation Engine** (`src/training-wheels/graduation.ts`)
+- Pattern hash computation (sha256, order-independent key params)
+- Occurrence recording with approval/rejection/modification tracking
+- Graduation criteria: 10+ approvals, <5% rejection rate
+- DB-backed persistence using action_patterns table
+- 14 tests passing
+
+### Key Technical Decisions
+1. **DB interfaces use snake_case**: `node:sqlite` returns raw column names — interfaces must match the schema exactly
+2. **Dependency injection for agent loop**: All external calls injected via `AgentLoopDeps` — enables full test coverage without API calls
+3. **Fast-path cancel detection**: Regex for "scratch that"/"never mind" avoids LLM round-trip for obvious signals
+4. **Conversation keying**: Messages grouped by `channel:threadTs` — prevents cross-thread contamination during accumulation
+
+### Test Summary
+- **101 total tests**, all passing
+- Track A: 50 tests (security, DB, config)
+- Track B: 51 tests (event queue, interrupt classifier, policy engine, graduation)
+
+---
+
+## Next Session — Track B Completion + Track C Start
 
 ### Priority Tasks
 
-1. **Claude Agent SDK Integration** (`src/agent/index.ts`)
-   - Plan-Then-Execute agent loop (structural prompt injection defense)
-   - System prompt construction from memory tiers
-   - Tool routing via MCP
+1. **Slack Socket Mode Connection** (`src/slack/connection.ts`)
+   - `@slack/socket-mode` WebSocket setup
+   - Wire Socket Mode events to SlackHandler
+   - Reconnection handling
+   - Real reaction/message API implementations
 
-2. **Slack MCP Server** (`src/mcp/slack.ts`)
-   - Socket Mode WebSocket connection
-   - Event handling (message, app_mention, reaction)
-   - Sender verification integration
-   - Thread-aware conversation management
+2. **Anthropic API Integration** (`src/agent/index.ts`)
+   - Wire Haiku classifier, Opus planner, Sonnet executor
+   - System prompt construction with memory tiers
+   - Implement real `AgentLoopDeps` (currently interfaces)
 
-3. **Training Wheels Runtime** (`src/training-wheels/`)
-   - Trust level enforcement in agent loop
-   - Confirmation flow (Slack reactions: thumbsup/thumbsdown)
-   - Pattern hash computation
-   - Graduation logic (10+ approvals, <5% rejection, 0 recent rejections)
-
-4. **Gmail MCP Server** (`src/mcp/gmail.ts`)
+3. **Gmail MCP Server** (`src/mcp/gmail.ts`)
    - OAuth2 token management
    - Read/send/draft/search capabilities
-   - Output sanitizer integration on all outbound content
+   - Output sanitizer integration
+
+4. **End-to-end flow test**
+   - Slack message → accumulation → classify → plan → execute → response
+   - With real Slack tokens in development workspace
 
 ### Stretch Goals
 - Basic memory retrieval (`src/memory/retriever.ts`)
 - Tier 0/1 identity prompt construction
-- End-to-end Slack message → response flow
+- Calendar MCP server skeleton

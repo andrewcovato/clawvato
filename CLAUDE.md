@@ -18,14 +18,22 @@ npx tsx src/cli/index.ts status   # Check system status
 ### Directory Structure
 ```
 src/
-  agent/         # Claude Agent SDK bootstrap (Track B)
+  agent/         # Claude Agent SDK bootstrap + Plan-Then-Execute loop
+    index.ts     # Agent creation, Anthropic client setup
+    loop.ts      # Agent loop with checkpoint interruption
   cli/           # Commander.js CLI (start, status, config, credentials, audit, trust-level)
   db/            # SQLite via node:sqlite (DatabaseSync) + FTS5 + schema.sql
   hooks/         # PreToolUse / PostToolUse hooks (audit, security)
   security/      # sender-verify, output-sanitizer, path-validator, rate-limiter
+  slack/         # Slack event handling and interaction model
+    event-queue.ts       # Message accumulation with debounce + typing awareness
+    handler.ts           # Slack event routing, reaction lifecycle
+    interrupt-classifier.ts  # Four-way interrupt classification (Haiku)
   memory/        # Memory retrieval + consolidation (Track C)
-  mcp/           # MCP server configurations (Track B)
-  training-wheels/  # Trust level graduation (Track B)
+  mcp/           # MCP server configurations
+  training-wheels/  # Trust level enforcement + pattern graduation
+    policy-engine.ts  # Trust level policy evaluation
+    graduation.ts     # Pattern tracking + graduation criteria
   workflows/     # Durable workflow state machine (Track C)
   proactive/     # Proactive behaviors (Track D)
   config.ts      # Zod-validated config, file + env fallback
@@ -34,6 +42,8 @@ src/
   index.ts       # Public API re-exports
 tests/
   security/      # Security module tests
+  slack/         # Event queue, interrupt classifier tests
+  training-wheels/  # Policy engine, graduation tests
   config.test.ts # Config loading/validation tests
   db.test.ts     # Database schema, CRUD, FTS5 tests
 config/
@@ -131,7 +141,9 @@ export const logger = new Proxy({} as pino.Logger, {
 
 ## Build Tracks (from BUILD_PLAN.md)
 - **Track A** (Complete): Foundation — DB, config, security, CLI, hooks, tests
-- **Track B** (Next): Agent loop — Claude Agent SDK, Slack MCP, training wheels, Gmail MCP
+- **Track B** (In Progress): Agent loop, event queue, interrupt classifier, training wheels, Slack handler
+  - Done: event-queue, handler, interrupt-classifier, agent loop, policy-engine, graduation
+  - Remaining: Slack Socket Mode connection, Anthropic API integration, Gmail MCP
 - **Track C**: Memory — retrieval, consolidation, embeddings, workflows
 - **Track D**: Proactive — calendar, Drive, GitHub, scheduling
 - **Track E**: Polish — monitoring, backup, plugin system
@@ -154,9 +166,66 @@ Add regex to `FORBIDDEN_PATTERNS` in `src/security/path-validator.ts`, add test 
 1. Add command file in `src/cli/`
 2. Register in `src/cli/index.ts` via commander `.command()`
 
+## Slack Interaction Principles
+
+These principles are hard-won from a previous failed project. They are non-negotiable design constraints for the Slack interface.
+
+### Core Philosophy
+> Use the smallest possible signal at each step. Reactions over messages. Message edits over new messages. Silence over acknowledgment (when a reaction already said it). The agent should feel *attentive but quiet* — like a good chief of staff who nods, not one who narrates everything they're doing.
+
+### Never Fake Agent Behavior
+- Don't simulate streaming by rapidly editing messages with growing `...` — that's theater
+- Don't over-classify user intent — four categories (additive, redirect, cancel, unrelated) is enough
+- Don't echo everything — "I see you want to cancel. Cancelling. Cancelled." → just ✅ the message
+- Report milestones ("Found 3 slots, drafting invite..."), never fake progress bars ("50% done")
+- The agent often doesn't know how long a task will take — don't pretend otherwise
+
+### Message Accumulation Window
+Don't process messages immediately. Buffer incoming messages with a debounce timer (default 4s):
+- New message arrives → start/reset timer, add ⏳ reaction
+- `user_typing` event → reset timer (these fire every ~3s; use 4s timeout to handle gaps)
+- Timer expires with no new typing → process entire buffer as one context
+- Hard cap at 30s to prevent indefinite waiting
+- User-tunable: "wait longer" / "be snappier" stored as preference in memories table
+- Three modes: **Snappy** (2s), **Patient** (4s, default), **Wait for me** (15s)
+
+### Checkpoint Interruption
+The agent loop checks for new owner messages at natural checkpoints (between tool calls):
+- **Additive** ("also check X") → inject into current context, keep working
+- **Redirect** ("actually do Y instead") → abort current, start Y
+- **Cancel** ("scratch that") → abort, idle
+- **Unrelated** (different thread/DM) → queue separately, keep working
+- Classification done by Haiku — when confidence is low, ask rather than guess
+- This is where the previous project failed: no interruptibility made it feel like talking to a wall
+
+### Reaction Lifecycle
+Reactions are the primary status signal — zero message noise:
+```
+Message arrives              → ⏳ (I see it, accumulating/waiting)
+Accumulation window closes   → remove ⏳, add 🧠 (working on it)
+Mid-stream interrupt ACK'd   → 👍 on the new message
+Task complete                → remove 🧠, post response
+Cancel acknowledged          → remove 🧠, ✅ on cancel message
+```
+
+### Progress Visibility (Long Tasks)
+- Immediate ACK: "🧠 Checking Sarah's calendar..."
+- Milestone edits: update the ACK at major tool-call boundaries (not percentages)
+- Example: "Checking calendar..." → "Found 3 slots, drafting invite..." → "Sending..."
+- `chat.update` rate limit (~1/sec) is plenty for milestone-based updates
+
+### What NOT to Build
+- No custom WebSocket abstraction on top of Slack
+- No complex conversation state machines
+- No polling-based "check for new messages" loops
+- No token-level streaming simulation
+- No "urgency" or "mood" detection from messages
+
 ## Gotchas
 - `node:sqlite` is experimental in Node — the `ExperimentalWarning` in test output is expected
 - Schema SQL uses triggers with `;` inside bodies — never split schema on semicolons
 - FTS5 `IF NOT EXISTS` is supported but triggers may need error-catching on re-init
 - The `keytar` dependency requires a native build — if it fails, credentials fall back to env vars
 - Config `trustLevel` must be 0-3 — Zod enforces this at load time
+- **DB interfaces MUST use snake_case** to match SQLite column names — `node:sqlite`'s `.get()`/`.all()` return raw column names (e.g., `action_type`, not `actionType`). Use `as unknown as YourType` to cast, and make sure the interface matches the DB schema exactly.
+- `user_typing` events fire every ~3s with no "stopped typing" event — use a 4s grace period to detect the gap

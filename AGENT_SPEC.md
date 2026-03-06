@@ -41,6 +41,64 @@ This document is the master overview. Deep-dive specs are in `docs/`:
 - **Interactive confirmations**: Block Kit buttons for approve/deny/modify actions
 - **Proactive messages**: DMs user with suggestions, reminders, briefings
 
+### Slack Interaction Model
+
+The Slack interface is not a simple request/response system. It supports fluid, interruptible conversation with these mechanisms:
+
+#### Message Accumulation
+Messages are buffered before processing to handle natural conversation patterns ("schedule a meeting" ... "oh and include the deck"):
+
+```
+message arrives       → start/reset debounce timer (default 4s), add ⏳
+user_typing event     → reset timer (typing events fire every ~3s)
+timer expires         → remove ⏳, add 🧠, process full buffer as single context
+hard cap              → 30s maximum wait
+```
+
+User-tunable via natural language ("wait longer" / "be snappier"). Stored as preference memory:
+- **Snappy**: 2s + typing awareness
+- **Patient** (default): 4s + typing awareness
+- **Wait for me**: 15s + typing awareness
+
+#### Checkpoint Interruption
+While the agent is processing (between tool calls), it checks for new owner messages. Haiku classifies the interrupt:
+
+| Classification | Example | Agent Behavior |
+|---|---|---|
+| **Additive** | "also include the Q3 deck" | 👍 react, inject context, keep working |
+| **Redirect** | "actually, make a reservation at Prato instead" | 👍 react, abort current, start new task |
+| **Cancel** | "scratch that" | ✅ react, abort, idle |
+| **Unrelated** | (different thread/DM) | 👍 react, queue, keep working on current |
+
+When classification confidence is low, the agent asks rather than guesses.
+
+#### Reaction-Based Status Signals
+
+```
+⏳  → I see your message, waiting for follow-ups
+🧠  → Actively working on your request
+👍  → Mid-stream interrupt acknowledged
+✅  → Cancel/completion acknowledged
+👎  → (from owner) Reject proposed action (training wheels)
+👍  → (from owner) Approve proposed action (training wheels)
+```
+
+#### Progress Visibility
+For long-running tasks, the initial ACK message is edited at milestone boundaries:
+```
+"🧠 Checking Sarah's calendar..."
+→ "🧠 Found 3 open slots. Drafting the invite..."
+→ "🧠 Invite drafted. Sending..."
+→ [final response posted as new message]
+```
+
+Progress is milestone-based (what has been done), never percentage-based (the agent can't predict tool call latency).
+
+#### Design Principles
+- **Smallest possible signal**: Reactions over messages. Edits over new messages. Silence when a reaction already communicated.
+- **No fake behavior**: Don't simulate streaming. Don't fake progress bars. Don't echo acknowledgments that a reaction already covers.
+- **Interruptibility is essential**: The previous project failed because the agent couldn't be interrupted mid-task. This is solved architecturally (checkpoint interruption in the agent loop), not in the Slack layer.
+
 ### 2. Email (Own identity via Google Workspace)
 - **Dedicated email**: `clawvato@yourdomain.com` (configured as SendAs alias on user's Workspace account)
 - **Send/receive emails**: Meeting requests, follow-ups, file shares
@@ -187,7 +245,7 @@ This document is the master overview. Deep-dive specs are in `docs/`:
 | Slack | `@slack/bolt` (Socket Mode) | No public endpoint, event-driven, streaming support |
 | Google APIs | `googleapis` npm | Gmail, Drive, Calendar all in one package |
 | GitHub | Official GitHub MCP Server (Go) | Production-quality, maintained by GitHub |
-| Database | SQLite via `better-sqlite3` | Zero config, single file, WAL mode for concurrency |
+| Database | SQLite via `node:sqlite` (DatabaseSync) | Zero config, single file, WAL mode, no native deps |
 | Vector Store | `sqlite-vec` extension | Local, embedded, handles 100K vectors at 4-57ms query |
 | Full-Text Search | SQLite FTS5 | Free hybrid search when combined with sqlite-vec via RRF |
 | Embeddings | `@huggingface/transformers` + `all-MiniLM-L6-v2` (q8) | ~5-15ms/sentence, 384 dims, runs in worker thread |
@@ -634,7 +692,7 @@ clawvato/
 │   │   └── suggestions.ts         # Proactive action suggestions
 │   ├── db/
 │   │   ├── schema.ts              # Full SQLite schema + migrations
-│   │   └── index.ts               # DB connection (better-sqlite3 + WAL)
+│   │   └── index.ts               # DB connection (node:sqlite + WAL)
 │   ├── cli/
 │   │   ├── index.ts               # CLI entry point
 │   │   ├── start.ts               # Start agent process
@@ -723,3 +781,7 @@ clawvato config set <key> <val>   # Update config
 | No crash recovery | SQLite-backed workflow checkpointing, replay from last checkpoint |
 | Static API keys in prompts | Keychain storage, injected at tool execution time, never in LLM context |
 | Implicit agent communication | Typed tool calls, structured plans, no free-form inter-agent messages |
+| Non-interruptible agent loop | Checkpoint interruption between tool calls; Haiku classifies mid-stream messages |
+| Fake streaming / progress bars | Milestone-based ACK edits; reactions for status; no simulated typing |
+| Processing messages immediately | Accumulation window (2-15s + typing awareness) to batch natural conversation |
+| Echoing every acknowledgment | Reactions are the primary signal; silence when a reaction already said it |
