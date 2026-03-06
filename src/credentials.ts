@@ -13,13 +13,16 @@ export type CredentialKey =
   | 'google-refresh-token'
   | 'github-pat';
 
-let keytar: typeof import('keytar') | null = null;
+// keytar is a CJS module — dynamic import wraps it in { default: ... }
+let keytarModule: typeof import('keytar') | null = null;
 
-async function getKeytar() {
-  if (keytar) return keytar;
+async function getKeytar(): Promise<typeof import('keytar') | null> {
+  if (keytarModule) return keytarModule;
   try {
-    keytar = await import('keytar');
-    return keytar;
+    const imported = await import('keytar');
+    // Handle CJS→ESM interop: actual API lives on .default
+    keytarModule = (imported.default ?? imported) as typeof import('keytar');
+    return keytarModule;
   } catch {
     logger.warn('keytar not available — falling back to environment variables');
     return null;
