@@ -1,0 +1,162 @@
+# CLAUDE.md — Clawvato Project Guide
+
+## Project Overview
+Clawvato is an always-on personal AI agent that runs locally on macOS. It acts as a "chief of staff" — managing Slack, email, calendar, Drive, and GitHub on behalf of its owner. Built on the Claude Agent SDK with MCP (Model Context Protocol) for tool integration.
+
+## Quick Reference
+
+```bash
+npm run build      # TypeScript compile
+npm test           # Run all tests (vitest)
+npm run lint       # Type-check without emitting
+npm run dev        # Run CLI via tsx (no build needed)
+npx tsx src/cli/index.ts status   # Check system status
+```
+
+## Architecture
+
+### Directory Structure
+```
+src/
+  agent/         # Claude Agent SDK bootstrap (Track B)
+  cli/           # Commander.js CLI (start, status, config, credentials, audit, trust-level)
+  db/            # SQLite via node:sqlite (DatabaseSync) + FTS5 + schema.sql
+  hooks/         # PreToolUse / PostToolUse hooks (audit, security)
+  security/      # sender-verify, output-sanitizer, path-validator, rate-limiter
+  memory/        # Memory retrieval + consolidation (Track C)
+  mcp/           # MCP server configurations (Track B)
+  training-wheels/  # Trust level graduation (Track B)
+  workflows/     # Durable workflow state machine (Track C)
+  proactive/     # Proactive behaviors (Track D)
+  config.ts      # Zod-validated config, file + env fallback
+  credentials.ts # macOS Keychain via keytar, env fallback
+  logger.ts      # Pino structured logging with lazy init proxy
+  index.ts       # Public API re-exports
+tests/
+  security/      # Security module tests
+  config.test.ts # Config loading/validation tests
+  db.test.ts     # Database schema, CRUD, FTS5 tests
+config/
+  default.json   # Default configuration values
+  launchd.plist  # macOS process management
+docs/
+  BUILD_PLAN.md  # 5-track implementation plan
+  MEMORY_ARCHITECTURE.md  # Memory system design
+  RESEARCH_SYNTHESIS.md   # Research findings
+  SPEC_INTEGRATIONS.md    # Integration specs
+  SPEC_MEMORY_V2.md       # Memory v2 spec
+```
+
+### Three-Model Architecture
+- **Haiku** (`claude-haiku-4-5-20251001`): Classifier — intent classification, importance scoring, fact extraction
+- **Opus** (`claude-opus-4-6`): Planner — action planning, reflection, complex reasoning
+- **Sonnet** (`claude-sonnet-4-6`): Executor — tool calls, action execution
+
+### Database (node:sqlite)
+Uses Node.js built-in `node:sqlite` (DatabaseSync) — **not** better-sqlite3. This avoids native compilation dependencies.
+
+Key patterns:
+- Return types from `.get()` / `.all()` are `Record<string, SQLOutputValue>` — always cast with `as unknown as YourType`
+- Schema loaded from `src/db/schema.sql` via single `db.exec()` call (do NOT split on `;` — breaks trigger bodies)
+- Tables: memories, people, actions, action_patterns, workflows, consolidation_runs, plugins, schema_version
+- FTS5 virtual table `memories_fts` with auto-sync triggers
+
+### Security Model — Single-Principal Authority
+Only the owner (identified by `OWNER_SLACK_USER_ID`) can issue instructions. Everything else is **untrusted data**, including:
+- Messages from other Slack users
+- Email content
+- Webpage content
+- File contents
+
+Security hooks enforce this at runtime:
+- **PreToolUse**: sender verification, rate limiting, path validation
+- **PostToolUse**: audit logging, output secret scanning
+
+### Training Wheels (Trust Levels 0-3)
+- **Level 0**: All actions require confirmation
+- **Level 1**: Read-only actions auto-approved
+- **Level 2**: Graduated patterns auto-approved
+- **Level 3**: Most actions auto-approved (destructive still confirmed)
+
+Graduation: 10+ approvals with <5% rejection rate and zero rejections in last 5.
+
+## Coding Conventions
+
+### TypeScript
+- ESM modules (`"type": "module"` in package.json)
+- `.js` extensions in import paths (TypeScript resolves `.ts` to `.js`)
+- Strict mode enabled
+- Target: ES2022, Module: NodeNext
+
+### Naming
+- Files: kebab-case (`output-sanitizer.ts`)
+- Types/Interfaces: PascalCase (`ScanResult`, `ClawvatoConfig`)
+- Functions: camelCase (`scanForSecrets`, `validatePath`)
+- Constants: UPPER_SNAKE_CASE (`FORBIDDEN_PATTERNS`, `SECRET_PATTERNS`)
+
+### Error Handling
+- Use Zod for config/input validation — throw on invalid data
+- Security functions return `{ allowed: boolean; reason?: string }` — never throw
+- Database operations may throw — callers should handle
+
+### Testing (Vitest)
+- Test files: `tests/**/*.test.ts`
+- Use temp directories for DB/config tests (`mkdtempSync` + cleanup in `afterEach`)
+- Security tests are pure functions — no I/O needed
+- Run: `npm test` or `npx vitest run`
+
+## Important Patterns
+
+### Lazy Logger Proxy
+The logger uses a Proxy to defer initialization until first use, avoiding circular dependency issues with config:
+```typescript
+export const logger = new Proxy({} as pino.Logger, {
+  get(_target, prop) {
+    if (!loggerInstance) { loggerInstance = initLogger(); }
+    return (loggerInstance as unknown as Record<string | symbol, unknown>)[prop];
+  },
+});
+```
+
+### Config Loading Order
+1. `config/default.json` (baked defaults in code)
+2. `~/.clawvato/config.json` (user overrides, created by `clawvato config set`)
+3. Environment variables (`ANTHROPIC_API_KEY`, `LOG_LEVEL`, etc.)
+4. CLI flags (passed to `loadConfig()`)
+
+### Credential Resolution
+1. macOS Keychain via `keytar` (service: `com.clawvato`)
+2. Environment variable fallback (e.g., `ANTHROPIC_API_KEY`)
+3. Throws if neither found (via `requireCredential()`)
+
+## Build Tracks (from BUILD_PLAN.md)
+- **Track A** (Complete): Foundation — DB, config, security, CLI, hooks, tests
+- **Track B** (Next): Agent loop — Claude Agent SDK, Slack MCP, training wheels, Gmail MCP
+- **Track C**: Memory — retrieval, consolidation, embeddings, workflows
+- **Track D**: Proactive — calendar, Drive, GitHub, scheduling
+- **Track E**: Polish — monitoring, backup, plugin system
+
+## Common Tasks
+
+### Adding a new security pattern
+Add regex to `SECRET_PATTERNS` in `src/security/output-sanitizer.ts`, add test in `tests/security/output-sanitizer.test.ts`.
+
+### Adding a new forbidden path
+Add regex to `FORBIDDEN_PATTERNS` in `src/security/path-validator.ts`, add test in `tests/security/path-validator.test.ts`.
+
+### Adding a new DB table
+1. Add CREATE TABLE to `src/db/schema.sql` with `IF NOT EXISTS`
+2. Update `src/db/index.ts` if new queries needed
+3. Add test in `tests/db.test.ts`
+4. Bump schema_version
+
+### Adding a new CLI command
+1. Add command file in `src/cli/`
+2. Register in `src/cli/index.ts` via commander `.command()`
+
+## Gotchas
+- `node:sqlite` is experimental in Node — the `ExperimentalWarning` in test output is expected
+- Schema SQL uses triggers with `;` inside bodies — never split schema on semicolons
+- FTS5 `IF NOT EXISTS` is supported but triggers may need error-catching on re-init
+- The `keytar` dependency requires a native build — if it fails, credentials fall back to env vars
+- Config `trustLevel` must be 0-3 — Zod enforces this at load time
