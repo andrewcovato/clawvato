@@ -53,6 +53,8 @@ export class SlackHandler {
   private messages: SlackMessageAPI;
   private batchHandler?: (batch: AccumulatedBatch) => Promise<void>;
   private activeTask: ActiveTask | null = null;
+  /** Messages that arrived while agent is processing — checked at PreToolUse checkpoints */
+  private interruptBuffer: Array<{ text: string; ts: string }> = [];
 
   constructor(reactions: SlackReactionAPI, messages: SlackMessageAPI) {
     this.reactions = reactions;
@@ -77,6 +79,13 @@ export class SlackHandler {
    */
   getQueue(): EventQueue {
     return this.queue;
+  }
+
+  /**
+   * Get the message API (for posting/updating messages from the orchestrator).
+   */
+  getMessages(): SlackMessageAPI {
+    return this.messages;
   }
 
   /**
@@ -110,7 +119,30 @@ export class SlackHandler {
       receivedAt: Date.now(),
     };
 
-    // Add ⏳ reaction to indicate we see the message
+    // If agent is actively processing on this channel, route to interrupt buffer
+    if (this.activeTask && this.activeTask.channel === event.channel) {
+      // Only buffer interrupts in the same thread context
+      const sameThread =
+        (!this.activeTask.threadTs && !event.thread_ts) ||
+        this.activeTask.threadTs === event.thread_ts;
+
+      if (sameThread) {
+        this.interruptBuffer.push({ text: event.text, ts: event.ts });
+        logger.debug(
+          { channel: event.channel, bufferSize: this.interruptBuffer.length },
+          'Message routed to interrupt buffer',
+        );
+        // Add ⏳ to show we see it (will be swapped to 👍 when ACK'd)
+        try {
+          await this.reactions.add(event.channel, event.ts, 'hourglass_flowing_sand');
+        } catch {
+          // Non-critical
+        }
+        return;
+      }
+    }
+
+    // Normal path: add ⏳ reaction and enqueue for accumulation
     try {
       await this.reactions.add(event.channel, event.ts, 'hourglass_flowing_sand');
     } catch {
@@ -155,6 +187,39 @@ export class SlackHandler {
    */
   clearActiveTask(): void {
     this.activeTask = null;
+    this.interruptBuffer = [];
+  }
+
+  /**
+   * Drain one interrupt from the buffer. Called by PreToolUse hook
+   * at checkpoint between tool calls.
+   * Returns the interrupt text, or null if no interrupts pending.
+   */
+  drainInterrupt(): { text: string; ts: string } | null {
+    return this.interruptBuffer.shift() ?? null;
+  }
+
+  /**
+   * Get a read-only view of the interrupt buffer (for testing).
+   */
+  getInterruptBuffer(): ReadonlyArray<{ text: string; ts: string }> {
+    return this.interruptBuffer;
+  }
+
+  /**
+   * Acknowledge an interrupt message with 👍 (replacing ⏳).
+   */
+  async ackInterrupt(channel: string, messageTs: string): Promise<void> {
+    try {
+      await this.reactions.remove(channel, messageTs, 'hourglass_flowing_sand');
+    } catch {
+      // Non-critical
+    }
+    try {
+      await this.reactions.add(channel, messageTs, 'thumbsup');
+    } catch {
+      // Non-critical
+    }
   }
 
   /**
@@ -181,6 +246,7 @@ export class SlackHandler {
   shutdown(): void {
     this.queue.clear();
     this.activeTask = null;
+    this.interruptBuffer = [];
     this.queue.removeAllListeners();
   }
 

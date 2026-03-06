@@ -3,6 +3,7 @@
 import { Command } from 'commander';
 import { startAgent } from './start.js';
 import { showStatus } from './status.js';
+import { runSetup } from './setup.js';
 import { getConfig, loadConfig, updateConfig } from '../config.js';
 import { listCredentials, setCredential, deleteCredential, type CredentialKey } from '../credentials.js';
 import { getRecentActions } from '../hooks/audit-logger.js';
@@ -17,6 +18,13 @@ program
   .version('0.1.0');
 
 // --- Lifecycle commands ---
+
+program
+  .command('setup')
+  .description('Interactive setup wizard — configure credentials and Slack connection')
+  .action(async () => {
+    await runSetup();
+  });
 
 program
   .command('start')

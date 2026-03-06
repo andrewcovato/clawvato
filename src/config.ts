@@ -15,7 +15,11 @@ const ConfigSchema = z.object({
     classifier: z.string().default('claude-haiku-4-5-20251001'),
     planner: z.string().default('claude-opus-4-6'),
     executor: z.string().default('claude-sonnet-4-6'),
-  }).default({}),
+  }).default(() => ({
+    classifier: 'claude-haiku-4-5-20251001',
+    planner: 'claude-opus-4-6',
+    executor: 'claude-sonnet-4-6',
+  })),
 
   // Training wheels
   trustLevel: z.number().int().min(0).max(3).default(0),
@@ -28,7 +32,11 @@ const ConfigSchema = z.object({
     actionsPerMinute: z.number().default(30),
     emailsPerHour: z.number().default(20),
     fileSharesPerHour: z.number().default(50),
-  }).default({}),
+  }).default(() => ({
+    actionsPerMinute: 30,
+    emailsPerHour: 20,
+    fileSharesPerHour: 50,
+  })),
 
   // Slack configuration
   slack: z.object({
