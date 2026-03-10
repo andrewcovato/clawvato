@@ -8,7 +8,7 @@ Clawvato is an always-on personal AI agent that runs locally on macOS. It acts a
 ```bash
 npm install                            # Install dependencies (first time / after pulling)
 npm run build                          # TypeScript compile
-npm test                               # Run all tests (vitest) — 14 files, 169 tests
+npm test                               # Run all tests (vitest) — 14 files, 176 tests
 npm run lint                           # Type-check without emitting
 npx tsx src/cli/index.ts setup         # First-time interactive setup wizard
 npx tsx src/cli/index.ts start         # Start agent (Socket Mode, ~11s to connect)
@@ -165,7 +165,7 @@ export const logger = new Proxy({} as pino.Logger, {
 - **Track H** ⬜ Not Started: Proactive Intelligence — pattern detection, daily briefing, suggestions
 
 ### Test Status
-- **14 test files, 169 tests, all passing** (as of 2026-03-06)
+- **14 test files, 176 tests, all passing** (as of 2026-03-07)
 - Full coverage across: agent hooks, CLI setup, config, DB, MCP slack server, security (4 modules), slack (3 modules), training wheels (2 modules)
 
 ## Common Tasks
@@ -274,3 +274,29 @@ npx tsx src/cli/index.ts trust-level     # Show/set trust level
 - `user_typing` events fire every ~3s with no "stopped typing" event — use a 4s grace period to detect the gap
 - **Socket Mode startup is slow** (~11 seconds) — this is normal for Bolt's WebSocket handshake. The process hangs at `app.start()` during this time.
 - **Slack app setup**: When creating the Slack app from manifest, ensure Socket Mode is enabled and the app-level token has the `connections:write` scope. Duplicate app entries in the Slack admin can occur if the app is created multiple times — delete extras via api.slack.com/apps.
+- **Agent SDK subprocess**: `query()` spawns a Claude Code CLI process. Requires `claude` CLI installed and `ANTHROPIC_API_KEY` in the environment. The `model` option may need aliases (`sonnet`) rather than full IDs (`claude-sonnet-4-6`) — see BUG-001 in `.project/state.json`.
+
+## Project Management
+
+Project execution is tracked in `.project/` (git-ignored):
+
+```
+.project/
+  state.json                    # Structured project state (tracks, metrics, issues, sprint)
+  docs/
+    EXECUTION_PLAN.md           # Sprint breakdown with phases and deliverables
+    BACKLOG_FEATURES.md         # Feature backlog (P0-P3)
+    BACKLOG_TECH_DEBT.md        # Tech debt items
+    BACKLOG_EXPLORATION.md      # Research and exploration ideas
+    HANDOFF.md                  # Session handoff notes
+    ADR-001-agent-sdk-as-runtime.md  # Architecture decision record
+  mocks/
+    mock-001-architecture.html  # Interactive architecture diagram
+    board.html                  # Kanban board
+  .original_materials/          # Archived original PM artifacts (safety net)
+```
+
+### Current Priority Order
+1. **Memory system** (Track D) — owner's top priority
+2. **Google Workspace** (Track C) — practical daily use
+3. **Other integrations** (Tracks E-H) — later sprints

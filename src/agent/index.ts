@@ -68,6 +68,13 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
   const apiKey = options.apiKey ?? await requireCredential('anthropic-api-key');
   const db = getDb();
 
+  // The Agent SDK's query() reads the API key from the environment —
+  // it doesn't accept an apiKey parameter. Ensure it's set so the SDK
+  // subprocess can authenticate with Anthropic.
+  if (!process.env.ANTHROPIC_API_KEY) {
+    process.env.ANTHROPIC_API_KEY = apiKey;
+  }
+
   // Create Anthropic client for Haiku interrupt classification
   const anthropicClient = new Anthropic({ apiKey });
 
@@ -99,8 +106,13 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
     async processBatch(batch: AccumulatedBatch, handler: SlackHandler): Promise<void> {
       const message = batch.combinedText;
 
+      // Detect assistant mode — if the handler has an active assistant API,
+      // we use setStatus/say instead of message post/update.
+      const assistantAPI = handler.getAssistantAPI();
+      const isAssistantMode = !!assistantAPI;
+
       logger.info(
-        { channel: batch.channel, messageLength: message.length },
+        { channel: batch.channel, messageLength: message.length, assistantMode: isAssistantMode },
         'Agent processing batch',
       );
 
@@ -111,24 +123,35 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
         batch.threadTs,
       );
 
-      // Post initial ACK message for milestone updates
+      // In assistant mode, set a thread title and status instead of posting an ACK message
       let ackTs: string | undefined;
-      try {
-        const messages = handler.getMessages();
-        const ackResult = await messages.post(
-          batch.channel,
-          `🧠 Working on it...`,
-          batch.threadTs,
-        );
-        ackTs = ackResult.ts;
-        handler.setActiveTask(
-          message.slice(0, 100),
-          batch.channel,
-          batch.threadTs,
-          ackTs,
-        );
-      } catch {
-        // Non-critical — we can still respond without the ACK message
+      if (isAssistantMode) {
+        try {
+          const title = message.slice(0, 60) + (message.length > 60 ? '...' : '');
+          await assistantAPI.setTitle(title);
+        } catch { /* non-critical */ }
+        try {
+          await assistantAPI.setStatus('Working on it...');
+        } catch { /* non-critical */ }
+      } else {
+        // DM/mention mode: post initial ACK message for milestone updates
+        try {
+          const messages = handler.getMessages();
+          const ackResult = await messages.post(
+            batch.channel,
+            `🧠 Working on it...`,
+            batch.threadTs,
+          );
+          ackTs = ackResult.ts;
+          handler.setActiveTask(
+            message.slice(0, 100),
+            batch.channel,
+            batch.threadTs,
+            ackTs,
+          );
+        } catch {
+          // Non-critical — we can still respond without the ACK message
+        }
       }
 
       // Create interrupt state (shared between hook and this orchestrator)
@@ -146,6 +169,13 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
       const postToolUseHook = createPostToolUseHook(db);
 
       try {
+        // Abort controller with timeout to prevent indefinite hangs
+        const abortController = new AbortController();
+        const timeout = setTimeout(() => {
+          logger.warn('Agent query timed out after 120s — aborting');
+          abortController.abort();
+        }, 120_000);
+
         // Run the Agent SDK query
         const agentQuery = query({
           prompt: message,
@@ -156,6 +186,9 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
               slack: slackMcp,
             },
             permissionMode: 'bypassPermissions',
+            allowDangerouslySkipPermissions: true,
+            maxTurns: 20,
+            abortController,
             hooks: {
               PreToolUse: [{
                 hooks: [preToolUseHook as unknown as HookCallback],
@@ -170,15 +203,24 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
         // Iterate the async generator to completion, collecting the final response
         let finalResponse = '';
         for await (const sdkMessage of agentQuery) {
-          // The SDK emits various message types; we care about the assistant's text
-          if (sdkMessage && typeof sdkMessage === 'object' && 'type' in sdkMessage) {
-            const msg = sdkMessage as Record<string, unknown>;
-            if (msg.type === 'assistant' && typeof msg.content === 'string') {
-              finalResponse = msg.content;
+          // Log every message type for debugging
+          const msg = sdkMessage as Record<string, unknown>;
+          logger.debug({ type: msg.type, subtype: msg.subtype }, 'SDK message received');
+
+          if (msg.type === 'result') {
+            // SDKResultMessage — final answer is in msg.result (string)
+            if (msg.subtype === 'success' && typeof msg.result === 'string') {
+              finalResponse = msg.result;
+            } else if (msg.subtype === 'error') {
+              logger.error({ error: msg.error }, 'Agent SDK returned error result');
+              finalResponse = `Sorry, I hit an error: ${msg.error ?? 'unknown'}`;
             }
-            // Handle content blocks
-            if (msg.type === 'assistant' && Array.isArray(msg.content)) {
-              const textBlocks = (msg.content as Array<Record<string, unknown>>)
+          } else if (msg.type === 'assistant') {
+            // SDKAssistantMessage — intermediate responses in msg.message (BetaMessage)
+            // Extract text blocks from the BetaMessage content array as a fallback
+            const betaMsg = msg.message as Record<string, unknown> | undefined;
+            if (betaMsg && Array.isArray(betaMsg.content)) {
+              const textBlocks = (betaMsg.content as Array<Record<string, unknown>>)
                 .filter(b => b.type === 'text')
                 .map(b => b.text as string);
               if (textBlocks.length > 0) {
@@ -188,15 +230,17 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
           }
         }
 
+        clearTimeout(timeout);
+
         const messages = handler.getMessages();
 
         // Check if we were interrupted
         if (interruptState.type === 'cancel') {
           logger.info('Task cancelled by owner interrupt');
-          if (ackTs) {
-            try {
-              await messages.update(batch.channel, ackTs, '✅ Cancelled.');
-            } catch { /* non-critical */ }
+          if (isAssistantMode) {
+            try { await assistantAPI.say('✅ Cancelled.'); } catch { /* non-critical */ }
+          } else if (ackTs) {
+            try { await messages.update(batch.channel, ackTs, '✅ Cancelled.'); } catch { /* non-critical */ }
           }
           handler.clearActiveTask();
           return;
@@ -204,10 +248,10 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
 
         if (interruptState.type === 'redirect' && interruptState.newMessage) {
           logger.info({ newMessage: interruptState.newMessage.slice(0, 80) }, 'Task redirected');
-          if (ackTs) {
-            try {
-              await messages.update(batch.channel, ackTs, '↪️ Redirecting...');
-            } catch { /* non-critical */ }
+          if (isAssistantMode) {
+            try { await assistantAPI.say('↪️ Redirecting...'); } catch { /* non-critical */ }
+          } else if (ackTs) {
+            try { await messages.update(batch.channel, ackTs, '↪️ Redirecting...'); } catch { /* non-critical */ }
           }
           handler.clearActiveTask();
           // Re-enqueue the redirect message for processing
@@ -224,11 +268,15 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
 
         if (interruptState.clarificationMessage) {
           try {
-            await messages.post(
-              batch.channel,
-              interruptState.clarificationMessage,
-              batch.threadTs,
-            );
+            if (isAssistantMode) {
+              await assistantAPI.say(interruptState.clarificationMessage);
+            } else {
+              await messages.post(
+                batch.channel,
+                interruptState.clarificationMessage,
+                batch.threadTs,
+              );
+            }
           } catch (error) {
             logger.error({ error }, 'Failed to post clarification message');
           }
@@ -239,7 +287,9 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
         // Post the final response
         if (finalResponse) {
           try {
-            if (ackTs) {
+            if (isAssistantMode) {
+              await assistantAPI.say(finalResponse);
+            } else if (ackTs) {
               await messages.update(batch.channel, ackTs, finalResponse);
             } else {
               await messages.post(batch.channel, finalResponse, batch.threadTs);
@@ -255,11 +305,15 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
 
         try {
           const errorText = `Sorry, I hit an error: ${errorMsg}`;
-          const messages = handler.getMessages();
-          if (ackTs) {
-            await messages.update(batch.channel, ackTs, errorText);
+          if (isAssistantMode) {
+            await assistantAPI.say(errorText);
           } else {
-            await messages.post(batch.channel, errorText, batch.threadTs);
+            const messages = handler.getMessages();
+            if (ackTs) {
+              await messages.update(batch.channel, ackTs, errorText);
+            } else {
+              await messages.post(batch.channel, errorText, batch.threadTs);
+            }
           }
         } catch { /* non-critical */ }
       }
