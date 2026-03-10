@@ -98,14 +98,14 @@ export async function createSlackConnection(config: {
     // Cast to access common message fields — Bolt's union type is broad
     const msg = event as unknown as Record<string, unknown>;
 
-    // Filter: ignore bot messages (prevent bot-to-bot injection)
+    // Filter: ignore bot messages (prevent bot-to-bot injection and self-loop)
     if (msg.bot_id || msg.bot_profile) return;
 
-    // Filter: ignore our own messages
+    // Filter: ignore our own messages (belt-and-suspenders with bot_id check)
     if (botUserId && msg.user === botUserId) return;
 
     // Filter: only process new messages (not edits, deletes, etc.)
-    if (msg.subtype && msg.subtype !== 'me_message') return;
+    if (msg.subtype) return;
 
     // Filter: only process DMs and channels where bot is mentioned
     // (app_mention is handled separately; 'message' in DMs always fires)

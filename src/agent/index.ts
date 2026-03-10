@@ -168,13 +168,14 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
 
       const postToolUseHook = createPostToolUseHook(db);
 
+      // Abort controller with timeout to prevent indefinite hangs
+      const abortController = new AbortController();
+      const timeout = setTimeout(() => {
+        logger.warn('Agent query timed out after 120s — aborting');
+        abortController.abort();
+      }, 120_000);
+
       try {
-        // Abort controller with timeout to prevent indefinite hangs
-        const abortController = new AbortController();
-        const timeout = setTimeout(() => {
-          logger.warn('Agent query timed out after 120s — aborting');
-          abortController.abort();
-        }, 120_000);
 
         // Run the Agent SDK query
         const agentQuery = query({
@@ -230,8 +231,6 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
           }
         }
 
-        clearTimeout(timeout);
-
         const messages = handler.getMessages();
 
         // Check if we were interrupted
@@ -242,7 +241,6 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
           } else if (ackTs) {
             try { await messages.update(batch.channel, ackTs, '✅ Cancelled.'); } catch { /* non-critical */ }
           }
-          handler.clearActiveTask();
           return;
         }
 
@@ -253,7 +251,6 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
           } else if (ackTs) {
             try { await messages.update(batch.channel, ackTs, '↪️ Redirecting...'); } catch { /* non-critical */ }
           }
-          handler.clearActiveTask();
           // Re-enqueue the redirect message for processing
           handler.getQueue().enqueue({
             text: interruptState.newMessage,
@@ -280,12 +277,12 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
           } catch (error) {
             logger.error({ error }, 'Failed to post clarification message');
           }
-          handler.clearActiveTask();
           return;
         }
 
         // Post the final response
         if (finalResponse) {
+          logger.info({ responseLength: finalResponse.length }, 'Posting agent response');
           try {
             if (isAssistantMode) {
               await assistantAPI.say(finalResponse);
@@ -297,6 +294,8 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
           } catch (error) {
             logger.error({ error }, 'Failed to post response to Slack');
           }
+        } else {
+          logger.warn('Agent query completed with no response text');
         }
 
       } catch (error) {
@@ -316,9 +315,11 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
             }
           }
         } catch { /* non-critical */ }
+      } finally {
+        clearTimeout(timeout);
+        handler.clearActiveTask();
+        logger.info({ channel: batch.channel }, 'Agent processBatch complete — activeTask cleared');
       }
-
-      handler.clearActiveTask();
     },
 
     async shutdown() {

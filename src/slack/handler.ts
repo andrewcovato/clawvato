@@ -131,6 +131,11 @@ export class SlackHandler {
       receivedAt: Date.now(),
     };
 
+    logger.debug(
+      { activeTask: !!this.activeTask, activeChannel: this.activeTask?.channel },
+      'handleMessage: checking activeTask state',
+    );
+
     // If agent is actively processing on this channel, route to interrupt buffer
     if (this.activeTask && this.activeTask.channel === event.channel) {
       // Only buffer interrupts in the same thread context
@@ -284,6 +289,10 @@ export class SlackHandler {
    * Clear the active task (called when the agent finishes or cancels work).
    */
   clearActiveTask(): void {
+    logger.info(
+      { hadTask: !!this.activeTask, droppedInterrupts: this.interruptBuffer.length },
+      'Clearing active task',
+    );
     this.activeTask = null;
     this.interruptBuffer = [];
   }
