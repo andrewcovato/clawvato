@@ -67,6 +67,8 @@ export class SlackHandler {
   private interruptBuffer: Array<{ text: string; ts: string }> = [];
   /** Assistant thread API — non-null only during assistant panel message processing */
   private currentAssistantAPI: AssistantThreadAPI | null = null;
+  /** Threads the bot is participating in — allows follow-up messages without @mention */
+  private activeThreads = new Set<string>();
 
   constructor(reactions: SlackReactionAPI, messages: SlackMessageAPI) {
     this.reactions = reactions;
@@ -266,6 +268,24 @@ export class SlackHandler {
   }
 
   /**
+   * Mark a thread as one the bot is participating in.
+   * Called when the bot responds to an @mention or starts a conversation.
+   */
+  joinThread(channel: string, threadTs: string): void {
+    const key = `${channel}:${threadTs}`;
+    this.activeThreads.add(key);
+    logger.debug({ key }, 'Joined thread');
+  }
+
+  /**
+   * Check if the bot is participating in a thread.
+   */
+  isInThread(channel: string, threadTs?: string): boolean {
+    if (!threadTs) return false;
+    return this.activeThreads.has(`${channel}:${threadTs}`);
+  }
+
+  /**
    * Check if there's an active task and return it.
    */
   getActiveTask(): ActiveTask | null {
@@ -354,6 +374,7 @@ export class SlackHandler {
     this.queue.clear();
     this.activeTask = null;
     this.interruptBuffer = [];
+    this.activeThreads.clear();
     this.queue.removeAllListeners();
   }
 

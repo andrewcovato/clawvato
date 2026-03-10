@@ -107,29 +107,33 @@ export async function createSlackConnection(config: {
     // Filter: only process new messages (not edits, deletes, etc.)
     if (msg.subtype) return;
 
-    // Filter: only process DMs and channels where bot is mentioned
-    // (app_mention is handled separately; 'message' in DMs always fires)
-    if (msg.channel_type !== 'im' && msg.channel_type !== 'mpim') return;
-
+    // Allow DMs always; for channels, only allow if bot is in this thread
+    const channelType = msg.channel_type as string | undefined;
+    const isDM = channelType === 'im' || channelType === 'mpim';
+    const threadTs = msg.thread_ts as string | undefined;
     const channel = msg.channel as string;
+    const isActiveThread = handler.isInThread(channel, threadTs);
+
+    if (!isDM && !isActiveThread) return;
+
     const user = (msg.user as string) ?? '';
     const ts = msg.ts as string;
 
     logger.debug(
-      { channel, user, ts },
+      { channel, user, ts, isDM, isActiveThread },
       'Message received via Socket Mode',
     );
 
     await handler.handleMessage({
       text: (msg.text as string) ?? '',
       channel,
-      thread_ts: msg.thread_ts as string | undefined,
+      thread_ts: threadTs,
       user,
       ts,
     });
   });
 
-  // App mentions in channels
+  // App mentions in channels — also registers the thread for follow-ups
   app.event('app_mention', async ({ event }) => {
     // Filter: ignore bot messages
     if ('bot_id' in event && event.bot_id) return;
@@ -138,6 +142,12 @@ export async function createSlackConnection(config: {
       { channel: event.channel, user: event.user, ts: event.ts },
       'App mention received',
     );
+
+    // Join this thread so follow-up messages (without @mention) are processed.
+    // If mentioned at top level (no thread_ts), the reply will create a thread
+    // using the mention's ts as the parent — join that.
+    const threadTs = event.thread_ts ?? event.ts;
+    handler.joinThread(event.channel, threadTs);
 
     await handler.handleMessage({
       text: event.text ?? '',
