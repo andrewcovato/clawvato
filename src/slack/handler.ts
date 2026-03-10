@@ -28,6 +28,16 @@ export interface SlackMessageAPI {
   update(channel: string, ts: string, text: string): Promise<void>;
 }
 
+/**
+ * Assistant thread APIs — provided by Bolt's assistant handler.
+ * Only available when processing messages from the assistant panel.
+ */
+export interface AssistantThreadAPI {
+  setStatus: (status: string) => Promise<void>;
+  setTitle: (title: string) => Promise<void>;
+  say: (text: string) => Promise<void>;
+}
+
 export type ProcessingState = 'idle' | 'accumulating' | 'processing';
 
 interface ActiveTask {
@@ -55,6 +65,8 @@ export class SlackHandler {
   private activeTask: ActiveTask | null = null;
   /** Messages that arrived while agent is processing — checked at PreToolUse checkpoints */
   private interruptBuffer: Array<{ text: string; ts: string }> = [];
+  /** Assistant thread API — non-null only during assistant panel message processing */
+  private currentAssistantAPI: AssistantThreadAPI | null = null;
 
   constructor(reactions: SlackReactionAPI, messages: SlackMessageAPI) {
     this.reactions = reactions;
@@ -160,6 +172,92 @@ export class SlackHandler {
     if (config.ownerSlackUserId && event.user !== config.ownerSlackUserId) return;
 
     this.queue.handleTyping(event.channel, event.thread_ts);
+  }
+
+  /**
+   * Get the assistant thread API (non-null only during assistant panel processing).
+   * Used by the agent orchestrator to detect assistant mode and send responses.
+   */
+  getAssistantAPI(): AssistantThreadAPI | null {
+    return this.currentAssistantAPI;
+  }
+
+  /**
+   * Handle a message from the Slack assistant panel.
+   *
+   * Unlike handleMessage(), this bypasses the EventQueue accumulation window
+   * because the assistant panel is a dedicated 1:1 conversation — each message
+   * is processed immediately.
+   *
+   * The assistant-specific APIs (setStatus, setTitle, say) are stored so the
+   * agent orchestrator can use them for status updates and responses.
+   */
+  async handleAssistantMessage(event: {
+    text: string;
+    channel: string;
+    thread_ts?: string;
+    user: string;
+    ts: string;
+    setStatus: (status: string) => Promise<void>;
+    setTitle: (title: string) => Promise<void>;
+    say: (text: string) => Promise<void>;
+  }): Promise<void> {
+    const config = getConfig();
+
+    // Single-principal authority: only the owner can use the assistant
+    if (config.ownerSlackUserId && event.user !== config.ownerSlackUserId) {
+      logger.debug(
+        { user: event.user, channel: event.channel },
+        'Ignoring assistant message from non-owner',
+      );
+      await event.say("I can only assist my owner. Please ask them to help you.");
+      return;
+    }
+
+    // Set status indicator (replaces ⏳→🧠 reaction lifecycle for assistant view)
+    try {
+      await event.setStatus('Thinking...');
+    } catch {
+      // Non-critical
+    }
+
+    // Build a batch directly — no accumulation window needed for assistant panel
+    const batch: AccumulatedBatch = {
+      channel: event.channel,
+      threadTs: event.thread_ts,
+      userId: event.user,
+      combinedText: event.text,
+      messages: [{
+        text: event.text,
+        channel: event.channel,
+        threadTs: event.thread_ts,
+        userId: event.user,
+        ts: event.ts,
+        receivedAt: Date.now(),
+      }],
+    };
+
+    // Store assistant API so the agent orchestrator can use it
+    this.currentAssistantAPI = {
+      setStatus: event.setStatus,
+      setTitle: event.setTitle,
+      say: event.say,
+    };
+
+    if (this.batchHandler) {
+      try {
+        await this.batchHandler(batch);
+      } catch (error) {
+        logger.error({ error, channel: event.channel }, 'Assistant batch handler failed');
+        try {
+          await event.say('Sorry, I hit an error processing your request.');
+        } catch {
+          // Non-critical
+        }
+      }
+    }
+
+    this.currentAssistantAPI = null;
   }
 
   /**

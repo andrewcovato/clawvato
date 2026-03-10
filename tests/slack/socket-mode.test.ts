@@ -195,4 +195,168 @@ describe('Socket Mode adapter patterns', () => {
       expect(handler.getMessages()).toBe(messages);
     });
   });
+
+  describe('Assistant panel (handleAssistantMessage)', () => {
+    function createMockAssistantAPIs() {
+      return {
+        setStatus: vi.fn().mockResolvedValue(undefined),
+        setTitle: vi.fn().mockResolvedValue(undefined),
+        say: vi.fn().mockResolvedValue(undefined),
+      };
+    }
+
+    it('routes assistant messages to batch handler', async () => {
+      const reactions = createMockReactions();
+      const messages = createMockMessages();
+      const handler = new SlackHandler(reactions, messages);
+      const assistantAPIs = createMockAssistantAPIs();
+
+      const batchHandler = vi.fn().mockResolvedValue(undefined);
+      handler.onBatch(batchHandler);
+
+      await handler.handleAssistantMessage({
+        text: 'hello from assistant',
+        channel: 'D123',
+        user: 'U001',
+        ts: '3333.0000',
+        ...assistantAPIs,
+      });
+
+      // Should have called the batch handler
+      expect(batchHandler).toHaveBeenCalledTimes(1);
+      const batch = batchHandler.mock.calls[0][0];
+      expect(batch.combinedText).toBe('hello from assistant');
+      expect(batch.channel).toBe('D123');
+    });
+
+    it('sets status indicator on assistant message', async () => {
+      const reactions = createMockReactions();
+      const messages = createMockMessages();
+      const handler = new SlackHandler(reactions, messages);
+      const assistantAPIs = createMockAssistantAPIs();
+
+      handler.onBatch(vi.fn().mockResolvedValue(undefined));
+
+      await handler.handleAssistantMessage({
+        text: 'hello',
+        channel: 'D123',
+        user: 'U001',
+        ts: '3333.0000',
+        ...assistantAPIs,
+      });
+
+      // Should have set status to "Thinking..."
+      expect(assistantAPIs.setStatus).toHaveBeenCalledWith('Thinking...');
+    });
+
+    it('rejects non-owner messages with a polite message', async () => {
+      const reactions = createMockReactions();
+      const messages = createMockMessages();
+      const handler = new SlackHandler(reactions, messages);
+      const assistantAPIs = createMockAssistantAPIs();
+
+      const { loadConfig } = await import('../../src/config.js');
+      loadConfig({ ownerSlackUserId: 'U_OWNER' });
+
+      const batchHandler = vi.fn().mockResolvedValue(undefined);
+      handler.onBatch(batchHandler);
+
+      await handler.handleAssistantMessage({
+        text: 'hello from non-owner',
+        channel: 'D123',
+        user: 'U_NOT_OWNER',
+        ts: '3333.0000',
+        ...assistantAPIs,
+      });
+
+      // Should NOT have called batch handler
+      expect(batchHandler).not.toHaveBeenCalled();
+      // Should have sent rejection message via say()
+      expect(assistantAPIs.say).toHaveBeenCalledWith(
+        expect.stringContaining('only assist my owner'),
+      );
+
+      // Reset
+      loadConfig({ ownerSlackUserId: undefined });
+    });
+
+    it('getAssistantAPI returns null when not in assistant mode', () => {
+      const reactions = createMockReactions();
+      const messages = createMockMessages();
+      const handler = new SlackHandler(reactions, messages);
+
+      expect(handler.getAssistantAPI()).toBeNull();
+    });
+
+    it('getAssistantAPI returns API during assistant processing', async () => {
+      const reactions = createMockReactions();
+      const messages = createMockMessages();
+      const handler = new SlackHandler(reactions, messages);
+      const assistantAPIs = createMockAssistantAPIs();
+
+      let capturedAPI: unknown = null;
+      handler.onBatch(async () => {
+        // Capture the assistant API during processing
+        capturedAPI = handler.getAssistantAPI();
+      });
+
+      await handler.handleAssistantMessage({
+        text: 'hello',
+        channel: 'D123',
+        user: 'U001',
+        ts: '3333.0000',
+        ...assistantAPIs,
+      });
+
+      // API should have been available during processing
+      expect(capturedAPI).not.toBeNull();
+      // But should be null after processing completes
+      expect(handler.getAssistantAPI()).toBeNull();
+    });
+
+    it('does not add reactions in assistant mode', async () => {
+      const reactions = createMockReactions();
+      const messages = createMockMessages();
+      const handler = new SlackHandler(reactions, messages);
+      const assistantAPIs = createMockAssistantAPIs();
+
+      handler.onBatch(vi.fn().mockResolvedValue(undefined));
+
+      await handler.handleAssistantMessage({
+        text: 'hello',
+        channel: 'D123',
+        user: 'U001',
+        ts: '3333.0000',
+        ...assistantAPIs,
+      });
+
+      // Should NOT have used reaction API (assistant uses setStatus instead)
+      expect(reactions.add).not.toHaveBeenCalled();
+    });
+
+    it('handles batch handler errors gracefully', async () => {
+      const reactions = createMockReactions();
+      const messages = createMockMessages();
+      const handler = new SlackHandler(reactions, messages);
+      const assistantAPIs = createMockAssistantAPIs();
+
+      handler.onBatch(async () => {
+        throw new Error('processing failed');
+      });
+
+      // Should not throw
+      await handler.handleAssistantMessage({
+        text: 'hello',
+        channel: 'D123',
+        user: 'U001',
+        ts: '3333.0000',
+        ...assistantAPIs,
+      });
+
+      // Should have sent error message via say()
+      expect(assistantAPIs.say).toHaveBeenCalledWith(
+        expect.stringContaining('error'),
+      );
+    });
+  });
 });

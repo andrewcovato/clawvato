@@ -10,7 +10,7 @@
  * SlackHandler, which manages accumulation, reactions, and interrupts.
  */
 
-import { App } from '@slack/bolt';
+import { App, Assistant } from '@slack/bolt';
 import { WebClient } from '@slack/web-api';
 import { logger } from '../logger.js';
 import { SlackHandler, type SlackReactionAPI, type SlackMessageAPI } from './handler.js';
@@ -153,6 +153,72 @@ export async function createSlackConnection(config: {
     const typingEvent = event as unknown as { channel: string; thread_ts?: string; user: string };
     handler.handleTyping(typingEvent);
   });
+
+  // ── Wire Assistant Framework ──
+  // The assistant panel is a separate UI surface (split-view) that coexists
+  // with DMs and @mentions. It provides status indicators, suggested prompts,
+  // and thread titles via dedicated Slack APIs.
+  const assistant = new Assistant({
+    threadStarted: async ({ setSuggestedPrompts, saveThreadContext }) => {
+      // Show suggested prompts when user opens the assistant panel
+      const prompts = [
+        { title: 'Summarize recent messages', message: 'Summarize the important messages I missed in the last few hours' },
+        { title: 'Check my calendar', message: 'What does my schedule look like today?' },
+        { title: 'Draft a message', message: 'Help me draft a message to...' },
+      ];
+
+      try {
+        await setSuggestedPrompts({ prompts });
+      } catch (error) {
+        logger.debug({ error }, 'Failed to set suggested prompts — non-critical');
+      }
+
+      // Save channel context if the user opened the panel from a channel
+      try {
+        await saveThreadContext();
+      } catch {
+        // Non-critical — context may not be available
+      }
+    },
+
+    threadContextChanged: async ({ saveThreadContext }) => {
+      // User navigated to a different channel while the panel is open.
+      // Save the context for future use (Track D: memory/context injection).
+      try {
+        await saveThreadContext();
+      } catch {
+        // Non-critical
+      }
+    },
+
+    userMessage: async ({ event, say, setStatus, setTitle }) => {
+      // Message sent in the assistant panel — route through handler
+      const msg = event as unknown as Record<string, unknown>;
+      const channel = msg.channel as string;
+      const user = (msg.user as string) ?? '';
+      const text = (msg.text as string) ?? '';
+      const ts = msg.ts as string;
+      const threadTs = msg.thread_ts as string | undefined;
+
+      logger.debug(
+        { channel, user, ts },
+        'Assistant message received',
+      );
+
+      await handler.handleAssistantMessage({
+        text,
+        channel,
+        thread_ts: threadTs,
+        user,
+        ts,
+        setStatus: async (status: string) => { await setStatus(status); },
+        setTitle: async (title: string) => { await setTitle(title); },
+        say: async (text: string) => { await say(text); },
+      });
+    },
+  });
+
+  app.assistant(assistant);
 
   return {
     app,

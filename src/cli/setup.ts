@@ -80,10 +80,20 @@ features:
   bot_user:
     display_name: clawvato
     always_online: true
+  assistant_view:
+    assistant_description: "Your AI chief of staff — manages Slack, email, calendar, and tasks"
+    suggested_prompts:
+      - title: "Summarize recent messages"
+        message: "Summarize the important messages I've missed in the last few hours"
+      - title: "Check my calendar"
+        message: "What does my schedule look like today?"
+      - title: "Draft a message"
+        message: "Help me draft a message to..."
 oauth_config:
   scopes:
     bot:
       - app_mentions:read
+      - assistant:write
       - channels:history
       - channels:read
       - chat:write
@@ -102,6 +112,8 @@ settings:
   event_subscriptions:
     bot_events:
       - app_mention
+      - assistant_thread_started
+      - assistant_thread_context_changed
       - message.im
       - message.mpim
   interactivity:

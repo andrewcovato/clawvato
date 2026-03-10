@@ -15,46 +15,67 @@
 ```yaml
 display_information:
   name: Clawvato
-  description: AI Chief of Staff
+  description: Personal AI chief of staff
+  background_color: "#2c2d30"
 
 features:
   bot_user:
     display_name: clawvato
     always_online: true
-  app_home:
-    home_tab_enabled: true
+  assistant_view:
+    assistant_description: "Your AI chief of staff — manages Slack, email, calendar, and tasks"
+    suggested_prompts:
+      - title: "Summarize recent messages"
+        message: "Summarize the important messages I've missed in the last few hours"
+      - title: "Check my calendar"
+        message: "What does my schedule look like today?"
+      - title: "Draft a message"
+        message: "Help me draft a message to..."
 
 oauth_config:
   scopes:
     bot:
       - app_mentions:read
-      - chat:write
+      - assistant:write         # Assistant panel APIs (setStatus, setTitle, setSuggestedPrompts)
       - channels:history
       - channels:read
-      - groups:history
-      - groups:read
+      - chat:write
       - im:history
       - im:read
       - im:write
       - mpim:history
-      - files:read
+      - mpim:read
+      - reactions:read
+      - reactions:write
       - users:read
       - users:read.email
-      - search:read.public
-      - assistant:write       # For streaming/typing indicators
     user:
-      - search:read           # Legacy search
-      - search:read.private   # RTS private channels
-      - search:read.im        # RTS DMs
-      - search:read.mpim      # RTS group DMs
+      - search:read
 
 settings:
   event_subscriptions:
     bot_events:
       - app_mention
+      - assistant_thread_started
+      - assistant_thread_context_changed
       - message.im
+      - message.mpim
+  interactivity:
+    is_enabled: true
+  org_deploy_enabled: false
   socket_mode_enabled: true
+  token_rotation_enabled: false
 ```
+
+### Assistant Framework (AI Apps)
+
+Clawvato registers as a Slack AI app via `app.assistant()`. This provides a dedicated split-view panel alongside regular DMs and @mentions:
+
+- **`threadStarted`**: Shows suggested prompts when the user opens the assistant panel
+- **`threadContextChanged`**: Saves channel context when user navigates (for future contextual awareness)
+- **`userMessage`**: Routes messages through `SlackHandler.handleAssistantMessage()`, which uses `setStatus()`/`say()` instead of the reaction lifecycle
+
+Both entry points (assistant panel + DMs/@mentions) share the same agent orchestrator.
 
 ### Custom Slack MCP Server Tools
 
