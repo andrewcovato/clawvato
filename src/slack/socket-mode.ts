@@ -6,8 +6,8 @@
  * - WebSocket connection is persistent and low-latency
  * - @slack/bolt handles reconnection automatically
  *
- * This module creates a Bolt App and wires its events to the existing
- * SlackHandler, which manages accumulation, reactions, and interrupts.
+ * The bot listens to ALL messages in channels it's joined — like a human
+ * in the room. The agent decides whether to respond based on context.
  */
 
 import { App, Assistant } from '@slack/bolt';
@@ -93,7 +93,7 @@ export async function createSlackConnection(config: {
 
   // ── Wire Bolt events to handler ──
 
-  // Direct messages (IM) and app_mention events
+  // ALL messages in channels the bot is in — the bot listens like a human
   app.event('message', async ({ event }) => {
     // Cast to access common message fields — Bolt's union type is broad
     const msg = event as unknown as Record<string, unknown>;
@@ -107,20 +107,14 @@ export async function createSlackConnection(config: {
     // Filter: only process new messages (not edits, deletes, etc.)
     if (msg.subtype) return;
 
-    // Allow DMs always; for channels, only allow if bot is in this thread
-    const channelType = msg.channel_type as string | undefined;
-    const isDM = channelType === 'im' || channelType === 'mpim';
-    const threadTs = msg.thread_ts as string | undefined;
     const channel = msg.channel as string;
-    const isActiveThread = handler.isInThread(channel, threadTs);
-
-    if (!isDM && !isActiveThread) return;
-
     const user = (msg.user as string) ?? '';
     const ts = msg.ts as string;
+    const threadTs = msg.thread_ts as string | undefined;
+    const channelType = msg.channel_type as string | undefined;
 
     logger.debug(
-      { channel, user, ts, isDM, isActiveThread },
+      { channel, user, ts, channelType },
       'Message received via Socket Mode',
     );
 
@@ -133,29 +127,16 @@ export async function createSlackConnection(config: {
     });
   });
 
-  // App mentions in channels — also registers the thread for follow-ups
+  // App mentions in channels — still wired for explicit @mention detection
+  // (handler can use this signal to know the message is definitely directed at the bot)
   app.event('app_mention', async ({ event }) => {
-    // Filter: ignore bot messages
-    if ('bot_id' in event && event.bot_id) return;
-
+    // The message event handler already processes this message.
+    // app_mention fires in addition to the message event, so we just log it.
+    // The agent uses @mention presence in the text to gauge intent.
     logger.debug(
       { channel: event.channel, user: event.user, ts: event.ts },
-      'App mention received',
+      'App mention received (handled via message event)',
     );
-
-    // Join this thread so follow-up messages (without @mention) are processed.
-    // If mentioned at top level (no thread_ts), the reply will create a thread
-    // using the mention's ts as the parent — join that.
-    const threadTs = event.thread_ts ?? event.ts;
-    handler.joinThread(event.channel, threadTs);
-
-    await handler.handleMessage({
-      text: event.text ?? '',
-      channel: event.channel,
-      thread_ts: event.thread_ts,
-      user: event.user ?? '',
-      ts: event.ts,
-    });
   });
 
   // User typing events — extends the accumulation window
@@ -192,8 +173,6 @@ export async function createSlackConnection(config: {
     },
 
     threadContextChanged: async ({ saveThreadContext }) => {
-      // User navigated to a different channel while the panel is open.
-      // Save the context for future use (Track D: memory/context injection).
       try {
         await saveThreadContext();
       } catch {
@@ -202,7 +181,6 @@ export async function createSlackConnection(config: {
     },
 
     userMessage: async ({ event, say, setStatus, setTitle }) => {
-      // Message sent in the assistant panel — route through handler
       const msg = event as unknown as Record<string, unknown>;
       const channel = msg.channel as string;
       const user = (msg.user as string) ?? '';

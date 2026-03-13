@@ -5,13 +5,11 @@
  * 1. Filters events to owner-only messages (single-principal authority)
  * 2. Routes messages to the EventQueue for accumulation
  * 3. Routes typing events to the EventQueue
- * 4. Manages the reaction lifecycle (⏳ → 🧠 → response)
- * 5. Routes mid-processing messages to the interrupt classifier
+ * 4. Routes mid-processing messages to the interrupt classifier
  *
- * Socket Mode is used instead of HTTP webhooks because:
- * - No public endpoint needed (local-first architecture)
- * - WebSocket connection is persistent and low-latency
- * - Handles reconnection automatically via @slack/socket-mode
+ * Interaction model: The bot listens to all messages in joined channels,
+ * like a human would. No reaction emojis for normal flow — only a delayed
+ * status indicator (⏳) if processing takes longer than 60 seconds.
  */
 
 import { logger } from '../logger.js';
@@ -40,12 +38,16 @@ export interface AssistantThreadAPI {
 
 export type ProcessingState = 'idle' | 'accumulating' | 'processing';
 
+/** How long before showing a delayed status indicator */
+const SLOW_TASK_THRESHOLD_MS = 60_000;
+
 interface ActiveTask {
   description: string;
   channel: string;
   threadTs?: string;
-  ackMessageTs?: string; // The ACK message we can edit for milestone updates
+  ackMessageTs?: string; // Delayed ACK message (only created after SLOW_TASK_THRESHOLD_MS)
   startedAt: number;
+  slowTimer?: ReturnType<typeof setTimeout>;
 }
 
 /**
@@ -67,8 +69,6 @@ export class SlackHandler {
   private interruptBuffer: Array<{ text: string; ts: string }> = [];
   /** Assistant thread API — non-null only during assistant panel message processing */
   private currentAssistantAPI: AssistantThreadAPI | null = null;
-  /** Threads the bot is participating in — allows follow-up messages without @mention */
-  private activeThreads = new Set<string>();
 
   constructor(reactions: SlackReactionAPI, messages: SlackMessageAPI) {
     this.reactions = reactions;
@@ -104,7 +104,7 @@ export class SlackHandler {
 
   /**
    * Handle an incoming message event from Socket Mode.
-   * Only processes messages from the owner.
+   * Processes all messages from the owner in any channel the bot is in.
    */
   async handleMessage(event: {
     text: string;
@@ -134,8 +134,8 @@ export class SlackHandler {
     };
 
     logger.debug(
-      { activeTask: !!this.activeTask, activeChannel: this.activeTask?.channel },
-      'handleMessage: checking activeTask state',
+      { channel: event.channel, activeTask: !!this.activeTask },
+      'handleMessage: owner message received',
     );
 
     // If agent is actively processing on this channel, route to interrupt buffer
@@ -151,23 +151,11 @@ export class SlackHandler {
           { channel: event.channel, bufferSize: this.interruptBuffer.length },
           'Message routed to interrupt buffer',
         );
-        // Add ⏳ to show we see it (will be swapped to 👍 when ACK'd)
-        try {
-          await this.reactions.add(event.channel, event.ts, 'hourglass_flowing_sand');
-        } catch {
-          // Non-critical
-        }
         return;
       }
     }
 
-    // Normal path: add ⏳ reaction and enqueue for accumulation
-    try {
-      await this.reactions.add(event.channel, event.ts, 'hourglass_flowing_sand');
-    } catch {
-      // Non-critical — reactions can fail silently
-    }
-
+    // Enqueue for accumulation — no reaction emojis
     this.queue.enqueue(msg);
   }
 
@@ -221,7 +209,7 @@ export class SlackHandler {
       return;
     }
 
-    // Set status indicator (replaces ⏳→🧠 reaction lifecycle for assistant view)
+    // Set status indicator (assistant panel has its own UI for this)
     try {
       await event.setStatus('Thinking...');
     } catch {
@@ -268,24 +256,6 @@ export class SlackHandler {
   }
 
   /**
-   * Mark a thread as one the bot is participating in.
-   * Called when the bot responds to an @mention or starts a conversation.
-   */
-  joinThread(channel: string, threadTs: string): void {
-    const key = `${channel}:${threadTs}`;
-    this.activeThreads.add(key);
-    logger.debug({ key }, 'Joined thread');
-  }
-
-  /**
-   * Check if the bot is participating in a thread.
-   */
-  isInThread(channel: string, threadTs?: string): boolean {
-    if (!threadTs) return false;
-    return this.activeThreads.has(`${channel}:${threadTs}`);
-  }
-
-  /**
    * Check if there's an active task and return it.
    */
   getActiveTask(): ActiveTask | null {
@@ -294,14 +264,20 @@ export class SlackHandler {
 
   /**
    * Set the active task description (called by the agent loop when starting work).
+   * Starts a delayed timer — if the task takes longer than SLOW_TASK_THRESHOLD_MS,
+   * a status indicator is shown.
    */
-  setActiveTask(description: string, channel: string, threadTs?: string, ackTs?: string): void {
+  setActiveTask(description: string, channel: string, threadTs?: string): void {
+    const slowTimer = setTimeout(() => {
+      void this.showSlowTaskIndicator();
+    }, SLOW_TASK_THRESHOLD_MS);
+
     this.activeTask = {
       description,
       channel,
       threadTs,
-      ackMessageTs: ackTs,
       startedAt: Date.now(),
+      slowTimer,
     };
   }
 
@@ -313,8 +289,19 @@ export class SlackHandler {
       { hadTask: !!this.activeTask, droppedInterrupts: this.interruptBuffer.length },
       'Clearing active task',
     );
+    if (this.activeTask?.slowTimer) {
+      clearTimeout(this.activeTask.slowTimer);
+    }
     this.activeTask = null;
     this.interruptBuffer = [];
+  }
+
+  /**
+   * Get the ACK message timestamp (for updating with final response).
+   * Only set if the task took long enough to trigger the slow indicator.
+   */
+  getAckTs(): string | undefined {
+    return this.activeTask?.ackMessageTs;
   }
 
   /**
@@ -334,14 +321,9 @@ export class SlackHandler {
   }
 
   /**
-   * Acknowledge an interrupt message with 👍 (replacing ⏳).
+   * Acknowledge an interrupt message with 👍.
    */
   async ackInterrupt(channel: string, messageTs: string): Promise<void> {
-    try {
-      await this.reactions.remove(channel, messageTs, 'hourglass_flowing_sand');
-    } catch {
-      // Non-critical
-    }
     try {
       await this.reactions.add(channel, messageTs, 'thumbsup');
     } catch {
@@ -372,48 +354,55 @@ export class SlackHandler {
    */
   shutdown(): void {
     this.queue.clear();
+    if (this.activeTask?.slowTimer) {
+      clearTimeout(this.activeTask.slowTimer);
+    }
     this.activeTask = null;
     this.interruptBuffer = [];
-    this.activeThreads.clear();
     this.queue.removeAllListeners();
   }
 
-  private async processBatch(batch: AccumulatedBatch): Promise<void> {
-    // Remove ⏳ from all messages in the batch, add 🧠 to the last one
-    for (const msg of batch.messages) {
-      try {
-        await this.reactions.remove(msg.channel, msg.ts, 'hourglass_flowing_sand');
-      } catch {
-        // Non-critical
-      }
-    }
+  /**
+   * Show a delayed status indicator for slow tasks.
+   * Only fires if the task is still running after SLOW_TASK_THRESHOLD_MS.
+   */
+  private async showSlowTaskIndicator(): Promise<void> {
+    if (!this.activeTask) return;
 
-    const lastMsg = batch.messages[batch.messages.length - 1];
+    logger.info(
+      { channel: this.activeTask.channel, elapsed: Date.now() - this.activeTask.startedAt },
+      'Task taking long — showing status indicator',
+    );
+
+    // Post a status message and store the ts for milestone updates
     try {
-      await this.reactions.add(lastMsg.channel, lastMsg.ts, 'brain');
+      const lastMsg = this.activeTask;
+      const ackResult = await this.messages.post(
+        lastMsg.channel,
+        `⏳ Still working on this...`,
+        lastMsg.threadTs,
+      );
+      if (this.activeTask) {
+        this.activeTask.ackMessageTs = ackResult.ts;
+      }
     } catch {
       // Non-critical
     }
+  }
 
+  private async processBatch(batch: AccumulatedBatch): Promise<void> {
     logger.info(
       { channel: batch.channel, messageCount: batch.messages.length },
       'Processing batch',
     );
 
-    // Call the registered handler
+    // Call the registered handler — no reaction ceremony
     if (this.batchHandler) {
       try {
         await this.batchHandler(batch);
       } catch (error) {
         logger.error({ error, channel: batch.channel }, 'Batch handler failed');
       }
-    }
-
-    // Remove 🧠 when done
-    try {
-      await this.reactions.remove(lastMsg.channel, lastMsg.ts, 'brain');
-    } catch {
-      // Non-critical
     }
   }
 }

@@ -34,13 +34,12 @@ function createMockMessages() {
 }
 
 describe('Socket Mode adapter patterns', () => {
-  describe('SlackReactionAPI adapter', () => {
-    it('adds reactions via handler', async () => {
+  describe('Message handling (no reactions)', () => {
+    it('enqueues messages without adding reactions', async () => {
       const reactions = createMockReactions();
       const messages = createMockMessages();
       const handler = new SlackHandler(reactions, messages);
 
-      // Simulate what socket-mode.ts does — the handler uses the reaction API
       await handler.handleMessage({
         text: 'hello',
         channel: 'C123',
@@ -48,8 +47,8 @@ describe('Socket Mode adapter patterns', () => {
         ts: '1111.0000',
       });
 
-      // Handler should have added ⏳ reaction
-      expect(reactions.add).toHaveBeenCalledWith('C123', '1111.0000', 'hourglass_flowing_sand');
+      // No reactions — the bot listens silently
+      expect(reactions.add).not.toHaveBeenCalled();
     });
   });
 
@@ -77,7 +76,7 @@ describe('Socket Mode adapter patterns', () => {
       loadConfig({ ownerSlackUserId: undefined });
     });
 
-    it('handler processes owner messages', async () => {
+    it('handler processes owner messages (enqueues without reaction)', async () => {
       const reactions = createMockReactions();
       const messages = createMockMessages();
       const handler = new SlackHandler(reactions, messages);
@@ -92,8 +91,8 @@ describe('Socket Mode adapter patterns', () => {
         ts: '1111.0000',
       });
 
-      // Should have added reaction (message accepted)
-      expect(reactions.add).toHaveBeenCalled();
+      // Message should be enqueued (no reaction added — silent listener)
+      expect(reactions.add).not.toHaveBeenCalled();
 
       // Reset
       loadConfig({ ownerSlackUserId: undefined });
@@ -163,20 +162,18 @@ describe('Socket Mode adapter patterns', () => {
   });
 
   describe('ackInterrupt', () => {
-    it('removes hourglass and adds thumbsup', async () => {
+    it('adds thumbsup reaction', async () => {
       const reactions = createMockReactions();
       const messages = createMockMessages();
       const handler = new SlackHandler(reactions, messages);
 
       await handler.ackInterrupt('C123', '1111.0000');
 
-      expect(reactions.remove).toHaveBeenCalledWith('C123', '1111.0000', 'hourglass_flowing_sand');
       expect(reactions.add).toHaveBeenCalledWith('C123', '1111.0000', 'thumbsup');
     });
 
     it('handles reaction failures gracefully', async () => {
       const reactions = createMockReactions();
-      reactions.remove.mockRejectedValue(new Error('already_reacted'));
       reactions.add.mockRejectedValue(new Error('too_many_reactions'));
       const messages = createMockMessages();
       const handler = new SlackHandler(reactions, messages);
