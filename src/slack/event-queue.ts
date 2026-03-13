@@ -43,6 +43,7 @@ export interface QueuedMessage {
   userId: string;
   ts: string; // Slack message timestamp
   receivedAt: number; // Date.now()
+  channelType?: string; // 'im', 'mpim', 'channel', 'group'
 }
 
 export interface AccumulatedBatch {
@@ -52,6 +53,8 @@ export interface AccumulatedBatch {
   userId: string;
   /** The combined text of all messages in the batch */
   combinedText: string;
+  /** Channel type from the first message — 'im', 'mpim', 'channel', 'group' */
+  channelType?: string;
 }
 
 /**
@@ -217,6 +220,7 @@ export class EventQueue extends EventEmitter {
       threadTs: messages[0].threadTs,
       userId: messages[0].userId,
       combinedText: messages.map(m => m.text).join('\n'),
+      channelType: messages[0].channelType,
     };
 
     logger.info(

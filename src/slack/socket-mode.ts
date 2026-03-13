@@ -124,6 +124,7 @@ export async function createSlackConnection(config: {
       thread_ts: threadTs,
       user,
       ts,
+      channelType,
     });
   });
 

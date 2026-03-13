@@ -128,35 +128,31 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
   async function shouldRespond(batch: AccumulatedBatch): Promise<boolean> {
     const message = batch.combinedText;
 
-    // Always respond to DMs (channel type is checked upstream, but DMs
-    // won't have other people talking — always relevant)
-    // Always respond to @mentions
-    if (message.includes(`<@${config.ownerSlackUserId}>`) || message.includes('<@')) {
-      // This is an @mention of someone — but we need to check if it mentions the bot.
-      // For now, just check if the bot's ID is in there. If we don't have the bot ID,
-      // fall through to the classifier.
+    // Always respond to DMs
+    const isDM = batch.channelType === 'im' || batch.channelType === 'mpim';
+    if (isDM) {
+      logger.debug('Relevance: DM — always respond');
+      return true;
     }
 
-    // Check for explicit @mention of the bot (text contains <@BOT_ID>)
-    // The bot ID isn't stored in config, so we check for any @mention pattern
-    // and let the classifier handle ambiguity
-    const hasAtMention = /<@U[A-Z0-9]+>/.test(message);
+    // Always respond to @mentions (any <@UXXXX> pattern in text)
+    if (/<@U[A-Z0-9]+>/.test(message)) {
+      logger.debug('Relevance: @mention detected — always respond');
+      return true;
+    }
 
-    // Simple heuristics that skip the classifier
-    if (hasAtMention) return true; // Someone is being @mentioned — likely the bot if it arrived here
-
-    // Use Haiku to classify relevance
+    // Use Haiku to classify relevance for channel messages
     try {
       const result = await classifierCall(
         RELEVANCE_SYSTEM_PROMPT,
         `Message: "${message.slice(0, 500)}"`,
       );
       const decision = result.trim().toUpperCase();
-      logger.debug({ decision, message: message.slice(0, 80) }, 'Relevance classification');
-      return decision === 'RESPOND';
+      logger.info({ decision, message: message.slice(0, 80) }, 'Relevance classification');
+      return decision.startsWith('RESPOND');
     } catch (error) {
       logger.warn({ error }, 'Relevance classifier failed — defaulting to respond');
-      return true; // Fail open for now
+      return true; // Fail open
     }
   }
 
@@ -183,6 +179,12 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
           return;
         }
       }
+
+      // Debug reaction: 🧠 = acting on this message
+      const lastMsg = batch.messages[batch.messages.length - 1];
+      try {
+        await handler.getReactions().add(lastMsg.channel, lastMsg.ts, 'brain');
+      } catch { /* non-critical */ }
 
       // Set active task for interrupt routing (includes delayed status timer)
       handler.setActiveTask(
@@ -371,6 +373,10 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
       } finally {
         clearTimeout(timeout);
         handler.clearActiveTask();
+        // Remove debug 🧠 reaction
+        try {
+          await handler.getReactions().remove(lastMsg.channel, lastMsg.ts, 'brain');
+        } catch { /* non-critical */ }
         logger.info({ channel: batch.channel }, 'Agent processBatch complete — activeTask cleared');
       }
     },

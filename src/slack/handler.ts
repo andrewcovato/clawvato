@@ -103,6 +103,13 @@ export class SlackHandler {
   }
 
   /**
+   * Get the reaction API (for debug/status reactions from the orchestrator).
+   */
+  getReactions(): SlackReactionAPI {
+    return this.reactions;
+  }
+
+  /**
    * Handle an incoming message event from Socket Mode.
    * Processes all messages from the owner in any channel the bot is in.
    */
@@ -112,6 +119,7 @@ export class SlackHandler {
     thread_ts?: string;
     user: string;
     ts: string;
+    channelType?: string;
   }): Promise<void> {
     const config = getConfig();
 
@@ -124,6 +132,11 @@ export class SlackHandler {
       return;
     }
 
+    // Debug reaction: 👀 = message received
+    try {
+      await this.reactions.add(event.channel, event.ts, 'eyes');
+    } catch { /* non-critical */ }
+
     const msg: QueuedMessage = {
       text: event.text,
       channel: event.channel,
@@ -131,10 +144,11 @@ export class SlackHandler {
       userId: event.user,
       ts: event.ts,
       receivedAt: Date.now(),
+      channelType: event.channelType,
     };
 
     logger.debug(
-      { channel: event.channel, activeTask: !!this.activeTask },
+      { channel: event.channel, channelType: event.channelType, activeTask: !!this.activeTask },
       'handleMessage: owner message received',
     );
 
@@ -155,7 +169,7 @@ export class SlackHandler {
       }
     }
 
-    // Enqueue for accumulation — no reaction emojis
+    // Enqueue for accumulation
     this.queue.enqueue(msg);
   }
 

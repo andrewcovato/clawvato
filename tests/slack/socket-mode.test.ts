@@ -34,8 +34,8 @@ function createMockMessages() {
 }
 
 describe('Socket Mode adapter patterns', () => {
-  describe('Message handling (no reactions)', () => {
-    it('enqueues messages without adding reactions', async () => {
+  describe('Message handling', () => {
+    it('adds eyes reaction on message receipt (debug signal)', async () => {
       const reactions = createMockReactions();
       const messages = createMockMessages();
       const handler = new SlackHandler(reactions, messages);
@@ -47,8 +47,8 @@ describe('Socket Mode adapter patterns', () => {
         ts: '1111.0000',
       });
 
-      // No reactions — the bot listens silently
-      expect(reactions.add).not.toHaveBeenCalled();
+      // Debug: 👀 = message received
+      expect(reactions.add).toHaveBeenCalledWith('C123', '1111.0000', 'eyes');
     });
   });
 
@@ -76,7 +76,7 @@ describe('Socket Mode adapter patterns', () => {
       loadConfig({ ownerSlackUserId: undefined });
     });
 
-    it('handler processes owner messages (enqueues without reaction)', async () => {
+    it('handler processes owner messages with debug reaction', async () => {
       const reactions = createMockReactions();
       const messages = createMockMessages();
       const handler = new SlackHandler(reactions, messages);
@@ -91,8 +91,8 @@ describe('Socket Mode adapter patterns', () => {
         ts: '1111.0000',
       });
 
-      // Message should be enqueued (no reaction added — silent listener)
-      expect(reactions.add).not.toHaveBeenCalled();
+      // Debug: 👀 = message received by owner
+      expect(reactions.add).toHaveBeenCalledWith('C123', '1111.0000', 'eyes');
 
       // Reset
       loadConfig({ ownerSlackUserId: undefined });

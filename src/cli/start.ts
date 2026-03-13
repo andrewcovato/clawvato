@@ -10,12 +10,15 @@
  * 6. Handles graceful shutdown
  */
 
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { logger } from '../logger.js';
 import { getConfig } from '../config.js';
 import { getDb, closeDb } from '../db/index.js';
 import { hasCredential, requireCredential } from '../credentials.js';
 import { createSlackConnection } from '../slack/socket-mode.js';
 import { createAgent } from '../agent/index.js';
+import type { WebClient } from '@slack/web-api';
 
 export async function startAgent(): Promise<void> {
   const config = getConfig();
@@ -86,6 +89,7 @@ export async function startAgent(): Promise<void> {
   // ── Graceful shutdown ──
   const shutdown = async () => {
     logger.info('Shutting down...');
+    saveLastActiveTimestamp(config.dataDir);
     await agent.shutdown();
     await slack.stop();
     closeDb();
@@ -98,8 +102,111 @@ export async function startAgent(): Promise<void> {
   // ── Start Socket Mode connection ──
   await slack.start();
 
-  logger.info('Clawvato agent is running. DM the bot or @mention it in a channel.');
+  logger.info('Clawvato agent is running. Listening to all joined channels.');
   logger.info('Press Ctrl+C to stop.');
 
+  // ── Crawl for missed messages ──
+  await crawlMissedMessages(slack.botClient, config.dataDir);
+
+  // ── Record startup time (for next launch's crawl) ──
+  saveLastActiveTimestamp(config.dataDir);
+
   // Socket Mode keeps the process alive via the WebSocket connection
+}
+
+/** Path to the file that stores last-active timestamp */
+function lastActiveFile(dataDir: string): string {
+  return join(dataDir, 'last-active.txt');
+}
+
+/** Save current timestamp so next startup knows when we went offline */
+function saveLastActiveTimestamp(dataDir: string): void {
+  try {
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(lastActiveFile(dataDir), Date.now().toString(), 'utf-8');
+  } catch (error) {
+    logger.debug({ error }, 'Failed to save last-active timestamp');
+  }
+}
+
+/** Read the last-active timestamp (returns epoch ms, or 0 if not found) */
+function readLastActiveTimestamp(dataDir: string): number {
+  try {
+    const content = readFileSync(lastActiveFile(dataDir), 'utf-8').trim();
+    return parseInt(content, 10) || 0;
+  } catch {
+    return 0; // First launch or file missing
+  }
+}
+
+/**
+ * On startup, check joined channels for messages the bot missed while offline.
+ * If there are many missed messages, announce presence and offer to catch up.
+ */
+async function crawlMissedMessages(botClient: WebClient, dataDir: string): Promise<void> {
+  const lastActive = readLastActiveTimestamp(dataDir);
+  if (lastActive === 0) {
+    logger.info('First launch — skipping missed message crawl');
+    return;
+  }
+
+  const offlineDuration = Date.now() - lastActive;
+  logger.info({ offlineMs: offlineDuration }, 'Checking for missed messages');
+
+  // Don't crawl if we were only offline briefly (< 2 minutes)
+  if (offlineDuration < 120_000) {
+    logger.info('Was offline < 2 minutes — skipping crawl');
+    return;
+  }
+
+  try {
+    // Get channels the bot is a member of
+    const channelsResult = await botClient.conversations.list({
+      types: 'public_channel,private_channel,im,mpim',
+      exclude_archived: true,
+      limit: 100,
+    });
+
+    const channels = (channelsResult.channels ?? []).filter(c => c.is_member);
+    logger.info({ channelCount: channels.length }, 'Checking joined channels for missed messages');
+
+    // Convert lastActive to Slack timestamp format (seconds.microseconds)
+    const oldestTs = (lastActive / 1000).toFixed(6);
+
+    for (const channel of channels) {
+      if (!channel.id) continue;
+
+      // Skip DMs for the announcement — we'll respond when they message us
+      const isDM = channel.is_im || channel.is_mpim;
+      if (isDM) continue;
+
+      try {
+        const history = await botClient.conversations.history({
+          channel: channel.id,
+          oldest: oldestTs,
+          limit: 50,
+        });
+
+        const messages = (history.messages ?? []).filter(m => !m.bot_id && m.subtype === undefined);
+        if (messages.length >= 5) {
+          // Significant activity while we were offline — announce
+          const channelName = channel.name ?? channel.id;
+          logger.info(
+            { channel: channel.id, channelName, missedCount: messages.length },
+            'Found missed messages — announcing presence',
+          );
+
+          await botClient.chat.postMessage({
+            channel: channel.id,
+            text: `I'm back online — looks like I missed ${messages.length} messages in here while I was away. Want me to catch up on anything?`,
+          });
+        }
+      } catch (error) {
+        // Some channels may not be accessible
+        logger.debug({ channel: channel.id, error }, 'Failed to check channel history');
+      }
+    }
+  } catch (error) {
+    logger.warn({ error }, 'Failed to crawl missed messages');
+  }
 }
