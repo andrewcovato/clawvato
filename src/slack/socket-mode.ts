@@ -95,37 +95,55 @@ export async function createSlackConnection(config: {
 
   // ALL messages in channels the bot is in — the bot listens like a human
   app.event('message', async ({ event }) => {
-    // Cast to access common message fields — Bolt's union type is broad
-    const msg = event as unknown as Record<string, unknown>;
+    try {
+      // Cast to access common message fields — Bolt's union type is broad
+      const msg = event as unknown as Record<string, unknown>;
 
-    // Filter: ignore bot messages (prevent bot-to-bot injection and self-loop)
-    if (msg.bot_id || msg.bot_profile) return;
+      logger.info(
+        { user: msg.user, bot_id: msg.bot_id ?? null, subtype: msg.subtype ?? null, channel: msg.channel, ts: msg.ts },
+        'Socket Mode event received (raw)',
+      );
 
-    // Filter: ignore our own messages (belt-and-suspenders with bot_id check)
-    if (botUserId && msg.user === botUserId) return;
+      // Filter: ignore bot messages (prevent bot-to-bot injection and self-loop)
+      if (msg.bot_id || msg.bot_profile) {
+        logger.debug({ bot_id: msg.bot_id }, 'Filtered: bot message');
+        return;
+      }
 
-    // Filter: only process new messages (not edits, deletes, etc.)
-    if (msg.subtype) return;
+      // Filter: ignore our own messages (belt-and-suspenders with bot_id check)
+      if (botUserId && msg.user === botUserId) {
+        logger.debug('Filtered: own message');
+        return;
+      }
 
-    const channel = msg.channel as string;
-    const user = (msg.user as string) ?? '';
-    const ts = msg.ts as string;
-    const threadTs = msg.thread_ts as string | undefined;
-    const channelType = msg.channel_type as string | undefined;
+      // Filter: only process new messages (not edits, deletes, etc.)
+      if (msg.subtype) {
+        logger.debug({ subtype: msg.subtype }, 'Filtered: has subtype');
+        return;
+      }
 
-    logger.debug(
-      { channel, user, ts, channelType },
-      'Message received via Socket Mode',
-    );
+      const channel = msg.channel as string;
+      const user = (msg.user as string) ?? '';
+      const ts = msg.ts as string;
+      const threadTs = msg.thread_ts as string | undefined;
+      const channelType = msg.channel_type as string | undefined;
 
-    await handler.handleMessage({
-      text: (msg.text as string) ?? '',
-      channel,
-      thread_ts: threadTs,
-      user,
-      ts,
-      channelType,
-    });
+      logger.info(
+        { channel, user, ts, channelType },
+        'User is asking something — routing to handler',
+      );
+
+      await handler.handleMessage({
+        text: (msg.text as string) ?? '',
+        channel,
+        thread_ts: threadTs,
+        user,
+        ts,
+        channelType,
+      });
+    } catch (error) {
+      logger.error({ error }, 'Message event handler crashed');
+    }
   });
 
   // App mentions in channels — still wired for explicit @mention detection
@@ -209,6 +227,11 @@ export async function createSlackConnection(config: {
 
   app.assistant(assistant);
 
+  // Catch-all error handler — Bolt can swallow errors silently
+  app.error(async (error) => {
+    logger.error({ error }, 'Bolt app error');
+  });
+
   return {
     app,
     handler,
@@ -219,6 +242,11 @@ export async function createSlackConnection(config: {
     async start() {
       await app.start();
       logger.info('Slack Socket Mode connection established');
+
+      // Heartbeat — confirm the process is alive and Socket Mode is listening
+      setInterval(() => {
+        logger.info('Socket Mode heartbeat — process alive, listening for events');
+      }, 30_000);
     },
 
     async stop() {
