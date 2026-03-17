@@ -82,7 +82,7 @@ export function createGoogleTools(
             const attendees = (e.attendees ?? []).map(a => a.email).filter(Boolean).join(', ');
             const location = e.location ? ` | Location: ${e.location}` : '';
             const attendeeStr = attendees ? ` | Attendees: ${attendees}` : '';
-            return `- ${e.summary ?? 'Untitled'} | ${start} → ${end}${location}${attendeeStr}`;
+            return `- ${e.summary ?? 'Untitled'} | ${start} → ${end}${location}${attendeeStr} | ID: ${e.id}`;
           });
 
           return { content: `${events.length} events in the next ${daysAhead} days:\n${lines.join('\n')}` };
