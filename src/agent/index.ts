@@ -59,6 +59,8 @@ Each message you receive includes the recent conversation history from the chann
 
 Read the conversation like a human scrolling Slack. Understand what's been discussed, what you already responded to, and what's new.
 
+**IMPORTANT: Always focus on the "New message" section — that is what the owner just said and needs a response to. The conversation history and memory context are background information. Do not respond to old messages or topics unless the new message explicitly references them.**
+
 ## When to respond
 
 Respond when:
