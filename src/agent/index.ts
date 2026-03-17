@@ -18,6 +18,8 @@ import { getConfig } from '../config.js';
 import { requireCredential } from '../credentials.js';
 import { getDb } from '../db/index.js';
 import { createSlackTools, type SlackTool, type ToolHandlerResult } from '../mcp/slack/server.js';
+import { getGoogleAuth } from '../google/auth.js';
+import { createGoogleTools } from '../google/tools.js';
 import { retrieveContext } from '../memory/retriever.js';
 import { extractFacts, storeExtractionResult } from '../memory/extractor.js';
 import { maybeReflect } from '../memory/reflection.js';
@@ -86,7 +88,8 @@ Stay silent when:
 
 ## Guidelines
 - You can search Slack, post messages, and look up user info using the slack tools
-- Always confirm before sending messages on the owner's behalf
+- If Google tools are available, you can check calendar, search email, create drafts, and search Drive
+- Always confirm before sending messages or creating events on the owner's behalf
 - Never share the owner's private information with others
 - When you complete a task, report the result briefly
 - If a task has multiple steps, report meaningful milestones`;
@@ -301,6 +304,19 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
   const toolHandlers = new Map<string, (args: Record<string, unknown>) => Promise<ToolHandlerResult>>();
   for (const tool of slackTools) {
     toolHandlers.set(tool.definition.name, tool.handler);
+  }
+
+  // Google Workspace tools (conditional — only if credentials configured)
+  const googleAuth = await getGoogleAuth();
+  if (googleAuth) {
+    const googleTools = createGoogleTools(googleAuth);
+    for (const tool of googleTools) {
+      toolDefs.push(tool.definition);
+      toolHandlers.set(tool.definition.name, tool.handler);
+    }
+    logger.info({ toolCount: googleTools.length }, 'Google Workspace tools loaded');
+  } else {
+    logger.info('Google Workspace tools not loaded — credentials not configured');
   }
 
   // Memory search tool — Tier 3 deep search, agent calls explicitly
