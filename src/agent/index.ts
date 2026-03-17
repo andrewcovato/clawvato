@@ -17,7 +17,10 @@ import { logger } from '../logger.js';
 import { getConfig } from '../config.js';
 import { requireCredential } from '../credentials.js';
 import { getDb } from '../db/index.js';
-import { createSlackTools, type SlackTool } from '../mcp/slack/server.js';
+import { createSlackTools, type SlackTool, type ToolHandlerResult } from '../mcp/slack/server.js';
+import { retrieveContext } from '../memory/retriever.js';
+import { extractFacts, storeExtractionResult } from '../memory/extractor.js';
+import { searchMemories, findPersonByName } from '../memory/store.js';
 import { preToolUse, type ToolUseContext } from '../hooks/pre-tool-use.js';
 import { postToolUse, type ToolResult } from '../hooks/post-tool-use.js';
 import { evaluatePolicy } from '../training-wheels/policy-engine.js';
@@ -243,11 +246,58 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
 
   // Build tool registry
   const slackTools = createSlackTools(options.botClient, options.userClient);
-  const toolDefs = slackTools.map(t => t.definition);
-  const toolHandlers = new Map<string, SlackTool['handler']>();
+  const toolDefs: Anthropic.Tool[] = slackTools.map(t => t.definition);
+  const toolHandlers = new Map<string, (args: Record<string, unknown>) => Promise<ToolHandlerResult>>();
   for (const tool of slackTools) {
     toolHandlers.set(tool.definition.name, tool.handler);
   }
+
+  // Memory search tool — Tier 3 deep search, agent calls explicitly
+  toolDefs.push({
+    name: 'search_memory',
+    description:
+      'Search your memory for past facts, decisions, preferences, or people. ' +
+      'Use when the current context doesn\'t have enough information.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        query: { type: 'string', description: 'What to search for' },
+        type: { type: 'string', enum: ['fact', 'preference', 'decision', 'observation', 'reflection'], description: 'Filter by memory type (optional)' },
+      },
+      required: ['query'],
+    },
+  });
+  toolHandlers.set('search_memory', async (args) => {
+    const query = args.query as string;
+    const type = args.type as string | undefined;
+    const db = getDb();
+
+    const results = searchMemories(db, query, {
+      limit: 10,
+      type: type as 'fact' | 'preference' | 'decision' | 'observation' | 'reflection' | undefined,
+    });
+
+    if (results.length === 0) {
+      // Also try person lookup
+      const person = findPersonByName(db, query);
+      if (person) {
+        const parts = [person.name];
+        if (person.role) parts.push(person.role);
+        if (person.organization) parts.push(`at ${person.organization}`);
+        if (person.email) parts.push(`(${person.email})`);
+        if (person.notes) parts.push(`— ${person.notes}`);
+        return { content: `Person: ${parts.join(', ')}` };
+      }
+      return { content: `No memories found for "${query}".` };
+    }
+
+    const lines = results.map(m => {
+      const conf = m.confidence >= 0.9 ? '' : ` [${Math.round(m.confidence * 100)}%]`;
+      return `- [${m.type}] ${m.content}${conf}`;
+    });
+
+    return { content: `Found ${results.length} memories:\n${lines.join('\n')}` };
+  });
 
   // Resolve bot's own user ID for context formatting
   let botUserId: string | undefined;
@@ -292,12 +342,20 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
         config.ownerSlackUserId,
       );
 
+      // ── Retrieve relevant memories (Tier 2) ──
+      const db = getDb();
+      const memoryResult = retrieveContext(db, message);
+
       let userPrompt: string;
-      if (conversationHistory) {
-        userPrompt = `Recent conversation:\n${conversationHistory}\n\n---\nNew message:\n${message}`;
-      } else {
-        userPrompt = message;
+      const parts: string[] = [];
+      if (memoryResult.context) {
+        parts.push(memoryResult.context);
       }
+      if (conversationHistory) {
+        parts.push(`## Recent conversation\n${conversationHistory}`);
+      }
+      parts.push(`## New message\n${message}`);
+      userPrompt = parts.join('\n\n---\n\n');
 
       // Debug reaction: 🧠 = thinking about this
       const lastMsg = batch.messages[batch.messages.length - 1];
@@ -517,6 +575,25 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
             await handler.getReactions().remove(lastMsg.channel, lastMsg.ts, 'brain');
           } catch { /* non-critical */ }
         }
+
+        // ── Post-interaction memory extraction (fire-and-forget) ──
+        if (isRealSlackMessage && message.length > 10) {
+          const conversationForExtraction = conversationHistory
+            ? `${conversationHistory}\n\nNew message: ${message}`
+            : message;
+          const extractionSource = `slack:${batch.channel}:${lastMsg.ts}`;
+
+          extractFacts(anthropicClient, config.models.classifier, conversationForExtraction, extractionSource)
+            .then(result => {
+              if (result.facts.length > 0 || result.people.length > 0) {
+                storeExtractionResult(db, result, extractionSource);
+              }
+            })
+            .catch(err => {
+              logger.debug({ error: err }, 'Background extraction failed — non-critical');
+            });
+        }
+
         logger.info({ channel: batch.channel }, 'processBatch complete');
       }
     },
