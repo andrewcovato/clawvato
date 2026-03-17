@@ -37,7 +37,7 @@ import type { WebClient } from '@slack/web-api';
 const NO_RESPONSE = '[NO_RESPONSE]';
 
 /** Max tool-call turns before forcing a stop */
-const MAX_TURNS = 20;
+const MAX_TURNS = 10;
 
 // ── Context limits (centralized for tuning) ──
 // See CLAUDE.md "Context Limits" section for documentation
@@ -90,6 +90,7 @@ Stay silent when:
 - You can search Slack, post messages, and look up user info using the slack tools
 - If Google tools are available, you can check calendar, search email, create drafts, and search Drive
 - Always confirm before sending messages or creating events on the owner's behalf
+- **Efficiency**: Do NOT search repeatedly with different queries hoping for better results. Try 1-2 searches max, then work with what you found or tell the owner what you couldn't find. Do NOT read every email in a search result — summarize from snippets unless specifically asked to read one.
 - Never share the owner's private information with others
 - When you complete a task, report the result briefly
 - If a task has multiple steps, report meaningful milestones`;
