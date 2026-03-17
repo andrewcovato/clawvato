@@ -1,36 +1,11 @@
 /**
- * Tests for the Slack MCP server.
+ * Tests for the Slack tools.
  *
  * Mocks WebClient to test tool input/output without real Slack API calls.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-
-// We can't easily test the full createSdkMcpServer without the SDK runtime,
-// so we test the tool handler logic by importing the module and extracting
-// the handler functions. Since the module wraps everything in createSdkMcpServer,
-// we mock that and capture the tools config.
-
-let capturedTools: Array<{
-  name: string;
-  description: string;
-  handler: (args: Record<string, unknown>, extra: unknown) => Promise<{ content: Array<{ type: string; text: string }>; isError?: boolean }>;
-}> = [];
-
-vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
-  createSdkMcpServer: (config: { tools: typeof capturedTools }) => {
-    capturedTools = config.tools;
-    return { type: 'sdk', config };
-  },
-}));
-
-vi.mock('zod', async () => {
-  const actual = await vi.importActual('zod');
-  return actual;
-});
-
-// Import after mocks
-const { createSlackMcpServer } = await import('../../src/mcp/slack/server.js');
+import { createSlackTools, type SlackTool } from '../../src/mcp/slack/server.js';
 
 function createMockWebClient() {
   return {
@@ -50,21 +25,21 @@ function createMockWebClient() {
   };
 }
 
-describe('Slack MCP Server', () => {
+describe('Slack Tools', () => {
   let botClient: ReturnType<typeof createMockWebClient>;
   let userClient: ReturnType<typeof createMockWebClient>;
+  let tools: SlackTool[];
 
   beforeEach(() => {
     botClient = createMockWebClient();
     userClient = createMockWebClient();
-    capturedTools = [];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    createSlackMcpServer(botClient as any, userClient as any);
+    tools = createSlackTools(botClient as any, userClient as any);
   });
 
   function findTool(name: string) {
-    const tool = capturedTools.find(t => t.name === name);
-    if (!tool) throw new Error(`Tool ${name} not found. Available: ${capturedTools.map(t => t.name).join(', ')}`);
+    const tool = tools.find(t => t.definition.name === name);
+    if (!tool) throw new Error(`Tool ${name} not found. Available: ${tools.map(t => t.definition.name).join(', ')}`);
     return tool;
   }
 
@@ -81,11 +56,11 @@ describe('Slack MCP Server', () => {
       });
 
       const tool = findTool('slack_search_messages');
-      const result = await tool.handler({ query: 'test', count: 10, sort: 'score' }, {});
+      const result = await tool.handler({ query: 'test', count: 10, sort: 'score' });
 
-      expect(result.content[0].text).toContain('Found 2 results');
-      expect(result.content[0].text).toContain('Hello world');
-      expect(result.content[0].text).toContain('Fix the bug');
+      expect(result.content).toContain('Found 2 results');
+      expect(result.content).toContain('Hello world');
+      expect(result.content).toContain('Fix the bug');
       expect(userClient.search.messages).toHaveBeenCalledWith({
         query: 'test',
         count: 10,
@@ -99,7 +74,7 @@ describe('Slack MCP Server', () => {
       });
 
       const tool = findTool('slack_search_messages');
-      await tool.handler({ query: 'test' }, {});
+      await tool.handler({ query: 'test' });
 
       expect(userClient.search.messages).toHaveBeenCalled();
       expect(botClient.search.messages).not.toHaveBeenCalled();
@@ -111,19 +86,19 @@ describe('Slack MCP Server', () => {
       });
 
       const tool = findTool('slack_search_messages');
-      const result = await tool.handler({ query: 'nonexistent' }, {});
+      const result = await tool.handler({ query: 'nonexistent' });
 
-      expect(result.content[0].text).toContain('No messages found');
+      expect(result.content).toContain('No messages found');
     });
 
     it('handles API errors', async () => {
       userClient.search.messages.mockRejectedValue(new Error('rate_limited'));
 
       const tool = findTool('slack_search_messages');
-      const result = await tool.handler({ query: 'test' }, {});
+      const result = await tool.handler({ query: 'test' });
 
       expect(result.isError).toBe(true);
-      expect(result.content[0].text).toContain('rate_limited');
+      expect(result.content).toContain('rate_limited');
     });
 
     it('caps count at 50', async () => {
@@ -132,7 +107,7 @@ describe('Slack MCP Server', () => {
       });
 
       const tool = findTool('slack_search_messages');
-      await tool.handler({ query: 'test', count: 100 }, {});
+      await tool.handler({ query: 'test', count: 100 });
 
       expect(userClient.search.messages).toHaveBeenCalledWith(
         expect.objectContaining({ count: 50 }),
@@ -145,10 +120,10 @@ describe('Slack MCP Server', () => {
       botClient.chat.postMessage.mockResolvedValue({ ts: '1234.5678' });
 
       const tool = findTool('slack_post_message');
-      const result = await tool.handler({ channel: 'C123', text: 'Hello' }, {});
+      const result = await tool.handler({ channel: 'C123', text: 'Hello' });
 
-      expect(result.content[0].text).toContain('Message posted');
-      expect(result.content[0].text).toContain('C123');
+      expect(result.content).toContain('Message posted');
+      expect(result.content).toContain('C123');
       expect(botClient.chat.postMessage).toHaveBeenCalledWith({
         channel: 'C123',
         text: 'Hello',
@@ -160,9 +135,9 @@ describe('Slack MCP Server', () => {
       botClient.chat.postMessage.mockResolvedValue({ ts: '1234.5678' });
 
       const tool = findTool('slack_post_message');
-      const result = await tool.handler({ channel: 'C123', text: 'Reply', thread_ts: '1111.2222' }, {});
+      const result = await tool.handler({ channel: 'C123', text: 'Reply', thread_ts: '1111.2222' });
 
-      expect(result.content[0].text).toContain('thread');
+      expect(result.content).toContain('thread');
       expect(botClient.chat.postMessage).toHaveBeenCalledWith({
         channel: 'C123',
         text: 'Reply',
@@ -181,20 +156,20 @@ describe('Slack MCP Server', () => {
       });
 
       const tool = findTool('slack_get_thread');
-      const result = await tool.handler({ channel: 'C123', thread_ts: '1111.0000' }, {});
+      const result = await tool.handler({ channel: 'C123', thread_ts: '1111.0000' });
 
-      expect(result.content[0].text).toContain('2 messages');
-      expect(result.content[0].text).toContain('Thread parent');
-      expect(result.content[0].text).toContain('Reply 1');
+      expect(result.content).toContain('2 messages');
+      expect(result.content).toContain('Thread parent');
+      expect(result.content).toContain('Reply 1');
     });
 
     it('handles empty thread', async () => {
       botClient.conversations.replies.mockResolvedValue({ messages: [] });
 
       const tool = findTool('slack_get_thread');
-      const result = await tool.handler({ channel: 'C123', thread_ts: '1111.0000' }, {});
+      const result = await tool.handler({ channel: 'C123', thread_ts: '1111.0000' });
 
-      expect(result.content[0].text).toContain('No messages');
+      expect(result.content).toContain('No messages');
     });
   });
 
@@ -211,20 +186,20 @@ describe('Slack MCP Server', () => {
       });
 
       const tool = findTool('slack_get_user_info');
-      const result = await tool.handler({ user_id: 'U001' }, {});
+      const result = await tool.handler({ user_id: 'U001' });
 
-      expect(result.content[0].text).toContain('Alice Smith');
-      expect(result.content[0].text).toContain('Engineer');
-      expect(result.content[0].text).toContain('alice@co.com');
+      expect(result.content).toContain('Alice Smith');
+      expect(result.content).toContain('Engineer');
+      expect(result.content).toContain('alice@co.com');
     });
 
     it('handles user not found', async () => {
       botClient.users.info.mockResolvedValue({ user: null });
 
       const tool = findTool('slack_get_user_info');
-      const result = await tool.handler({ user_id: 'U999' }, {});
+      const result = await tool.handler({ user_id: 'U999' });
 
-      expect(result.content[0].text).toContain('not found');
+      expect(result.content).toContain('not found');
     });
   });
 
@@ -238,17 +213,17 @@ describe('Slack MCP Server', () => {
       });
 
       const tool = findTool('slack_get_channel_history');
-      const result = await tool.handler({ channel: 'C123', limit: 20 }, {});
+      const result = await tool.handler({ channel: 'C123', limit: 20 });
 
-      expect(result.content[0].text).toContain('2');
-      expect(result.content[0].text).toContain('Message 1');
+      expect(result.content).toContain('2');
+      expect(result.content).toContain('Message 1');
     });
 
     it('caps limit at 100', async () => {
       botClient.conversations.history.mockResolvedValue({ messages: [] });
 
       const tool = findTool('slack_get_channel_history');
-      await tool.handler({ channel: 'C123', limit: 200 }, {});
+      await tool.handler({ channel: 'C123', limit: 200 });
 
       expect(botClient.conversations.history).toHaveBeenCalledWith(
         expect.objectContaining({ limit: 100 }),
@@ -258,8 +233,8 @@ describe('Slack MCP Server', () => {
 
   describe('tool registration', () => {
     it('registers all 5 tools', () => {
-      expect(capturedTools).toHaveLength(5);
-      const names = capturedTools.map(t => t.name);
+      expect(tools).toHaveLength(5);
+      const names = tools.map(t => t.definition.name);
       expect(names).toContain('slack_search_messages');
       expect(names).toContain('slack_post_message');
       expect(names).toContain('slack_get_thread');
@@ -269,16 +244,15 @@ describe('Slack MCP Server', () => {
 
     it('falls back to botClient when no userClient for search', async () => {
       // Recreate without user client
-      capturedTools = [];
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      createSlackMcpServer(botClient as any);
+      const botOnlyTools = createSlackTools(botClient as any);
 
       botClient.search.messages.mockResolvedValue({
         messages: { total: 0, matches: [] },
       });
 
-      const tool = findTool('slack_search_messages');
-      await tool.handler({ query: 'test' }, {});
+      const tool = botOnlyTools.find(t => t.definition.name === 'slack_search_messages')!;
+      await tool.handler({ query: 'test' });
 
       expect(botClient.search.messages).toHaveBeenCalled();
     });

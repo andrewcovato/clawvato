@@ -93,6 +93,17 @@ export async function createSlackConnection(config: {
 
   // ── Wire Bolt events to handler ──
 
+  // Global middleware — logs ALL incoming events to verify Socket Mode is alive
+  app.use(async ({ body, next }) => {
+    const eventBody = body as Record<string, unknown>;
+    const eventObj = eventBody.event as Record<string, unknown> | undefined;
+    logger.info({
+      bodyType: eventBody.type,
+      eventType: eventObj?.type ?? 'none',
+    }, 'Bolt middleware: event received');
+    await next();
+  });
+
   // ALL messages in channels the bot is in — the bot listens like a human
   app.event('message', async ({ event }) => {
     try {
@@ -243,9 +254,37 @@ export async function createSlackConnection(config: {
       await app.start();
       logger.info('Slack Socket Mode connection established');
 
-      // Heartbeat — confirm the process is alive and Socket Mode is listening
-      setInterval(() => {
-        logger.info('Socket Mode heartbeat — process alive, listening for events');
+      // Access the SocketModeReceiver's client for connection monitoring
+      const receiver = (app as unknown as { receiver: { client: {
+        on: (event: string, cb: (...args: unknown[]) => void) => void;
+        disconnect: () => Promise<void>;
+        start: () => Promise<void>;
+      } } }).receiver;
+
+      if (receiver?.client) {
+        receiver.client.on('connected', () => {
+          logger.info('Socket Mode: connected');
+        });
+        receiver.client.on('disconnected', () => {
+          logger.warn('Socket Mode: disconnected — will attempt reconnect');
+        });
+        receiver.client.on('reconnecting', () => {
+          logger.info('Socket Mode: reconnecting...');
+        });
+        receiver.client.on('unable_to_socket_mode_start', () => {
+          logger.error('Socket Mode: unable to start — will retry');
+        });
+      }
+
+      // Heartbeat with connection health check
+      setInterval(async () => {
+        try {
+          // Quick API call to verify the bot token is still working
+          await botClient.auth.test();
+          logger.info('Heartbeat: process alive, API reachable');
+        } catch (error) {
+          logger.warn({ error }, 'Heartbeat: API call failed — connection may be dead');
+        }
       }, 30_000);
     },
 

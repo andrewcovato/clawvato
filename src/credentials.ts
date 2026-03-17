@@ -59,7 +59,7 @@ export async function getCredential(key: CredentialKey): Promise<string | null> 
 }
 
 /**
- * Store a credential in macOS Keychain.
+ * Store a credential in Keychain (macOS) or warn to use env vars (headless/Linux).
  */
 export async function setCredential(key: CredentialKey, value: string): Promise<void> {
   const kt = await getKeytar();
@@ -67,8 +67,7 @@ export async function setCredential(key: CredentialKey, value: string): Promise<
     await kt.setPassword(SERVICE_NAME, key, value);
     logger.info({ key }, 'Credential stored in Keychain');
   } else {
-    logger.warn({ key }, 'Cannot store credential — keytar not available');
-    throw new Error('Keychain not available. Install keytar or set environment variables.');
+    logger.warn({ key }, `Keychain not available — set ${ENV_MAP[key]} as an environment variable instead`);
   }
 }
 

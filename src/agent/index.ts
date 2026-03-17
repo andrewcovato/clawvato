@@ -1,69 +1,74 @@
 /**
- * Agent Orchestrator — configures the Claude Agent SDK and wires everything together.
+ * Agent Orchestrator — direct Anthropic API, no subprocess.
  *
- * The Agent SDK replaces our custom Plan-Then-Execute loop with native capabilities:
- * - Automatic tool-calling loop (message → tool call → response)
- * - MCP server discovery (tools auto-discovered via mcpServers config)
- * - PreToolUse/PostToolUse hooks (our security + interrupt bridge)
+ * Every agent call gets the full recent channel history, formatted as a
+ * conversation. Claude reads it like a human scrolling Slack — understanding
+ * what's been said, what it already responded to, and what needs attention.
  *
- * Architecture:
- *   Sonnet handles the full agent loop (understanding → planning → executing → responding)
- *   Haiku handles interrupt classification only (fast, cheap, called in hook code)
- *   Opus reserved for future complex reasoning tasks
+ * Relevance is handled natively: if Claude decides the conversation doesn't
+ * need its input, it responds with [NO_RESPONSE] and we stay silent.
+ * No separate classifier, no heuristics — one model, one call.
  *
- * Our value-add (not in the SDK):
- *   EventQueue — message accumulation with debounce + typing awareness
- *   SlackHandler — reaction lifecycle (⏳→🧠→response), milestone updates
- *   Interrupt classifier — four-way classification (additive/redirect/cancel/unrelated)
- *   Training wheels — policy engine + graduation
- *   All security modules — sender verify, output sanitizer, path validator, rate limiter
+ * The same code path handles both live messages and startup crawl.
  */
 
 import Anthropic from '@anthropic-ai/sdk';
-import { query, type HookCallback } from '@anthropic-ai/claude-agent-sdk';
 import { logger } from '../logger.js';
 import { getConfig } from '../config.js';
 import { requireCredential } from '../credentials.js';
 import { getDb } from '../db/index.js';
-import { createSlackMcpServer } from '../mcp/slack/server.js';
-import { createPreToolUseHook, createPostToolUseHook, type InterruptState } from './hooks.js';
+import { createSlackTools, type SlackTool } from '../mcp/slack/server.js';
+import { preToolUse, type ToolUseContext } from '../hooks/pre-tool-use.js';
+import { postToolUse, type ToolResult } from '../hooks/post-tool-use.js';
+import { evaluatePolicy } from '../training-wheels/policy-engine.js';
+import { isGraduated, recordOccurrence } from '../training-wheels/graduation.js';
+import { classifyInterrupt, generateClarificationMessage } from '../slack/interrupt-classifier.js';
 import type { SlackHandler } from '../slack/handler.js';
 import type { AccumulatedBatch } from '../slack/event-queue.js';
 import type { WebClient } from '@slack/web-api';
 
-const SYSTEM_PROMPT = `You are Clawvato, a personal AI chief of staff. You help your owner manage their work life — Slack messages, meetings, emails, documents, and tasks.
+/** Sentinel value — if Claude responds with this, we stay silent */
+const NO_RESPONSE = '[NO_RESPONSE]';
 
-Personality:
+/** Max tool-call turns before forcing a stop */
+const MAX_TURNS = 20;
+
+const SYSTEM_PROMPT = `You are Clawvato, a personal AI chief of staff running in Slack. You help your owner manage their work life — Slack messages, meetings, emails, documents, and tasks.
+
+## How you see conversations
+
+Each message you receive includes the recent conversation history from the channel, so you always have context. Your own previous messages are marked with [You]. The owner's messages are marked with [Owner]. Other users are marked with their user ID.
+
+Read the conversation like a human scrolling Slack. Understand what's been discussed, what you already responded to, and what's new.
+
+## When to respond
+
+Respond when:
+- The owner is talking to you (directly, by @mention, or contextually)
+- You're asked to do something
+- A follow-up to a conversation you were part of
+- You just came back online and there are outstanding requests
+
+Stay silent when:
+- People are talking to each other (not to you)
+- General announcements or social chatter
+- Everything in the conversation has already been handled
+- Your input isn't needed
+
+**If you decide not to respond, output exactly: ${NO_RESPONSE}**
+
+## Personality
 - Concise and professional, with occasional dry humor
 - You prefer action over asking unnecessary questions
-- When uncertain, you ask one clear question rather than guessing
+- When uncertain, ask one clear question rather than guessing
 - Brief responses — no narration of your process
 
-Guidelines:
+## Guidelines
 - You can search Slack, post messages, and look up user info using the slack tools
 - Always confirm before sending messages on the owner's behalf
 - Never share the owner's private information with others
 - When you complete a task, report the result briefly
-- If a task has multiple steps, report meaningful milestones (e.g., "Found 3 available slots, drafting invite...")`;
-
-const RELEVANCE_SYSTEM_PROMPT = `You decide whether a Slack message is directed at the AI assistant (Clawvato) or is just normal conversation between humans.
-
-Respond with exactly one word: RESPOND or IGNORE.
-
-RESPOND when:
-- The message @mentions the bot
-- The message is a DM to the bot
-- The message is clearly asking the bot to do something (even without @mention) based on recent context
-- The message is a follow-up to a conversation the bot was just part of
-- The message asks a question that only the bot would answer
-
-IGNORE when:
-- People are talking to each other
-- The message is a general channel announcement
-- The message is clearly not directed at the bot
-- The message is a reaction, emoji, or social chatter
-
-When in doubt, IGNORE. It's better to miss a message than to butt into a human conversation.`;
+- If a task has multiple steps, report meaningful milestones`;
 
 export interface Agent {
   /** Process an accumulated batch of messages from the owner */
@@ -79,36 +84,179 @@ export interface AgentOptions {
 }
 
 /**
+ * State shared between the agent loop and interrupt checks.
+ */
+export interface InterruptState {
+  type: 'cancel' | 'redirect' | 'additive' | null;
+  newMessage?: string;
+  clarificationMessage?: string;
+}
+
+/**
+ * Build the conversation context by fetching recent channel history.
+ * Returns a formatted string with [Owner], [You], and [UserID] prefixes.
+ */
+async function buildConversationContext(
+  botClient: WebClient,
+  channel: string,
+  botUserId?: string,
+  ownerUserId?: string,
+): Promise<string> {
+  try {
+    const history = await botClient.conversations.history({
+      channel,
+      limit: 20,
+    });
+
+    const messages = (history.messages ?? [])
+      .filter(m => !m.subtype)
+      .reverse(); // oldest first
+
+    if (messages.length === 0) return '';
+
+    const lines = messages.map(m => {
+      const isBotMsg = !!m.bot_id || (botUserId && m.user === botUserId);
+      const isOwner = ownerUserId && m.user === ownerUserId;
+      const prefix = isBotMsg ? '[You]' : isOwner ? '[Owner]' : `[${m.user}]`;
+      return `${prefix}: ${(m.text ?? '').slice(0, 400)}`;
+    });
+
+    return lines.join('\n');
+  } catch (error) {
+    logger.debug({ error, channel }, 'Failed to fetch channel history for context');
+    return '';
+  }
+}
+
+/**
+ * Check for interrupts at a tool-call checkpoint.
+ * Returns the interrupt state if an interrupt was detected and should stop execution.
+ */
+async function checkInterrupt(
+  handler: SlackHandler,
+  interruptState: InterruptState,
+  classifierFn: (systemPrompt: string, userMessage: string) => Promise<string>,
+): Promise<boolean> {
+  const interrupt = handler.drainInterrupt();
+  if (!interrupt) return false;
+
+  const activeTask = handler.getActiveTask();
+  const taskDescription = activeTask?.description ?? 'current task';
+
+  logger.info({ interrupt: interrupt.text.slice(0, 80) }, 'Interrupt detected at tool checkpoint');
+
+  if (activeTask) {
+    await handler.ackInterrupt(activeTask.channel, interrupt.ts);
+  }
+
+  try {
+    const classification = await classifyInterrupt(taskDescription, interrupt.text, classifierFn);
+
+    if (classification.shouldAsk) {
+      interruptState.type = 'cancel';
+      interruptState.clarificationMessage = generateClarificationMessage(taskDescription, interrupt.text);
+      return true;
+    }
+
+    switch (classification.type) {
+      case 'cancel':
+        interruptState.type = 'cancel';
+        return true;
+      case 'redirect':
+        interruptState.type = 'redirect';
+        interruptState.newMessage = interrupt.text;
+        return true;
+      case 'additive':
+        interruptState.type = 'additive';
+        interruptState.newMessage = interrupt.text;
+        return false; // don't stop — additive enriches context
+      case 'unrelated':
+        logger.info('Unrelated interrupt — will process after current task');
+        return false;
+    }
+  } catch (error) {
+    logger.error({ error }, 'Interrupt classification failed — continuing');
+  }
+
+  return false;
+}
+
+/**
+ * Run pre-tool security checks. Returns true if the tool call is allowed.
+ */
+function runPreToolChecks(toolName: string, toolInput: Record<string, unknown>, senderSlackId?: string): boolean {
+  const serverName = 'slack';
+  const db = getDb();
+  const config = getConfig();
+
+  const securityCtx: ToolUseContext = { toolName, serverName, input: toolInput, senderSlackId };
+  const securityResult = preToolUse(securityCtx);
+  if (!securityResult.allowed) {
+    logger.warn({ toolName, reason: securityResult.reason }, 'Tool blocked by security check');
+    return false;
+  }
+
+  const graduated = isGraduated(db, toolName);
+  const policy = evaluatePolicy(toolName, graduated, config.trustLevel);
+  if (!policy.autoApproved) {
+    logger.info({ toolName, reason: policy.reason }, 'Training wheels: tool requires confirmation (allowing for MVP)');
+  }
+
+  return true;
+}
+
+/**
+ * Run post-tool audit and sanitization. Returns the (possibly sanitized) output.
+ */
+function runPostToolChecks(toolName: string, toolInput: Record<string, unknown>, output: string, isError: boolean) {
+  const db = getDb();
+
+  const result: ToolResult = {
+    toolName,
+    serverName: 'slack',
+    input: toolInput,
+    output,
+    success: !isError,
+    error: isError ? output : undefined,
+    durationMs: 0,
+  };
+
+  const { sanitizedOutput } = postToolUse(result);
+
+  try {
+    recordOccurrence(db, toolName, `Tool call: ${toolName}`, {}, 'approved');
+  } catch (error) {
+    logger.debug({ error }, 'Failed to record graduation occurrence — non-critical');
+  }
+
+  return String(sanitizedOutput);
+}
+
+/**
  * Create the agent orchestrator.
- * Configures the Agent SDK with MCP servers and security hooks.
  */
 export async function createAgent(options: AgentOptions): Promise<Agent> {
   const config = getConfig();
   const apiKey = options.apiKey ?? await requireCredential('anthropic-api-key');
-  const db = getDb();
 
-  // The Agent SDK's query() reads the API key from the environment —
-  // it doesn't accept an apiKey parameter. Ensure it's set so the SDK
-  // subprocess can authenticate with Anthropic.
-  if (!process.env.ANTHROPIC_API_KEY) {
-    process.env.ANTHROPIC_API_KEY = apiKey;
-  }
-
-  // Create Anthropic client for Haiku interrupt classification
   const anthropicClient = new Anthropic({ apiKey });
 
-  // Create the Slack MCP server (in-process via SDK's createSdkMcpServer)
-  const slackMcp = createSlackMcpServer(options.botClient, options.userClient);
+  // Build tool registry
+  const slackTools = createSlackTools(options.botClient, options.userClient);
+  const toolDefs = slackTools.map(t => t.definition);
+  const toolHandlers = new Map<string, SlackTool['handler']>();
+  for (const tool of slackTools) {
+    toolHandlers.set(tool.definition.name, tool.handler);
+  }
 
-  logger.info({
-    model: config.models.executor,
-    trustLevel: config.trustLevel,
-  }, 'Agent initialized');
+  // Resolve bot's own user ID for context formatting
+  let botUserId: string | undefined;
+  try {
+    const auth = await options.botClient.auth.test();
+    botUserId = auth.user_id as string | undefined;
+  } catch { /* non-critical */ }
 
-  /**
-   * Haiku classifier function — used by interrupt classifier.
-   * Intentionally cheap and fast (Haiku is ~20x cheaper than Sonnet).
-   */
+  /** Haiku classifier — used for interrupt classification */
   async function classifierCall(systemPrompt: string, userMessage: string): Promise<string> {
     const response = await anthropicClient.messages.create({
       model: config.models.classifier,
@@ -116,52 +264,18 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
       system: systemPrompt,
       messages: [{ role: 'user', content: userMessage }],
     });
-
     const textBlock = response.content.find(b => b.type === 'text');
     return textBlock && 'text' in textBlock ? textBlock.text : '';
   }
 
-  /**
-   * Relevance gate — cheap Haiku call to decide if the bot should respond.
-   * Returns true for DMs, @mentions, and messages Haiku thinks are directed at the bot.
-   */
-  async function shouldRespond(batch: AccumulatedBatch): Promise<boolean> {
-    const message = batch.combinedText;
-
-    // Always respond to DMs
-    const isDM = batch.channelType === 'im' || batch.channelType === 'mpim';
-    if (isDM) {
-      logger.debug('Relevance: DM — always respond');
-      return true;
-    }
-
-    // Always respond to @mentions (any <@UXXXX> pattern in text)
-    if (/<@U[A-Z0-9]+>/.test(message)) {
-      logger.debug('Relevance: @mention detected — always respond');
-      return true;
-    }
-
-    // Use Haiku to classify relevance for channel messages
-    try {
-      const result = await classifierCall(
-        RELEVANCE_SYSTEM_PROMPT,
-        `Message: "${message.slice(0, 500)}"`,
-      );
-      const decision = result.trim().toUpperCase();
-      logger.info({ decision, message: message.slice(0, 80) }, 'Relevance classification');
-      return decision.startsWith('RESPOND');
-    } catch (error) {
-      logger.warn({ error }, 'Relevance classifier failed — defaulting to respond');
-      return true; // Fail open
-    }
-  }
+  logger.info({
+    model: config.models.executor,
+    trustLevel: config.trustLevel,
+  }, 'Agent initialized');
 
   return {
     async processBatch(batch: AccumulatedBatch, handler: SlackHandler): Promise<void> {
       const message = batch.combinedText;
-
-      // Detect assistant mode — if the handler has an active assistant API,
-      // we use setStatus/say instead of message post/update.
       const assistantAPI = handler.getAssistantAPI();
       const isAssistantMode = !!assistantAPI;
 
@@ -170,30 +284,33 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
         'Agent processing batch',
       );
 
-      // Relevance gate — skip messages not directed at the bot
-      // (DMs and assistant mode always pass through)
-      if (!isAssistantMode) {
-        const relevant = await shouldRespond(batch);
-        if (!relevant) {
-          logger.debug({ channel: batch.channel }, 'Message not relevant — skipping');
-          return;
-        }
-      }
-
-      // Debug reaction: 🧠 = acting on this message
-      const lastMsg = batch.messages[batch.messages.length - 1];
-      try {
-        await handler.getReactions().add(lastMsg.channel, lastMsg.ts, 'brain');
-      } catch { /* non-critical */ }
-
-      // Set active task for interrupt routing (includes delayed status timer)
-      handler.setActiveTask(
-        message.slice(0, 100),
+      // ── Build prompt with full conversation context ──
+      const conversationHistory = await buildConversationContext(
+        options.botClient,
         batch.channel,
-        batch.threadTs,
+        botUserId,
+        config.ownerSlackUserId,
       );
 
-      // In assistant mode, set a thread title and status
+      let userPrompt: string;
+      if (conversationHistory) {
+        userPrompt = `Recent conversation:\n${conversationHistory}\n\n---\nNew message:\n${message}`;
+      } else {
+        userPrompt = message;
+      }
+
+      // Debug reaction: 🧠 = thinking about this
+      const lastMsg = batch.messages[batch.messages.length - 1];
+      const isRealSlackMessage = !lastMsg.ts.startsWith('crawl-');
+      if (isRealSlackMessage) {
+        try {
+          await handler.getReactions().add(lastMsg.channel, lastMsg.ts, 'brain');
+        } catch { /* non-critical */ }
+      }
+
+      // Set active task for interrupt routing
+      handler.setActiveTask(message.slice(0, 100), batch.channel, batch.threadTs);
+
       if (isAssistantMode) {
         try {
           const title = message.slice(0, 60) + (message.length > 60 ? '...' : '');
@@ -203,23 +320,9 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
           await assistantAPI.setStatus('Working on it...');
         } catch { /* non-critical */ }
       }
-      // No immediate ACK for normal messages — delayed indicator kicks in after 60s
 
-      // Create interrupt state (shared between hook and this orchestrator)
       const interruptState: InterruptState = { type: null };
 
-      // Create hooks with current handler state
-      const preToolUseHook = createPreToolUseHook(
-        handler,
-        db,
-        classifierCall,
-        interruptState,
-        config.ownerSlackUserId,
-      );
-
-      const postToolUseHook = createPostToolUseHook(db);
-
-      // Abort controller with timeout to prevent indefinite hangs
       const abortController = new AbortController();
       const timeout = setTimeout(() => {
         logger.warn('Agent query timed out after 120s — aborting');
@@ -227,71 +330,112 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
       }, 120_000);
 
       try {
+        // ── Agent loop: messages.create → tool calls → repeat ──
+        const messages: Anthropic.MessageParam[] = [
+          { role: 'user', content: userPrompt },
+        ];
 
-        // Run the Agent SDK query
-        const agentQuery = query({
-          prompt: message,
-          options: {
-            model: config.models.executor,
-            systemPrompt: SYSTEM_PROMPT,
-            mcpServers: {
-              slack: slackMcp,
-            },
-            permissionMode: 'bypassPermissions',
-            allowDangerouslySkipPermissions: true,
-            maxTurns: 20,
-            abortController,
-            hooks: {
-              PreToolUse: [{
-                hooks: [preToolUseHook as unknown as HookCallback],
-              }],
-              PostToolUse: [{
-                hooks: [postToolUseHook as unknown as HookCallback],
-              }],
-            },
-          },
-        });
-
-        // Iterate the async generator to completion, collecting the final response
         let finalResponse = '';
-        for await (const sdkMessage of agentQuery) {
-          // Log every message type for debugging
-          const msg = sdkMessage as Record<string, unknown>;
-          logger.debug({ type: msg.type, subtype: msg.subtype }, 'SDK message received');
 
-          if (msg.type === 'result') {
-            // SDKResultMessage — final answer is in msg.result (string)
-            if (msg.subtype === 'success' && typeof msg.result === 'string') {
-              finalResponse = msg.result;
-            } else if (msg.subtype === 'error') {
-              logger.error({ error: msg.error }, 'Agent SDK returned error result');
-              finalResponse = `Sorry, I hit an error: ${msg.error ?? 'unknown'}`;
-            }
-          } else if (msg.type === 'assistant') {
-            // SDKAssistantMessage — intermediate responses in msg.message (BetaMessage)
-            // Extract text blocks from the BetaMessage content array as a fallback
-            const betaMsg = msg.message as Record<string, unknown> | undefined;
-            if (betaMsg && Array.isArray(betaMsg.content)) {
-              const textBlocks = (betaMsg.content as Array<Record<string, unknown>>)
-                .filter(b => b.type === 'text')
-                .map(b => b.text as string);
-              if (textBlocks.length > 0) {
-                finalResponse = textBlocks.join('\n');
-              }
-            }
+        for (let turn = 0; turn < MAX_TURNS; turn++) {
+          if (abortController.signal.aborted) break;
+
+          const response = await anthropicClient.messages.create({
+            model: config.models.executor,
+            max_tokens: 4096,
+            system: SYSTEM_PROMPT,
+            tools: toolDefs,
+            messages,
+          });
+
+          // Extract text and tool_use blocks
+          const textBlocks = response.content
+            .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+            .map(b => b.text);
+          const toolUseBlocks = response.content
+            .filter((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use');
+
+          if (textBlocks.length > 0) {
+            finalResponse = textBlocks.join('\n');
           }
+
+          // If no tool calls, we're done
+          if (toolUseBlocks.length === 0 || response.stop_reason === 'end_turn') {
+            break;
+          }
+
+          // ── Process tool calls ──
+          const toolResults: Anthropic.ToolResultBlockParam[] = [];
+
+          for (const toolUse of toolUseBlocks) {
+            // Check for interrupts at this checkpoint
+            const shouldStop = await checkInterrupt(handler, interruptState, classifierCall);
+            if (shouldStop) break;
+
+            const toolHandler = toolHandlers.get(toolUse.name);
+            if (!toolHandler) {
+              toolResults.push({
+                type: 'tool_result',
+                tool_use_id: toolUse.id,
+                content: `Unknown tool: ${toolUse.name}`,
+                is_error: true,
+              });
+              continue;
+            }
+
+            const toolInput = (toolUse.input ?? {}) as Record<string, unknown>;
+
+            // Pre-tool security checks
+            if (!runPreToolChecks(toolUse.name, toolInput, config.ownerSlackUserId)) {
+              toolResults.push({
+                type: 'tool_result',
+                tool_use_id: toolUse.id,
+                content: 'Tool call blocked by security policy.',
+                is_error: true,
+              });
+              continue;
+            }
+
+            // Execute the tool
+            logger.info({ tool: toolUse.name }, 'Executing tool');
+            const startTime = Date.now();
+            const result = await toolHandler(toolInput);
+            const elapsed = Date.now() - startTime;
+            logger.info({ tool: toolUse.name, elapsed, isError: result.isError }, 'Tool execution complete');
+
+            // Post-tool audit
+            const sanitizedContent = runPostToolChecks(
+              toolUse.name, toolInput, result.content, !!result.isError,
+            );
+
+            toolResults.push({
+              type: 'tool_result',
+              tool_use_id: toolUse.id,
+              content: sanitizedContent,
+              is_error: result.isError,
+            });
+          }
+
+          // If interrupted, stop the loop
+          if (interruptState.type === 'cancel' || interruptState.type === 'redirect') {
+            break;
+          }
+
+          // Add assistant message + tool results to conversation
+          messages.push({ role: 'assistant', content: response.content });
+          messages.push({ role: 'user', content: toolResults });
         }
 
-        const messages = handler.getMessages();
-        const ackTs = handler.getAckTs(); // Only set if slow-task timer fired
+        // ── Handle interrupts ──
+        const slackMessages = handler.getMessages();
+        const ackTs = handler.getAckTs();
 
-        // Check if we were interrupted
         if (interruptState.type === 'cancel') {
           logger.info('Task cancelled by owner interrupt');
           if (isAssistantMode) {
-            try { await assistantAPI.say('✅ Cancelled.'); } catch { /* non-critical */ }
+            try { await assistantAPI.say('Cancelled.'); } catch { /* */ }
           } else if (ackTs) {
-            try { await messages.update(batch.channel, ackTs, '✅ Cancelled.'); } catch { /* non-critical */ }
+            try { await slackMessages.update(batch.channel, ackTs, 'Cancelled.'); } catch { /* */ }
           }
           return;
         }
@@ -299,11 +443,10 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
         if (interruptState.type === 'redirect' && interruptState.newMessage) {
           logger.info({ newMessage: interruptState.newMessage.slice(0, 80) }, 'Task redirected');
           if (isAssistantMode) {
-            try { await assistantAPI.say('↪️ Redirecting...'); } catch { /* non-critical */ }
+            try { await assistantAPI.say('Redirecting...'); } catch { /* */ }
           } else if (ackTs) {
-            try { await messages.update(batch.channel, ackTs, '↪️ Redirecting...'); } catch { /* non-critical */ }
+            try { await slackMessages.update(batch.channel, ackTs, 'Redirecting...'); } catch { /* */ }
           }
-          // Re-enqueue the redirect message for processing
           handler.getQueue().enqueue({
             text: interruptState.newMessage,
             channel: batch.channel,
@@ -320,11 +463,7 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
             if (isAssistantMode) {
               await assistantAPI.say(interruptState.clarificationMessage);
             } else {
-              await messages.post(
-                batch.channel,
-                interruptState.clarificationMessage,
-                batch.threadTs,
-              );
+              await slackMessages.post(batch.channel, interruptState.clarificationMessage, batch.threadTs);
             }
           } catch (error) {
             logger.error({ error }, 'Failed to post clarification message');
@@ -332,52 +471,53 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
           return;
         }
 
-        // Post the final response
-        if (finalResponse) {
-          logger.info({ responseLength: finalResponse.length }, 'Posting agent response');
-          try {
-            if (isAssistantMode) {
-              await assistantAPI.say(finalResponse);
-            } else if (ackTs) {
-              // Update the slow-task indicator with the actual response
-              await messages.update(batch.channel, ackTs, finalResponse);
-            } else {
-              // Normal case: just post the response directly
-              await messages.post(batch.channel, finalResponse, batch.threadTs);
+        // ── Post response (or stay silent) ──
+        if (finalResponse && !finalResponse.trim().includes(NO_RESPONSE)) {
+          const cleanResponse = finalResponse.replace(/\[NO_RESPONSE\]/g, '').trim();
+          if (cleanResponse) {
+            logger.info({ responseLength: cleanResponse.length }, 'Posting agent response');
+            try {
+              if (isAssistantMode) {
+                await assistantAPI.say(cleanResponse);
+              } else if (ackTs) {
+                await slackMessages.update(batch.channel, ackTs, cleanResponse);
+              } else {
+                await slackMessages.post(batch.channel, cleanResponse, batch.threadTs);
+              }
+            } catch (error) {
+              logger.error({ error }, 'Failed to post response to Slack');
             }
-          } catch (error) {
-            logger.error({ error }, 'Failed to post response to Slack');
           }
         } else {
-          logger.debug('Agent query completed with no response text — staying quiet');
+          logger.info({ channel: batch.channel }, 'Agent decided not to respond — staying silent');
         }
 
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
         logger.error({ error: errorMsg }, 'Agent query failed');
-
         try {
           const errorText = `Sorry, I hit an error: ${errorMsg}`;
           if (isAssistantMode) {
             await assistantAPI.say(errorText);
           } else {
-            const messages = handler.getMessages();
+            const slackMessages = handler.getMessages();
             const ackTs = handler.getAckTs();
             if (ackTs) {
-              await messages.update(batch.channel, ackTs, errorText);
+              await slackMessages.update(batch.channel, ackTs, errorText);
             } else {
-              await messages.post(batch.channel, errorText, batch.threadTs);
+              await slackMessages.post(batch.channel, errorText, batch.threadTs);
             }
           }
         } catch { /* non-critical */ }
       } finally {
         clearTimeout(timeout);
         handler.clearActiveTask();
-        // Remove debug 🧠 reaction
-        try {
-          await handler.getReactions().remove(lastMsg.channel, lastMsg.ts, 'brain');
-        } catch { /* non-critical */ }
-        logger.info({ channel: batch.channel }, 'Agent processBatch complete — activeTask cleared');
+        if (isRealSlackMessage) {
+          try {
+            await handler.getReactions().remove(lastMsg.channel, lastMsg.ts, 'brain');
+          } catch { /* non-critical */ }
+        }
+        logger.info({ channel: batch.channel }, 'processBatch complete');
       }
     },
 
