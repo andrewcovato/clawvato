@@ -380,7 +380,7 @@ export function createGoogleTools(
             const date = headers.find(h => h.name === 'Date')?.value ?? '';
             const snippet = detail.data.snippet ?? '';
 
-            summaries.push(`- **${subject}** | From: ${from} | ${date}\n  ${snippet.slice(0, 150)}`);
+            summaries.push(`- **${subject}** | From: ${from} | ${date} | ID: ${msg.id}\n  ${snippet.slice(0, 150)}`);
           }
 
           return {
@@ -493,6 +493,300 @@ export function createGoogleTools(
         } catch (error) {
           const msg = error instanceof Error ? error.message : String(error);
           return { content: `Gmail error: ${msg}`, isError: true };
+        }
+      },
+    },
+
+    // ── Calendar: RSVP to Event ──
+    {
+      definition: {
+        name: 'google_calendar_rsvp',
+        description: 'Respond to a calendar invite — accept, decline, or tentative.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            event_id: { type: 'string', description: 'Google Calendar event ID' },
+            response: { type: 'string', enum: ['accepted', 'declined', 'tentative'], description: 'Your response' },
+          },
+          required: ['event_id', 'response'],
+        },
+      },
+      handler: async (args) => {
+        const eventId = args.event_id as string;
+        const response = args.response as string;
+
+        try {
+          // Get event to find our attendee entry
+          const event = await calendar.events.get({ calendarId: 'primary', eventId });
+          const attendees = event.data.attendees ?? [];
+
+          // Find self in attendees and update response
+          const selfAttendee = attendees.find(a => a.self);
+          if (selfAttendee) {
+            selfAttendee.responseStatus = response;
+          } else {
+            // We're the organizer or not in attendees — still update
+            attendees.push({ self: true, responseStatus: response });
+          }
+
+          await calendar.events.patch({
+            calendarId: 'primary',
+            eventId,
+            requestBody: { attendees },
+          });
+
+          return {
+            content: `RSVP'd "${response}" to "${event.data.summary ?? 'event'}"`,
+          };
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          return { content: `Failed to RSVP: ${msg}`, isError: true };
+        }
+      },
+    },
+
+    // ── Calendar: Check Free/Busy for Others ──
+    {
+      definition: {
+        name: 'google_calendar_freebusy',
+        description:
+          'Check free/busy status for one or more people. Useful for finding mutual availability.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            emails: { type: 'array', items: { type: 'string' }, description: 'Email addresses to check' },
+            days_ahead: { type: 'number', description: 'Days to look ahead (default 3, max 14)' },
+          },
+          required: ['emails'],
+        },
+      },
+      handler: async (args) => {
+        const emails = args.emails as string[];
+        const daysAhead = Math.min((args.days_ahead as number) ?? 3, 14);
+
+        try {
+          const now = new Date();
+          const future = new Date(now.getTime() + daysAhead * 24 * 60 * 60 * 1000);
+
+          const result = await calendar.freebusy.query({
+            requestBody: {
+              timeMin: now.toISOString(),
+              timeMax: future.toISOString(),
+              items: emails.map(id => ({ id })),
+            },
+          });
+
+          const calendars = result.data.calendars ?? {};
+          const lines: string[] = [];
+
+          for (const [email, cal] of Object.entries(calendars)) {
+            const busy = (cal as any).busy ?? [];
+            if (busy.length === 0) {
+              lines.push(`${email}: Free for the next ${daysAhead} days`);
+            } else {
+              const blocks = busy.map((b: any) =>
+                `  - Busy: ${new Date(b.start).toLocaleString()} → ${new Date(b.end).toLocaleString()}`
+              ).join('\n');
+              lines.push(`${email}:\n${blocks}`);
+            }
+          }
+
+          return { content: `Free/busy for next ${daysAhead} days:\n\n${lines.join('\n\n')}` };
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          return { content: `Free/busy check failed: ${msg}`, isError: true };
+        }
+      },
+    },
+
+    // ── Calendar: Get Event Details ──
+    {
+      definition: {
+        name: 'google_calendar_get_event',
+        description: 'Get full details of a specific calendar event by ID.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            event_id: { type: 'string', description: 'Google Calendar event ID' },
+          },
+          required: ['event_id'],
+        },
+      },
+      handler: async (args) => {
+        const eventId = args.event_id as string;
+
+        try {
+          const result = await calendar.events.get({ calendarId: 'primary', eventId });
+          const e = result.data;
+          const attendees = (e.attendees ?? []).map(a =>
+            `${a.email} (${a.responseStatus ?? 'unknown'}${a.organizer ? ', organizer' : ''})`
+          ).join(', ');
+
+          const lines = [
+            `Title: ${e.summary ?? 'Untitled'}`,
+            `Start: ${e.start?.dateTime ?? e.start?.date ?? 'unknown'}`,
+            `End: ${e.end?.dateTime ?? e.end?.date ?? 'unknown'}`,
+            e.location ? `Location: ${e.location}` : null,
+            e.description ? `Description: ${e.description}` : null,
+            attendees ? `Attendees: ${attendees}` : null,
+            `Status: ${e.status}`,
+            e.hangoutLink ? `Meet link: ${e.hangoutLink}` : null,
+            `ID: ${e.id}`,
+          ].filter(Boolean);
+
+          return { content: lines.join('\n') };
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          return { content: `Failed to get event: ${msg}`, isError: true };
+        }
+      },
+    },
+
+    // ── Gmail: Send Draft ──
+    {
+      definition: {
+        name: 'google_gmail_send_draft',
+        description:
+          'Send a previously created draft email. Use google_gmail_draft first to create it, ' +
+          'confirm with the owner, then send with this tool.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            draft_id: { type: 'string', description: 'Draft ID (from google_gmail_draft result)' },
+          },
+          required: ['draft_id'],
+        },
+      },
+      handler: async (args) => {
+        const draftId = args.draft_id as string;
+
+        try {
+          const result = await gmail.users.drafts.send({
+            userId: 'me',
+            requestBody: { id: draftId },
+          });
+
+          return {
+            content: `Email sent (Message ID: ${result.data.id}). Draft has been removed.`,
+          };
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          return { content: `Failed to send draft: ${msg}`, isError: true };
+        }
+      },
+    },
+
+    // ── Gmail: Reply ──
+    {
+      definition: {
+        name: 'google_gmail_reply',
+        description:
+          'Reply to an email thread. Creates a draft reply — confirm with owner before sending.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            message_id: { type: 'string', description: 'Message ID to reply to' },
+            body: { type: 'string', description: 'Reply body text' },
+            reply_all: { type: 'boolean', description: 'Reply to all recipients (default: false)' },
+          },
+          required: ['message_id', 'body'],
+        },
+      },
+      handler: async (args) => {
+        const messageId = args.message_id as string;
+        const body = args.body as string;
+        const replyAll = (args.reply_all as boolean) ?? false;
+
+        try {
+          // Get original message for headers
+          const original = await gmail.users.messages.get({
+            userId: 'me',
+            id: messageId,
+            format: 'metadata',
+            metadataHeaders: ['From', 'To', 'Cc', 'Subject', 'Message-ID'],
+          });
+
+          const headers = original.data.payload?.headers ?? [];
+          const from = headers.find(h => h.name === 'From')?.value ?? '';
+          const to = headers.find(h => h.name === 'To')?.value ?? '';
+          const cc = headers.find(h => h.name === 'Cc')?.value;
+          const subject = headers.find(h => h.name === 'Subject')?.value ?? '';
+          const messageIdHeader = headers.find(h => h.name === 'Message-ID')?.value ?? '';
+          const threadId = original.data.threadId;
+
+          const replyTo = replyAll ? `${from}, ${to}` : from;
+          const replyCc = replyAll && cc ? cc : undefined;
+          const replySubject = subject.startsWith('Re:') ? subject : `Re: ${subject}`;
+
+          const rawHeaders = [
+            `To: ${replyTo}`,
+            `Subject: ${replySubject}`,
+            replyCc ? `Cc: ${replyCc}` : null,
+            `In-Reply-To: ${messageIdHeader}`,
+            `References: ${messageIdHeader}`,
+            'Content-Type: text/plain; charset=utf-8',
+            '',
+            body,
+          ].filter(Boolean).join('\r\n');
+
+          const encoded = Buffer.from(rawHeaders).toString('base64url');
+
+          const result = await gmail.users.drafts.create({
+            userId: 'me',
+            requestBody: {
+              message: { raw: encoded, threadId: threadId ?? undefined },
+            },
+          });
+
+          return {
+            content: `Reply draft created to ${from} | Subject: "${replySubject}" (Draft ID: ${result.data.id}). Review and send with google_gmail_send_draft.`,
+          };
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          return { content: `Failed to create reply: ${msg}`, isError: true };
+        }
+      },
+    },
+
+    // ── Gmail: Manage Labels ──
+    {
+      definition: {
+        name: 'google_gmail_label',
+        description:
+          'Add or remove labels on an email. Common labels: STARRED, IMPORTANT, INBOX, TRASH, SPAM, UNREAD.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            message_id: { type: 'string', description: 'Gmail message ID' },
+            add_labels: { type: 'array', items: { type: 'string' }, description: 'Labels to add (e.g. ["STARRED", "IMPORTANT"])' },
+            remove_labels: { type: 'array', items: { type: 'string' }, description: 'Labels to remove (e.g. ["UNREAD", "INBOX"] to archive+mark read)' },
+          },
+          required: ['message_id'],
+        },
+      },
+      handler: async (args) => {
+        const messageId = args.message_id as string;
+        const addLabels = (args.add_labels as string[]) ?? [];
+        const removeLabels = (args.remove_labels as string[]) ?? [];
+
+        try {
+          await gmail.users.messages.modify({
+            userId: 'me',
+            id: messageId,
+            requestBody: {
+              addLabelIds: addLabels,
+              removeLabelIds: removeLabels,
+            },
+          });
+
+          const actions: string[] = [];
+          if (addLabels.length) actions.push(`Added: ${addLabels.join(', ')}`);
+          if (removeLabels.length) actions.push(`Removed: ${removeLabels.join(', ')}`);
+
+          return { content: `Labels updated on message ${messageId}. ${actions.join('. ')}` };
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          return { content: `Failed to update labels: ${msg}`, isError: true };
         }
       },
     },

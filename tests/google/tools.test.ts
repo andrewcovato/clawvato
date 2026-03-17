@@ -13,6 +13,12 @@ vi.mock('googleapis', () => {
     events: {
       list: vi.fn(),
       insert: vi.fn(),
+      delete: vi.fn(),
+      get: vi.fn(),
+      patch: vi.fn(),
+    },
+    freebusy: {
+      query: vi.fn(),
     },
   };
   const mockGmail = {
@@ -20,9 +26,11 @@ vi.mock('googleapis', () => {
       messages: {
         list: vi.fn(),
         get: vi.fn(),
+        modify: vi.fn(),
       },
       drafts: {
         create: vi.fn(),
+        send: vi.fn(),
       },
     },
   };
@@ -64,17 +72,26 @@ describe('Google Workspace Tools', () => {
   }
 
   describe('tool registration', () => {
-    it('registers all 10 Google tools', () => {
-      expect(tools).toHaveLength(10);
+    it('registers all 16 Google tools', () => {
+      expect(tools).toHaveLength(16);
       const names = tools.map(t => t.definition.name);
+      // Calendar (8)
       expect(names).toContain('google_calendar_list_events');
       expect(names).toContain('google_calendar_create_event');
       expect(names).toContain('google_calendar_delete_event');
       expect(names).toContain('google_calendar_update_event');
       expect(names).toContain('google_calendar_find_free');
+      expect(names).toContain('google_calendar_rsvp');
+      expect(names).toContain('google_calendar_freebusy');
+      expect(names).toContain('google_calendar_get_event');
+      // Gmail (6)
       expect(names).toContain('google_gmail_search');
       expect(names).toContain('google_gmail_read');
       expect(names).toContain('google_gmail_draft');
+      expect(names).toContain('google_gmail_send_draft');
+      expect(names).toContain('google_gmail_reply');
+      expect(names).toContain('google_gmail_label');
+      // Drive (2) — but also add share later
       expect(names).toContain('google_drive_search');
       expect(names).toContain('google_drive_get_file');
     });
@@ -301,6 +318,125 @@ describe('Google Workspace Tools', () => {
       expect(result.content).toContain('Project Plan');
       expect(result.content).toContain('Andrew Covato');
       expect(result.content).toContain('sarah@acme.com');
+    });
+  });
+
+  describe('google_calendar_rsvp', () => {
+    it('RSVPs to an event', async () => {
+      mocks.calendar.events.get.mockResolvedValue({
+        data: { summary: 'Team Standup', attendees: [{ email: 'me@acme.com', self: true, responseStatus: 'needsAction' }] },
+      });
+      mocks.calendar.events.patch.mockResolvedValue({ data: {} });
+
+      const tool = findTool('google_calendar_rsvp');
+      const result = await tool.handler({ event_id: 'evt_1', response: 'accepted' });
+
+      expect(result.content).toContain('accepted');
+      expect(result.content).toContain('Team Standup');
+    });
+  });
+
+  describe('google_calendar_freebusy', () => {
+    it('returns free/busy info for multiple people', async () => {
+      mocks.calendar.freebusy.query.mockResolvedValue({
+        data: {
+          calendars: {
+            'sarah@acme.com': { busy: [{ start: '2026-03-18T09:00:00Z', end: '2026-03-18T10:00:00Z' }] },
+            'jake@acme.com': { busy: [] },
+          },
+        },
+      });
+
+      const tool = findTool('google_calendar_freebusy');
+      const result = await tool.handler({ emails: ['sarah@acme.com', 'jake@acme.com'] });
+
+      expect(result.content).toContain('sarah@acme.com');
+      expect(result.content).toContain('Busy');
+      expect(result.content).toContain('jake@acme.com');
+      expect(result.content).toContain('Free');
+    });
+  });
+
+  describe('google_calendar_get_event', () => {
+    it('returns full event details', async () => {
+      mocks.calendar.events.get.mockResolvedValue({
+        data: {
+          summary: 'Strategy Meeting',
+          start: { dateTime: '2026-03-18T14:00:00Z' },
+          end: { dateTime: '2026-03-18T15:00:00Z' },
+          location: 'Conference Room B',
+          attendees: [{ email: 'sarah@acme.com', responseStatus: 'accepted' }],
+          status: 'confirmed',
+          id: 'evt_123',
+        },
+      });
+
+      const tool = findTool('google_calendar_get_event');
+      const result = await tool.handler({ event_id: 'evt_123' });
+
+      expect(result.content).toContain('Strategy Meeting');
+      expect(result.content).toContain('Conference Room B');
+      expect(result.content).toContain('sarah@acme.com');
+      expect(result.content).toContain('accepted');
+    });
+  });
+
+  describe('google_gmail_send_draft', () => {
+    it('sends a draft', async () => {
+      mocks.gmail.users.drafts.send.mockResolvedValue({
+        data: { id: 'sent_msg_1' },
+      });
+
+      const tool = findTool('google_gmail_send_draft');
+      const result = await tool.handler({ draft_id: 'draft_123' });
+
+      expect(result.content).toContain('Email sent');
+      expect(result.content).toContain('sent_msg_1');
+    });
+  });
+
+  describe('google_gmail_reply', () => {
+    it('creates a reply draft', async () => {
+      mocks.gmail.users.messages.get.mockResolvedValue({
+        data: {
+          threadId: 'thread_1',
+          payload: {
+            headers: [
+              { name: 'From', value: 'sarah@acme.com' },
+              { name: 'To', value: 'me@acme.com' },
+              { name: 'Subject', value: 'Budget Review' },
+              { name: 'Message-ID', value: '<msg123@acme.com>' },
+            ],
+          },
+        },
+      });
+      mocks.gmail.users.drafts.create.mockResolvedValue({
+        data: { id: 'draft_reply_1' },
+      });
+
+      const tool = findTool('google_gmail_reply');
+      const result = await tool.handler({ message_id: 'msg_1', body: 'Thanks, looks good!' });
+
+      expect(result.content).toContain('Reply draft created');
+      expect(result.content).toContain('sarah@acme.com');
+      expect(result.content).toContain('draft_reply_1');
+    });
+  });
+
+  describe('google_gmail_label', () => {
+    it('adds and removes labels', async () => {
+      mocks.gmail.users.messages.modify.mockResolvedValue({ data: {} });
+
+      const tool = findTool('google_gmail_label');
+      const result = await tool.handler({
+        message_id: 'msg_1',
+        add_labels: ['STARRED'],
+        remove_labels: ['UNREAD'],
+      });
+
+      expect(result.content).toContain('Labels updated');
+      expect(result.content).toContain('STARRED');
+      expect(result.content).toContain('UNREAD');
     });
   });
 });
