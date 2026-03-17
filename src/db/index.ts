@@ -4,6 +4,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getConfig } from '../config.js';
 import { logger } from '../logger.js';
+import * as sqliteVec from 'sqlite-vec';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -24,7 +25,15 @@ export function initDb(): DatabaseSync {
 
   logger.info({ dbPath }, 'Initializing SQLite database');
 
-  db = new DatabaseSync(dbPath);
+  db = new DatabaseSync(dbPath, { allowExtension: true });
+
+  // Load sqlite-vec extension for vector search
+  try {
+    sqliteVec.load(db);
+    logger.info('sqlite-vec extension loaded');
+  } catch (err) {
+    logger.warn({ error: err }, 'sqlite-vec extension not available — vector search disabled');
+  }
 
   // Enable WAL mode for better concurrent read/write performance
   db.exec('PRAGMA journal_mode = WAL');
@@ -47,6 +56,19 @@ export function initDb(): DatabaseSync {
     if (!msg.includes('already exists')) {
       throw err;
     }
+  }
+
+  // Create vector table (requires sqlite-vec extension)
+  try {
+    db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec USING vec0(
+        memory_id TEXT PRIMARY KEY,
+        embedding float[384]
+      )
+    `);
+  } catch {
+    // sqlite-vec not available — skip vector table
+    logger.debug('memories_vec table not created — sqlite-vec not loaded');
   }
 
   logger.info('Database schema initialized');

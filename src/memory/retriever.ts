@@ -18,9 +18,12 @@ import {
   searchMemories,
   findMemoriesByEntity,
   touchMemory,
+  vectorSearch,
+  hasVectorSupport,
   type Memory,
   type Person,
 } from './store.js';
+import { embed } from './embeddings.js';
 
 /** Maximum tokens to inject as memory context */
 const DEFAULT_TOKEN_BUDGET = 1500;
@@ -127,12 +130,13 @@ const STOPWORDS = new Set([
  *
  * Returns formatted context string and metadata about what was retrieved.
  * Respects the token budget — stops adding context when budget is exceeded.
+ * Uses hybrid search (FTS5 + vector) when sqlite-vec is available.
  */
-export function retrieveContext(
+export async function retrieveContext(
   db: DatabaseSync,
   message: string,
   opts?: { tokenBudget?: number },
-): RetrievalResult {
+): Promise<RetrievalResult> {
   const budget = opts?.tokenBudget ?? DEFAULT_TOKEN_BUDGET;
   const parts: string[] = [];
   let tokensUsed = 0;
@@ -193,11 +197,23 @@ export function retrieveContext(
     }
   }
 
-  // ── 4. Keyword search for relevant facts/decisions ──
+  // ── 4. Semantic + keyword search for relevant facts/decisions ──
   if (tokensUsed < budget && keywords.length > 0) {
-    // Take top keywords for FTS5 query
     const ftsQuery = keywords.slice(0, 5).join(' OR ');
-    const searchResults = searchMemories(db, ftsQuery, { limit: 10 });
+    let searchResults: Memory[];
+
+    // Use hybrid search (vector + FTS5) when available, else FTS5 only
+    if (hasVectorSupport(db)) {
+      try {
+        const queryEmbedding = await embed(message);
+        searchResults = vectorSearch(db, queryEmbedding, { limit: 10, ftsQuery });
+      } catch {
+        // Embedding failed — fall back to FTS5 only
+        searchResults = searchMemories(db, ftsQuery, { limit: 10 });
+      }
+    } else {
+      searchResults = searchMemories(db, ftsQuery, { limit: 10 });
+    }
 
     for (const mem of searchResults) {
       if (tokensUsed >= budget) break;

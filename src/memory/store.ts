@@ -8,6 +8,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { generateId } from '../db/index.js';
 import { logger } from '../logger.js';
+import { embeddingToBytes } from './embeddings.js';
 
 // ── Memory types ──
 
@@ -329,4 +330,153 @@ export function getAllPeople(db: DatabaseSync, opts?: { limit?: number }): Perso
   return db.prepare(
     'SELECT * FROM people ORDER BY interaction_count DESC, last_interaction_at DESC LIMIT ?'
   ).all(limit) as unknown as Person[];
+}
+
+// ── Vector operations ──
+
+/**
+ * Check if the memories_vec table exists (sqlite-vec loaded).
+ */
+export function hasVectorSupport(db: DatabaseSync): boolean {
+  try {
+    db.prepare('SELECT count(*) as c FROM memories_vec').get();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Store an embedding for a memory in the vector index.
+ */
+export function insertEmbedding(db: DatabaseSync, memoryId: string, embedding: Float32Array): void {
+  try {
+    db.prepare(
+      'INSERT INTO memories_vec (memory_id, embedding) VALUES (?, ?)'
+    ).run(memoryId, embeddingToBytes(embedding));
+  } catch (error) {
+    logger.debug({ error, memoryId }, 'Failed to insert embedding — vector search may not be available');
+  }
+}
+
+/**
+ * Remove an embedding from the vector index.
+ */
+export function deleteEmbedding(db: DatabaseSync, memoryId: string): void {
+  try {
+    db.prepare('DELETE FROM memories_vec WHERE memory_id = ?').run(memoryId);
+  } catch {
+    // Non-critical — vec table may not exist
+  }
+}
+
+/**
+ * Semantic search: find memories similar to a query embedding.
+ * Returns memories joined with their similarity distance, ordered by relevance.
+ * Uses Reciprocal Rank Fusion with FTS5 results when ftsQuery is provided.
+ */
+export function vectorSearch(
+  db: DatabaseSync,
+  queryEmbedding: Float32Array,
+  opts?: { limit?: number; ftsQuery?: string },
+): Memory[] {
+  const limit = opts?.limit ?? 10;
+
+  if (opts?.ftsQuery) {
+    // Hybrid search: RRF of vector + FTS5
+    return hybridSearch(db, queryEmbedding, opts.ftsQuery, limit);
+  }
+
+  // Pure vector search
+  try {
+    const rows = db.prepare(`
+      SELECT m.*
+      FROM memories m
+      JOIN memories_vec v ON m.id = v.memory_id
+      WHERE v.embedding MATCH ?
+        AND k = ?
+        AND m.valid_until IS NULL
+      ORDER BY v.distance
+    `).all(embeddingToBytes(queryEmbedding), limit);
+    return rows as unknown as Memory[];
+  } catch (error) {
+    logger.debug({ error }, 'Vector search failed');
+    return [];
+  }
+}
+
+/**
+ * Hybrid search using Reciprocal Rank Fusion (RRF).
+ * Combines FTS5 keyword rankings with vector similarity rankings.
+ * RRF score = 1/(k+rank_fts) + 1/(k+rank_vec), where k=60 is standard.
+ */
+function hybridSearch(
+  db: DatabaseSync,
+  queryEmbedding: Float32Array,
+  ftsQuery: string,
+  limit: number,
+): Memory[] {
+  const K = 60; // RRF constant
+
+  // Get FTS5 results
+  let ftsIds: string[];
+  try {
+    const ftsRows = db.prepare(`
+      SELECT m.id
+      FROM memories m
+      JOIN memories_fts f ON m.rowid = f.rowid
+      WHERE memories_fts MATCH ? AND m.valid_until IS NULL
+      ORDER BY f.rank
+      LIMIT 30
+    `).all(ftsQuery) as unknown as { id: string }[];
+    ftsIds = ftsRows.map(r => r.id);
+  } catch {
+    ftsIds = [];
+  }
+
+  // Get vector results
+  let vecIds: string[];
+  try {
+    const vecRows = db.prepare(`
+      SELECT v.memory_id as id
+      FROM memories_vec v
+      JOIN memories m ON m.id = v.memory_id
+      WHERE v.embedding MATCH ?
+        AND k = 30
+        AND m.valid_until IS NULL
+      ORDER BY v.distance
+    `).all(embeddingToBytes(queryEmbedding)) as unknown as { id: string }[];
+    vecIds = vecRows.map(r => r.id);
+  } catch {
+    vecIds = [];
+  }
+
+  // Compute RRF scores
+  const scores = new Map<string, number>();
+
+  ftsIds.forEach((id, rank) => {
+    scores.set(id, (scores.get(id) ?? 0) + 1 / (K + rank + 1));
+  });
+
+  vecIds.forEach((id, rank) => {
+    scores.set(id, (scores.get(id) ?? 0) + 1 / (K + rank + 1));
+  });
+
+  // Sort by RRF score and fetch full memories
+  const rankedIds = [...scores.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([id]) => id);
+
+  if (rankedIds.length === 0) return [];
+
+  // Fetch full memory records
+  const placeholders = rankedIds.map(() => '?').join(',');
+  const memories = db.prepare(
+    `SELECT * FROM memories WHERE id IN (${placeholders}) AND valid_until IS NULL`
+  ).all(...rankedIds) as unknown as Memory[];
+
+  // Restore RRF order
+  const memoryMap = new Map(memories.map(m => [m.id, m]));
+  return rankedIds.map(id => memoryMap.get(id)).filter((m): m is Memory => !!m);
 }

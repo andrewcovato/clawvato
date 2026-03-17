@@ -19,9 +19,13 @@ import {
   supersedeMemory,
   findOrCreatePerson,
   touchPerson,
+  insertEmbedding,
+  deleteEmbedding,
+  hasVectorSupport,
   type MemoryType,
   type NewMemory,
 } from './store.js';
+import { embedBatch } from './embeddings.js';
 
 /** A fact extracted by Haiku */
 export interface ExtractedFact {
@@ -136,15 +140,17 @@ export async function extractFacts(
  * Store extracted facts and people into the database.
  * Handles deduplication — if a near-duplicate exists, supersedes the old one
  * if the new fact has higher confidence.
+ * Embeds facts for vector search if sqlite-vec is available.
  */
-export function storeExtractionResult(
+export async function storeExtractionResult(
   db: DatabaseSync,
   result: ExtractionResult,
   source: string,
-): { memoriesStored: number; peopleStored: number; duplicatesSkipped: number } {
+): Promise<{ memoriesStored: number; peopleStored: number; duplicatesSkipped: number }> {
   let memoriesStored = 0;
   let duplicatesSkipped = 0;
   let peopleStored = 0;
+  const newMemoryIds: { id: string; content: string }[] = [];
 
   // Store facts
   for (const fact of result.facts) {
@@ -166,6 +172,8 @@ export function storeExtractionResult(
         };
         const newId = insertMemory(db, newMemory);
         supersedeMemory(db, closeMatch.id, newId);
+        deleteEmbedding(db, closeMatch.id);
+        newMemoryIds.push({ id: newId, content: fact.content });
         memoriesStored++;
         logger.debug(
           { oldId: closeMatch.id, newId, type: fact.type },
@@ -184,7 +192,8 @@ export function storeExtractionResult(
         confidence: fact.confidence,
         entities: fact.entities,
       };
-      insertMemory(db, newMemory);
+      const newId = insertMemory(db, newMemory);
+      newMemoryIds.push({ id: newId, content: fact.content });
       memoriesStored++;
     }
   }
@@ -210,6 +219,20 @@ export function storeExtractionResult(
       if (person) {
         touchPerson(db, person.id);
       }
+    }
+  }
+
+  // Embed new memories for vector search (if sqlite-vec is available)
+  if (newMemoryIds.length > 0 && hasVectorSupport(db)) {
+    try {
+      const texts = newMemoryIds.map(m => m.content);
+      const embeddings = await embedBatch(texts);
+      for (let i = 0; i < newMemoryIds.length; i++) {
+        insertEmbedding(db, newMemoryIds[i].id, embeddings[i]);
+      }
+      logger.debug({ count: newMemoryIds.length }, 'Embeddings stored');
+    } catch (error) {
+      logger.debug({ error }, 'Embedding generation failed — memories stored without vectors');
     }
   }
 

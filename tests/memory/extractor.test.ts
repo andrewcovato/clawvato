@@ -160,7 +160,7 @@ describe('extractFacts', () => {
 });
 
 describe('storeExtractionResult', () => {
-  it('stores facts and people', () => {
+  it('stores facts and people', async () => {
     const result: ExtractionResult = {
       facts: [
         { type: 'fact', content: 'Jake works in finance', confidence: 0.9, importance: 7, entities: ['Jake'] },
@@ -171,7 +171,7 @@ describe('storeExtractionResult', () => {
       ],
     };
 
-    const stored = storeExtractionResult(db, result, 'test');
+    const stored = await storeExtractionResult(db, result, 'test');
 
     expect(stored.memoriesStored).toBe(2);
     expect(stored.peopleStored).toBe(1);
@@ -186,7 +186,7 @@ describe('storeExtractionResult', () => {
     expect(person!.role).toBe('Analyst');
   });
 
-  it('skips duplicates with lower confidence', () => {
+  it('skips duplicates with lower confidence', async () => {
     // Store initial fact
     insertMemory(db, {
       type: 'fact',
@@ -204,13 +204,13 @@ describe('storeExtractionResult', () => {
       people: [],
     };
 
-    const stored = storeExtractionResult(db, result, 'test');
+    const stored = await storeExtractionResult(db, result, 'test');
 
     expect(stored.duplicatesSkipped).toBe(1);
     expect(stored.memoriesStored).toBe(0);
   });
 
-  it('supersedes duplicates with higher confidence', () => {
+  it('supersedes duplicates with higher confidence', async () => {
     // Store initial lower-confidence fact
     const oldId = insertMemory(db, {
       type: 'fact',
@@ -228,7 +228,7 @@ describe('storeExtractionResult', () => {
       people: [],
     };
 
-    const stored = storeExtractionResult(db, result, 'test');
+    const stored = await storeExtractionResult(db, result, 'test');
 
     expect(stored.memoriesStored).toBe(1);
 
@@ -238,7 +238,7 @@ describe('storeExtractionResult', () => {
     expect(old!.superseded_by).not.toBeNull();
   });
 
-  it('enriches existing people', () => {
+  it('enriches existing people', async () => {
     // Create person with minimal info
     findPersonByName(db, 'Jake'); // doesn't exist yet
     storeExtractionResult(db, {

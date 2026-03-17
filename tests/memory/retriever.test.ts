@@ -30,8 +30,8 @@ afterEach(() => {
 });
 
 describe('retrieveContext', () => {
-  it('returns empty context when no memories exist', () => {
-    const result = retrieveContext(db, 'hello world');
+  it('returns empty context when no memories exist', async () => {
+    const result = await retrieveContext(db, 'hello world');
 
     expect(result.context).toBe('');
     expect(result.memoriesRetrieved).toBe(0);
@@ -39,7 +39,7 @@ describe('retrieveContext', () => {
     expect(result.tokensUsed).toBe(0);
   });
 
-  it('retrieves people mentioned in the message', () => {
+  it('retrieves people mentioned in the message', async () => {
     insertPerson(db, {
       name: 'Jake Wilson',
       email: 'jake@corp.com',
@@ -47,7 +47,7 @@ describe('retrieveContext', () => {
       organization: 'Acme',
     });
 
-    const result = retrieveContext(db, 'Can you schedule a meeting with Jake Wilson?');
+    const result = await retrieveContext(db, 'Can you schedule a meeting with Jake Wilson?');
 
     expect(result.peopleRetrieved).toBe(1);
     expect(result.context).toContain('Jake Wilson');
@@ -55,7 +55,7 @@ describe('retrieveContext', () => {
     expect(result.context).toContain('Engineer');
   });
 
-  it('retrieves preferences', () => {
+  it('retrieves preferences', async () => {
     insertMemory(db, {
       type: 'preference',
       content: 'Andrew prefers meetings after 10am',
@@ -64,13 +64,13 @@ describe('retrieveContext', () => {
       confidence: 1.0,
     });
 
-    const result = retrieveContext(db, 'Schedule something for tomorrow');
+    const result = await retrieveContext(db, 'Schedule something for tomorrow');
 
     expect(result.memoriesRetrieved).toBeGreaterThanOrEqual(1);
     expect(result.context).toContain('meetings after 10am');
   });
 
-  it('retrieves memories matching entity names', () => {
+  it('retrieves memories matching entity names', async () => {
     insertMemory(db, {
       type: 'fact',
       content: 'Jake is on the sales team',
@@ -79,12 +79,12 @@ describe('retrieveContext', () => {
       entities: ['Jake'],
     });
 
-    const result = retrieveContext(db, 'What team is Jake on?');
+    const result = await retrieveContext(db, 'What team is Jake on?');
 
     expect(result.context).toContain('sales team');
   });
 
-  it('retrieves facts via keyword search', () => {
+  it('retrieves facts via keyword search', async () => {
     insertMemory(db, {
       type: 'fact',
       content: 'The quarterly budget review happens every Friday',
@@ -92,13 +92,13 @@ describe('retrieveContext', () => {
       importance: 7,
     });
 
-    const result = retrieveContext(db, 'When is the budget review?');
+    const result = await retrieveContext(db, 'When is the budget review?');
 
     expect(result.memoriesRetrieved).toBeGreaterThanOrEqual(1);
     expect(result.context).toContain('budget review');
   });
 
-  it('respects token budget', () => {
+  it('respects token budget', async () => {
     // Insert many memories
     for (let i = 0; i < 20; i++) {
       insertMemory(db, {
@@ -109,7 +109,7 @@ describe('retrieveContext', () => {
       });
     }
 
-    const result = retrieveContext(db, 'What are my preferences?', { tokenBudget: 200 });
+    const result = await retrieveContext(db, 'What are my preferences?', { tokenBudget: 200 });
 
     // Should not exceed budget
     expect(result.tokensUsed).toBeLessThanOrEqual(200);
@@ -119,7 +119,7 @@ describe('retrieveContext', () => {
     expect(result.memoriesRetrieved).toBeLessThan(20);
   });
 
-  it('touches retrieved memories (updates access tracking)', () => {
+  it('touches retrieved memories (updates access tracking)', async () => {
     const id = insertMemory(db, {
       type: 'preference',
       content: 'Andrew prefers short meetings',
@@ -133,7 +133,7 @@ describe('retrieveContext', () => {
     expect(memory!.access_count).toBeGreaterThanOrEqual(1);
   });
 
-  it('includes decisions in context', () => {
+  it('includes decisions in context', async () => {
     insertMemory(db, {
       type: 'decision',
       content: 'Andrew decided to use view-only sharing by default',
@@ -142,12 +142,12 @@ describe('retrieveContext', () => {
       confidence: 1.0,
     });
 
-    const result = retrieveContext(db, 'Share this file with Jake');
+    const result = await retrieveContext(db, 'Share this file with Jake');
 
     expect(result.context).toContain('view-only');
   });
 
-  it('formats context with ## Memory header', () => {
+  it('formats context with ## Memory header', async () => {
     insertMemory(db, {
       type: 'preference',
       content: 'Andrew prefers concise emails',
@@ -155,12 +155,12 @@ describe('retrieveContext', () => {
       importance: 8,
     });
 
-    const result = retrieveContext(db, 'Draft an email');
+    const result = await retrieveContext(db, 'Draft an email');
 
     expect(result.context).toMatch(/^## Memory/);
   });
 
-  it('shows confidence for low-confidence memories', () => {
+  it('shows confidence for low-confidence memories', async () => {
     insertMemory(db, {
       type: 'fact',
       content: 'Jake might be switching teams',
@@ -169,12 +169,12 @@ describe('retrieveContext', () => {
       entities: ['Jake'],
     });
 
-    const result = retrieveContext(db, 'What is Jake doing?');
+    const result = await retrieveContext(db, 'What is Jake doing?');
 
     expect(result.context).toContain('50% confident');
   });
 
-  it('does not show confidence for high-confidence memories', () => {
+  it('does not show confidence for high-confidence memories', async () => {
     insertMemory(db, {
       type: 'preference',
       content: 'Andrew prefers email',
@@ -182,7 +182,7 @@ describe('retrieveContext', () => {
       confidence: 0.95,
     });
 
-    const result = retrieveContext(db, 'How should I contact Andrew?');
+    const result = await retrieveContext(db, 'How should I contact Andrew?');
 
     expect(result.context).not.toContain('confident');
   });

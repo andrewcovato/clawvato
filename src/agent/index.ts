@@ -344,7 +344,7 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
 
       // ── Retrieve relevant memories (Tier 2) ──
       const db = getDb();
-      const memoryResult = retrieveContext(db, message);
+      const memoryResult = await retrieveContext(db, message);
 
       let userPrompt: string;
       const parts: string[] = [];
@@ -584,9 +584,9 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
           const extractionSource = `slack:${batch.channel}:${lastMsg.ts}`;
 
           extractFacts(anthropicClient, config.models.classifier, conversationForExtraction, extractionSource)
-            .then(result => {
+            .then(async result => {
               if (result.facts.length > 0 || result.people.length > 0) {
-                storeExtractionResult(db, result, extractionSource);
+                await storeExtractionResult(db, result, extractionSource);
               }
             })
             .catch(err => {
