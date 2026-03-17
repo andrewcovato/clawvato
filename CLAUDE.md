@@ -153,12 +153,38 @@ export const logger = new Proxy({} as pino.Logger, {
 2. Environment variable fallback (e.g., `ANTHROPIC_API_KEY`)
 3. Throws if neither found (via `requireCredential()`)
 
+### Context Limits (tunable constants in `src/agent/index.ts`)
+These control how much context the agent sees on each interaction. Centralized for easy tuning.
+
+| Constant | Value | Purpose |
+|---|---|---|
+| `SHORT_TERM_MESSAGE_LIMIT` | 50 | Max Slack messages to fetch for conversation context |
+| `SHORT_TERM_MSG_CHAR_LIMIT` | 1000 | Max chars per message (truncates long messages) |
+| `SHORT_TERM_TOKEN_BUDGET` | 2000 | Token cap for Slack context (drops oldest when exceeded) |
+| `LONG_TERM_TOKEN_BUDGET` | 1500 | Token cap for DB memory retrieval |
+| `MAX_TURNS` | 20 | Max tool-call turns per agent interaction |
+| `DEFAULT_TOKEN_BUDGET` | 1500 | Default in retriever (overridden by `LONG_TERM_TOKEN_BUDGET` from agent) |
+
+**Short-term memory** = Slack message history (last 50 messages, token-budgeted). Newest messages get priority.
+**Long-term memory** = SQLite DB (extracted facts, strategies, people). Retrieved via hybrid FTS5 + vector search.
+
+### Memory Types
+Stored in the `memories` table, extracted by Haiku after each interaction:
+- `fact` — things true about the world
+- `preference` — how the user likes things done
+- `decision` — choices made, with reasoning
+- `strategy` — plans, approaches, pivots with rationale
+- `conclusion` — insights, analyses, realizations
+- `commitment` — promises, deadlines, deliverables
+- `observation` — patterns noticed but not confirmed
+- `reflection` — synthesized insights from consolidation
+
 ## Build Tracks (from BUILD_PLAN.md)
 - **Track A** ✅ Complete: Foundation — DB, config, security, CLI, hooks, tests
-- **Track B** ✅ Complete: Slack MCP + Agent Core — event-queue, handler, interrupt-classifier, agent loop, policy-engine, graduation, socket-mode, setup wizard, Slack MCP server (5 tools), Agent SDK integration
-  - Verified: Setup wizard runs, Slack Socket Mode connects (~11s), auth.test passes, agent initializes with Sonnet
+- **Track B** ✅ Complete: Slack MCP + Agent Core — direct Anthropic API (no subprocess), event-queue, handler, interrupt-classifier, agent loop, policy-engine, graduation, socket-mode, setup wizard, Slack tools (5 + search_memory)
+  - Deployed on Railway (Growth By Science workspace), Socket Mode, persistent volume at /data
 - **Track C** ⬜ Not Started: Google Workspace MCP — Gmail, Drive, Calendar servers + OAuth2
-- **Track D** ⬜ Not Started: Memory + Embeddings — retrieval, consolidation, fact extraction, sqlite-vec
+- **Track D** 🔶 In Progress: Memory + Embeddings — extraction ✅, storage ✅, retrieval ✅, vector search ✅, consolidation ⬜, importance scoring ⬜
 - **Track E** ⬜ Not Started: Workflow Engine + Scheduling — durable state machine, async workflows
 - **Track F** ⬜ Not Started (partially done in Track A): Security + Training Wheels — undo system remaining
 - **Track G** ⬜ Not Started: GitHub + Filesystem + Web Research — official MCP servers + plugin manager

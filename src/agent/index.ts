@@ -36,6 +36,21 @@ const NO_RESPONSE = '[NO_RESPONSE]';
 /** Max tool-call turns before forcing a stop */
 const MAX_TURNS = 20;
 
+// ── Context limits (centralized for tuning) ──
+// See CLAUDE.md "Context Limits" section for documentation
+
+/** Max Slack messages to fetch for short-term conversation context */
+const SHORT_TERM_MESSAGE_LIMIT = 50;
+
+/** Max characters per Slack message in conversation context */
+const SHORT_TERM_MSG_CHAR_LIMIT = 1000;
+
+/** Max tokens for short-term Slack context (newest messages get priority) */
+const SHORT_TERM_TOKEN_BUDGET = 2000;
+
+/** Max tokens for long-term memory retrieval (from DB) */
+const LONG_TERM_TOKEN_BUDGET = 1500;
+
 const SYSTEM_PROMPT = `You are Clawvato, a personal AI chief of staff running in Slack. You help your owner manage their work life — Slack messages, meetings, emails, documents, and tasks.
 
 ## How you see conversations
@@ -95,9 +110,19 @@ export interface InterruptState {
   clarificationMessage?: string;
 }
 
+/** Rough estimate: 1 token ≈ 4 characters */
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
 /**
  * Build the conversation context by fetching recent channel history.
  * Returns a formatted string with [Owner], [You], and [UserID] prefixes.
+ *
+ * Fetches up to SHORT_TERM_MESSAGE_LIMIT messages, then trims to fit
+ * within SHORT_TERM_TOKEN_BUDGET. Messages are newest-first from Slack,
+ * reversed to chronological order, and oldest messages are dropped first
+ * when the budget is exceeded.
  */
 async function buildConversationContext(
   botClient: WebClient,
@@ -108,7 +133,7 @@ async function buildConversationContext(
   try {
     const history = await botClient.conversations.history({
       channel,
-      limit: 20,
+      limit: SHORT_TERM_MESSAGE_LIMIT,
     });
 
     const messages = (history.messages ?? [])
@@ -117,14 +142,37 @@ async function buildConversationContext(
 
     if (messages.length === 0) return '';
 
-    const lines = messages.map(m => {
+    // Format all messages
+    const formatted = messages.map(m => {
       const isBotMsg = !!m.bot_id || (botUserId && m.user === botUserId);
       const isOwner = ownerUserId && m.user === ownerUserId;
       const prefix = isBotMsg ? '[You]' : isOwner ? '[Owner]' : `[${m.user}]`;
-      return `${prefix}: ${(m.text ?? '').slice(0, 400)}`;
+      return `${prefix}: ${(m.text ?? '').slice(0, SHORT_TERM_MSG_CHAR_LIMIT)}`;
     });
 
-    return lines.join('\n');
+    // Apply token budget — keep newest messages (end of array) when trimming
+    let tokensUsed = 0;
+    let startIndex = 0;
+
+    // Calculate total tokens
+    const totalTokens = formatted.reduce((sum, line) => sum + estimateTokens(line), 0);
+
+    if (totalTokens > SHORT_TERM_TOKEN_BUDGET) {
+      // Trim from the oldest (start of array) until we fit
+      for (let i = 0; i < formatted.length; i++) {
+        const remaining = formatted.slice(i).reduce((sum, line) => sum + estimateTokens(line), 0);
+        if (remaining <= SHORT_TERM_TOKEN_BUDGET) {
+          startIndex = i;
+          break;
+        }
+      }
+      logger.debug(
+        { total: formatted.length, kept: formatted.length - startIndex, budget: SHORT_TERM_TOKEN_BUDGET },
+        'Short-term context trimmed to fit token budget',
+      );
+    }
+
+    return formatted.slice(startIndex).join('\n');
   } catch (error) {
     logger.debug({ error, channel }, 'Failed to fetch channel history for context');
     return '';
@@ -344,7 +392,7 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
 
       // ── Retrieve relevant memories (Tier 2) ──
       const db = getDb();
-      const memoryResult = await retrieveContext(db, message);
+      const memoryResult = await retrieveContext(db, message, { tokenBudget: LONG_TERM_TOKEN_BUDGET });
 
       let userPrompt: string;
       const parts: string[] = [];
