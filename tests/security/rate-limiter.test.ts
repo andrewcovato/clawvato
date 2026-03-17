@@ -19,8 +19,8 @@ describe('rate-limiter', () => {
   });
 
   it('blocks after exceeding limit', () => {
-    // Default limit is 60/min for unknown tools
-    for (let i = 0; i < 60; i++) {
+    // Default limit is config.rateLimits.actionsPerMinute (30/min) for unknown tools
+    for (let i = 0; i < 30; i++) {
       const result = checkRateLimit('burst.tool');
       expect(result.allowed).toBe(true);
     }
@@ -40,7 +40,7 @@ describe('rate-limiter', () => {
   });
 
   it('resets properly', () => {
-    for (let i = 0; i < 60; i++) {
+    for (let i = 0; i < 30; i++) {
       checkRateLimit('reset.test');
     }
     expect(checkRateLimit('reset.test').allowed).toBe(false);

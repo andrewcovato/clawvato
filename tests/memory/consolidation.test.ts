@@ -72,6 +72,12 @@ describe('consolidate', () => {
     const facts = findMemoriesByType(db, 'fact', { validOnly: true });
     expect(facts).toHaveLength(1);
     expect(facts[0].importance).toBe(7); // Higher importance kept
+
+    // Verify supersede direction: lower importance points to higher importance
+    const allFacts = findMemoriesByType(db, 'fact', { validOnly: false });
+    const superseded = allFacts.find(f => f.valid_until !== null);
+    const kept = allFacts.find(f => f.valid_until === null);
+    expect(superseded!.superseded_by).toBe(kept!.id);
   });
 
   it('does not merge unrelated memories', () => {
@@ -157,7 +163,7 @@ describe('consolidate', () => {
     consolidate(db);
 
     const runs = db.prepare(
-      "SELECT * FROM consolidation_runs WHERE id != '__last_reflection_at__' ORDER BY completed_at DESC LIMIT 1"
+      "SELECT * FROM consolidation_runs ORDER BY completed_at DESC LIMIT 1"
     ).get() as Record<string, unknown> | undefined;
 
     expect(runs).toBeDefined();

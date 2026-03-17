@@ -21,6 +21,12 @@ import type { ToolHandlerResult } from '../mcp/slack/server.js';
 import { logger } from '../logger.js';
 import { scanForSecrets } from '../security/output-sanitizer.js';
 
+/** Free/busy period from the Calendar API */
+interface BusyPeriod { start: string; end: string; }
+
+/** Calendar free/busy entry from the freebusy API */
+interface CalendarBusy { busy: BusyPeriod[]; }
+
 /** Sanitize error messages to avoid leaking secrets from Google API responses */
 function sanitizeErrorMessage(msg: string): string {
   const scan = scanForSecrets(msg);
@@ -590,11 +596,11 @@ export function createGoogleTools(
           const lines: string[] = [];
 
           for (const [email, cal] of Object.entries(calendars)) {
-            const busy = (cal as any).busy ?? [];
+            const busy = (cal as CalendarBusy).busy ?? [];
             if (busy.length === 0) {
               lines.push(`${email}: Free for the next ${daysAhead} days`);
             } else {
-              const blocks = busy.map((b: any) =>
+              const blocks = busy.map((b: BusyPeriod) =>
                 `  - Busy: ${new Date(b.start).toLocaleString()} → ${new Date(b.end).toLocaleString()}`
               ).join('\n');
               lines.push(`${email}:\n${blocks}`);
@@ -830,7 +836,9 @@ export function createGoogleTools(
             folder: "mimeType = 'application/vnd.google-apps.folder'",
           };
 
-          let q = `name contains '${query.replace(/'/g, "\\'")}'`;
+          // Sanitize: only allow alphanumeric, spaces, dots, dashes, underscores
+          const safeQuery = query.replace(/[^a-zA-Z0-9\s.\-_]/g, '');
+          let q = `name contains '${safeQuery}'`;
           if (fileType && mimeFilter[fileType]) {
             q += ` and ${mimeFilter[fileType]}`;
           }

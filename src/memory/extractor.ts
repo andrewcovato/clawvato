@@ -224,15 +224,14 @@ export async function storeExtractionResult(
     peopleStored++;
   }
 
-  // Touch people mentioned in facts
-  for (const fact of result.facts) {
-    for (const entity of fact.entities) {
-      const person = db.prepare(
-        'SELECT id FROM people WHERE name = ? COLLATE NOCASE'
-      ).get(entity) as { id: string } | undefined;
-      if (person) {
-        touchPerson(db, person.id);
-      }
+  // Touch people mentioned in facts (deduplicated)
+  const allEntities = new Set(result.facts.flatMap(f => f.entities));
+  for (const entity of allEntities) {
+    const person = db.prepare(
+      'SELECT id FROM people WHERE name = ? COLLATE NOCASE'
+    ).get(entity) as { id: string } | undefined;
+    if (person) {
+      touchPerson(db, person.id);
     }
   }
 

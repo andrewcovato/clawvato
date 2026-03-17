@@ -39,6 +39,9 @@ const NO_RESPONSE = '[NO_RESPONSE]';
 /** Max tool-call turns before forcing a stop */
 const MAX_TURNS = 15;
 
+/** Agent query timeout in milliseconds */
+const AGENT_TIMEOUT_MS = 120_000;
+
 // ── Context limits (centralized for tuning) ──
 // See CLAUDE.md "Context Limits" section for documentation
 
@@ -161,17 +164,19 @@ async function buildConversationContext(
     // Apply token budget — keep newest messages (end of array) when trimming
     let startIndex = 0;
 
-    // Calculate total tokens
-    const totalTokens = formatted.reduce((sum, line) => sum + estimateTokens(line), 0);
+    // Compute per-line token costs once
+    const tokenCosts = formatted.map(line => estimateTokens(line));
+    const totalTokens = tokenCosts.reduce((a, b) => a + b, 0);
 
     if (totalTokens > SHORT_TERM_TOKEN_BUDGET) {
-      // Trim from the oldest (start of array) until we fit
+      // Single pass: trim from the oldest until we fit
+      let remaining = totalTokens;
       for (let i = 0; i < formatted.length; i++) {
-        const remaining = formatted.slice(i).reduce((sum, line) => sum + estimateTokens(line), 0);
         if (remaining <= SHORT_TERM_TOKEN_BUDGET) {
           startIndex = i;
           break;
         }
+        remaining -= tokenCosts[i];
       }
       logger.debug(
         { total: formatted.length, kept: formatted.length - startIndex, budget: SHORT_TERM_TOKEN_BUDGET },
@@ -533,7 +538,7 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
       const timeout = setTimeout(() => {
         logger.warn('Agent query timed out after 120s — aborting');
         abortController.abort();
-      }, 120_000);
+      }, AGENT_TIMEOUT_MS);
 
       try {
         // ── Agent loop: messages.create → tool calls → repeat ──

@@ -18,8 +18,8 @@ import { getRecentMemories, insertMemory, type Memory } from './store.js';
 /** Cumulative importance threshold to trigger reflection */
 const REFLECTION_THRESHOLD = 50;
 
-/** Key used to store last reflection timestamp in the DB */
-const LAST_REFLECTION_KEY = '__last_reflection_at__';
+/** Key used to store last reflection timestamp in agent_state */
+const LAST_REFLECTION_KEY = 'last_reflection_at';
 
 const REFLECTION_PROMPT = `You are analyzing recent memories stored by a personal AI assistant. Identify 3-5 high-level insights, patterns, or conclusions from these memories.
 
@@ -132,28 +132,28 @@ async function runReflection(
 }
 
 /**
- * Get the last reflection timestamp from the DB.
+ * Get the last reflection timestamp from the agent_state table.
  */
 function getLastReflectionTime(db: DatabaseSync): string {
   try {
     const row = db.prepare(
-      `SELECT completed_at FROM consolidation_runs WHERE id = ?`
-    ).get(LAST_REFLECTION_KEY) as { completed_at: string } | undefined;
-    return row?.completed_at ?? '2000-01-01T00:00:00';
+      `SELECT value FROM agent_state WHERE key = ?`
+    ).get(LAST_REFLECTION_KEY) as { value: string } | undefined;
+    return row?.value ?? '2000-01-01T00:00:00';
   } catch {
     return '2000-01-01T00:00:00';
   }
 }
 
 /**
- * Record the current time as the last reflection time.
+ * Record the current time as the last reflection time in agent_state.
  */
 function setLastReflectionTime(db: DatabaseSync): void {
   const now = new Date().toISOString();
   try {
     db.prepare(`
-      INSERT OR REPLACE INTO consolidation_runs (id, started_at, completed_at, reflections_generated)
-      VALUES (?, ?, ?, 1)
+      INSERT OR REPLACE INTO agent_state (key, value, updated_at)
+      VALUES (?, ?, ?)
     `).run(LAST_REFLECTION_KEY, now, now);
   } catch (error) {
     logger.debug({ error }, 'Failed to record reflection time — non-critical');

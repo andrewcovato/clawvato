@@ -126,6 +126,18 @@ describe('maybeReflect', () => {
     expect(result.insightsGenerated).toBe(0);
   });
 
+  it('handles empty agent_state table gracefully', async () => {
+    // Insert enough memories to trigger reflection
+    for (let i = 0; i < 7; i++) {
+      insertMemory(db, { type: 'fact', content: `Fact ${i}`, source: 'test', importance: 8 });
+    }
+
+    const client = createMockClient([{ content: 'Test insight', importance: 7 }]);
+    // Should work even with empty agent_state table
+    const result = await maybeReflect(db, client, 'haiku');
+    expect(result.reflected).toBe(true);
+  });
+
   it('stores reflections with correct metadata', async () => {
     for (let i = 0; i < 7; i++) {
       insertMemory(db, { type: 'fact', content: `Fact ${i}`, source: 'test', importance: 8 });

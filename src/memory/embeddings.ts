@@ -12,9 +12,14 @@
 
 import { logger } from '../logger.js';
 
+/** Minimal interface for the HuggingFace feature-extraction pipeline */
+interface EmbeddingPipeline {
+  (text: string, opts: { pooling: string; normalize: boolean }): Promise<{ data: Float32Array }>;
+}
+
 // Lazy-loaded pipeline
-let pipelineInstance: any = null;
-let loadingPromise: Promise<any> | null = null;
+let pipelineInstance: EmbeddingPipeline | null = null;
+let loadingPromise: Promise<EmbeddingPipeline> | null = null;
 
 /** Embedding dimension for all-MiniLM-L6-v2 */
 export const EMBEDDING_DIM = 384;
@@ -23,7 +28,7 @@ export const EMBEDDING_DIM = 384;
  * Get or initialize the embedding pipeline.
  * Uses dynamic import since @huggingface/transformers is ESM.
  */
-async function getPipeline(): Promise<any> {
+async function getPipeline(): Promise<EmbeddingPipeline> {
   if (pipelineInstance) return pipelineInstance;
   if (loadingPromise) return loadingPromise;
 
@@ -34,7 +39,7 @@ async function getPipeline(): Promise<any> {
     const { pipeline } = await import('@huggingface/transformers');
     pipelineInstance = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', {
       dtype: 'q8', // Quantized for speed
-    });
+    }) as unknown as EmbeddingPipeline;
 
     const elapsed = Date.now() - startTime;
     logger.info({ elapsed }, 'Embedding model loaded');

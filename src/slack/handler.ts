@@ -41,6 +41,9 @@ export type ProcessingState = 'idle' | 'accumulating' | 'processing';
 /** How long before showing a delayed status indicator */
 const SLOW_TASK_THRESHOLD_MS = 60_000;
 
+/** Message shown when a task exceeds the slow-task threshold */
+const SLOW_TASK_MESSAGE = '\u23f3 Still working on this...';
+
 interface ActiveTask {
   description: string;
   channel: string;
@@ -393,7 +396,7 @@ export class SlackHandler {
       const lastMsg = this.activeTask;
       const ackResult = await this.messages.post(
         lastMsg.channel,
-        `⏳ Still working on this...`,
+        SLOW_TASK_MESSAGE,
         lastMsg.threadTs,
       );
       if (this.activeTask) {

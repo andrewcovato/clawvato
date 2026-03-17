@@ -29,7 +29,17 @@ const DEFAULT_LIMITS: Record<string, { windowMs: number; maxRequests: number }> 
 
 function getBucket(toolName: string): RateLimitBucket {
   if (!buckets.has(toolName)) {
-    const limits = DEFAULT_LIMITS[toolName] ?? DEFAULT_LIMITS['_default'];
+    // Merge config overrides into defaults for category-level limits
+    const config = getConfig();
+    const configOverrides: Record<string, { windowMs: number; maxRequests: number }> = {
+      'slack.post_message': { windowMs: 60_000, maxRequests: config.rateLimits.actionsPerMinute },
+      'gmail.send_email': { windowMs: 3600_000, maxRequests: config.rateLimits.emailsPerHour },
+      'gmail.create_draft': { windowMs: 3600_000, maxRequests: config.rateLimits.emailsPerHour },
+      'gdrive.update_permissions': { windowMs: 3600_000, maxRequests: config.rateLimits.fileSharesPerHour },
+      '_default': { windowMs: 60_000, maxRequests: config.rateLimits.actionsPerMinute },
+    };
+
+    const limits = configOverrides[toolName] ?? DEFAULT_LIMITS[toolName] ?? configOverrides['_default'];
     buckets.set(toolName, {
       timestamps: [],
       windowMs: limits.windowMs,

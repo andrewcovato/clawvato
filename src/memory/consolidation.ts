@@ -46,7 +46,6 @@ export function shouldConsolidate(db: DatabaseSync): boolean {
   try {
     const row = db.prepare(`
       SELECT completed_at FROM consolidation_runs
-      WHERE id != '__last_reflection_at__'
       ORDER BY completed_at DESC LIMIT 1
     `).get() as { completed_at: string } | undefined;
 

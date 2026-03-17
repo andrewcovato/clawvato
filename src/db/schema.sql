@@ -162,6 +162,13 @@ CREATE TABLE IF NOT EXISTS plugins (
   approved_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- General-purpose agent state (replaces sentinel rows in other tables)
+CREATE TABLE IF NOT EXISTS agent_state (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Schema version tracking
 CREATE TABLE IF NOT EXISTS schema_version (
   version INTEGER PRIMARY KEY,

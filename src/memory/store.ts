@@ -10,6 +10,24 @@ import { generateId } from '../db/index.js';
 import { logger } from '../logger.js';
 import { embeddingToBytes } from './embeddings.js';
 
+// ── Prepared statement cache for hot-path queries ──
+
+const stmtCache = new WeakMap<DatabaseSync, Map<string, ReturnType<DatabaseSync['prepare']>>>();
+
+function cachedPrepare(db: DatabaseSync, sql: string): ReturnType<DatabaseSync['prepare']> {
+  let cache = stmtCache.get(db);
+  if (!cache) {
+    cache = new Map();
+    stmtCache.set(db, cache);
+  }
+  let stmt = cache.get(sql);
+  if (!stmt) {
+    stmt = db.prepare(sql);
+    cache.set(sql, stmt);
+  }
+  return stmt;
+}
+
 // ── Memory types ──
 
 export type MemoryType = 'fact' | 'preference' | 'decision' | 'observation' | 'reflection' | 'strategy' | 'conclusion' | 'commitment';
@@ -175,7 +193,7 @@ export function findMemoriesByEntity(
  * Mark a memory as accessed (updates recency for retrieval scoring).
  */
 export function touchMemory(db: DatabaseSync, id: string): void {
-  db.prepare(`
+  cachedPrepare(db, `
     UPDATE memories SET last_accessed_at = datetime('now'), access_count = access_count + 1
     WHERE id = ?
   `).run(id);
@@ -253,7 +271,7 @@ export function insertPerson(db: DatabaseSync, person: NewPerson): string {
 
 export function findPersonByName(db: DatabaseSync, name: string): Person | null {
   // Case-insensitive search
-  const row = db.prepare('SELECT * FROM people WHERE name = ? COLLATE NOCASE').get(name);
+  const row = cachedPrepare(db, 'SELECT * FROM people WHERE name = ? COLLATE NOCASE').get(name);
   return row ? row as unknown as Person : null;
 }
 
@@ -271,7 +289,7 @@ export function findPersonByEmail(db: DatabaseSync, email: string): Person | nul
  * Update a person's interaction tracking.
  */
 export function touchPerson(db: DatabaseSync, id: string): void {
-  db.prepare(`
+  cachedPrepare(db, `
     UPDATE people SET last_interaction_at = datetime('now'), interaction_count = interaction_count + 1
     WHERE id = ?
   `).run(id);
