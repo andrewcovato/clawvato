@@ -20,6 +20,7 @@ import { getDb } from '../db/index.js';
 import { createSlackTools, type SlackTool, type ToolHandlerResult } from '../mcp/slack/server.js';
 import { retrieveContext } from '../memory/retriever.js';
 import { extractFacts, storeExtractionResult } from '../memory/extractor.js';
+import { maybeReflect } from '../memory/reflection.js';
 import { searchMemories, findPersonByName } from '../memory/store.js';
 import { preToolUse, type ToolUseContext } from '../hooks/pre-tool-use.js';
 import { postToolUse, type ToolResult } from '../hooks/post-tool-use.js';
@@ -349,6 +350,85 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
     return { content: `Found ${results.length} memories:\n${lines.join('\n')}` };
   });
 
+  // Backfill scan tool — scan channel history and extract memories
+  toolDefs.push({
+    name: 'scan_channel_history',
+    description:
+      'Scan a Slack channel\'s recent history and extract facts into long-term memory. ' +
+      'Use when asked to "catch up", "scan messages", or "remember what happened". ' +
+      'Processes messages in batches and extracts facts, people, strategies, etc.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        channel: { type: 'string', description: 'Channel ID to scan' },
+        message_count: { type: 'number', description: 'Number of messages to scan (default 100, max 500)' },
+      },
+      required: ['channel'],
+    },
+  });
+  toolHandlers.set('scan_channel_history', async (args) => {
+    const channel = args.channel as string;
+    const messageCount = Math.min((args.message_count as number) ?? 100, 500);
+    const db = getDb();
+
+    try {
+      // Fetch messages in pages of 100
+      let allMessages: Array<{ text: string; user: string; ts: string }> = [];
+      let cursor: string | undefined;
+
+      while (allMessages.length < messageCount) {
+        const limit = Math.min(100, messageCount - allMessages.length);
+        const result = await options.botClient.conversations.history({
+          channel,
+          limit,
+          cursor,
+        });
+
+        const msgs = (result.messages ?? [])
+          .filter(m => !m.subtype && m.text)
+          .map(m => ({ text: m.text ?? '', user: m.user ?? 'unknown', ts: m.ts ?? '' }));
+
+        allMessages = allMessages.concat(msgs);
+
+        if (!result.has_more || !result.response_metadata?.next_cursor) break;
+        cursor = result.response_metadata.next_cursor;
+      }
+
+      if (allMessages.length === 0) {
+        return { content: 'No messages found in channel.' };
+      }
+
+      // Process in batches of 20 messages
+      let totalFacts = 0;
+      let totalPeople = 0;
+      const batchSize = 20;
+
+      for (let i = 0; i < allMessages.length; i += batchSize) {
+        const batch = allMessages.slice(i, i + batchSize);
+        const conversationText = batch
+          .reverse()
+          .map(m => `[${m.user}]: ${m.text.slice(0, 500)}`)
+          .join('\n');
+
+        const source = `scan:${channel}:${batch[0]?.ts ?? 'unknown'}`;
+        const result = await extractFacts(anthropicClient, config.models.classifier, conversationText, source);
+
+        if (result.facts.length > 0 || result.people.length > 0) {
+          const stored = await storeExtractionResult(db, result, source);
+          totalFacts += stored.memoriesStored;
+          totalPeople += stored.peopleStored;
+        }
+      }
+
+      return {
+        content: `Scanned ${allMessages.length} messages. Extracted ${totalFacts} facts and ${totalPeople} people into long-term memory.`,
+      };
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return { content: `Scan failed: ${msg}`, isError: true };
+    }
+  });
+
   // Resolve bot's own user ID for context formatting
   let botUserId: string | undefined;
   try {
@@ -637,6 +717,8 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
             .then(async result => {
               if (result.facts.length > 0 || result.people.length > 0) {
                 await storeExtractionResult(db, result, extractionSource);
+                // Check if reflection should be triggered
+                await maybeReflect(db, anthropicClient, config.models.classifier);
               }
             })
             .catch(err => {

@@ -15,6 +15,7 @@ import { getDb, closeDb } from '../db/index.js';
 import { hasCredential, requireCredential } from '../credentials.js';
 import { createSlackConnection } from '../slack/socket-mode.js';
 import { createAgent } from '../agent/index.js';
+import { shouldConsolidate, consolidate } from '../memory/consolidation.js';
 import type { WebClient } from '@slack/web-api';
 
 export async function startAgent(): Promise<void> {
@@ -28,6 +29,16 @@ export async function startAgent(): Promise<void> {
     | { version: number }
     | undefined;
   logger.info({ schemaVersion: version?.version ?? 0 }, 'Database connected');
+
+  // ── Run memory consolidation if due (>24h since last run) ──
+  if (shouldConsolidate(db)) {
+    try {
+      const result = consolidate(db);
+      logger.info(result, 'Startup consolidation complete');
+    } catch (error) {
+      logger.warn({ error }, 'Startup consolidation failed — non-critical');
+    }
+  }
 
   // ── Verify required credentials ──
   const missingCreds: string[] = [];

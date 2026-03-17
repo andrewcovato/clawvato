@@ -76,7 +76,7 @@ function formatMemory(m: Memory): string {
  */
 export function extractEntities(message: string): { names: string[]; keywords: string[] } {
   // Find potential names: capitalized words that look like proper nouns
-  // Skip the first word of each sentence (capitalized due to grammar, not because it's a name)
+  // At sentence start, only skip if word is a common sentence starter (verb, pronoun, etc.)
   const words = message.split(/\s+/);
   const names: string[] = [];
   let sentenceStart = true;
@@ -85,7 +85,12 @@ export function extractEntities(message: string): { names: string[]; keywords: s
     const word = raw.replace(/[^\w]/g, '');
     const endsSentence = /[.!?]$/.test(raw);
 
-    if (/^[A-Z][a-z]+$/.test(word) && !COMMON_WORDS.has(word.toLowerCase()) && !sentenceStart) {
+    if (/^[A-Z][a-z]+$/.test(word) && !COMMON_WORDS.has(word.toLowerCase())) {
+      // At sentence start, skip common sentence starters (verbs, pronouns, etc.)
+      if (sentenceStart && SENTENCE_STARTERS.has(word.toLowerCase())) {
+        sentenceStart = false;
+        continue;
+      }
       // Check if next word is also a capitalized name (two-word name)
       const next = words[i + 1]?.replace(/[^\w]/g, '');
       if (next && /^[A-Z][a-z]+$/.test(next) && !COMMON_WORDS.has(next.toLowerCase())) {
@@ -117,6 +122,16 @@ const COMMON_WORDS = new Set([
   'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
   'january', 'february', 'march', 'april', 'may', 'june', 'july',
   'august', 'september', 'october', 'november', 'december',
+]);
+
+// Words that commonly start sentences but aren't names
+const SENTENCE_STARTERS = new Set([
+  'the', 'this', 'that', 'what', 'when', 'where', 'which', 'who', 'how', 'why',
+  'can', 'could', 'would', 'should', 'will', 'did', 'does', 'have', 'has', 'had',
+  'are', 'is', 'was', 'were', 'been', 'being', 'get', 'got', 'let', 'make',
+  'do', 'don', 'i', 'we', 'you', 'he', 'she', 'it', 'they', 'my', 'our', 'your',
+  'ask', 'tell', 'check', 'find', 'look', 'see', 'send', 'give', 'take', 'set',
+  'please', 'also', 'just', 'remember', 'schedule', 'draft', 'update', 'share',
 ]);
 
 const STOPWORDS = new Set([
