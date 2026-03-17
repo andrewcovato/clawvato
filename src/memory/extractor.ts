@@ -50,14 +50,23 @@ export interface ExtractionResult {
   people: ExtractedPerson[];
 }
 
-const EXTRACTION_PROMPT = `Extract structured facts from this conversation. Return a JSON object with two arrays.
+const EXTRACTION_PROMPT = `Extract meaningful information from this conversation. Return a JSON object with two arrays.
 
 "facts" array — each item has:
-- type: "fact" (things true about the world), "preference" (how the user likes things), "decision" (choices made), or "observation" (patterns noticed)
-- content: One clear sentence stating the fact
+- type: one of the types below
+- content: A clear statement capturing the information AND its context/rationale
 - confidence: 0.0-1.0 (1.0 = explicitly stated, 0.7 = strongly implied, 0.5 = inferred)
 - importance: 1-10 (1 = trivial, 5 = useful, 10 = critical for future decisions)
-- entities: Array of person names or key topics mentioned
+- entities: Array of person names, company names, or key topics mentioned
+
+Memory types:
+- "fact" — things true about the world ("Marcus is on the finance team")
+- "preference" — how the user likes things done ("prefers meetings after 10am")
+- "decision" — choices made, including the reasoning ("decided to delay launch because vendor wasn't ready")
+- "strategy" — plans, approaches, pivots with rationale ("pivoting Client X to land-and-expand because enterprise deal stalled at procurement")
+- "conclusion" — insights, analyses, realizations ("the pipeline issue is that we're qualifying leads too late")
+- "commitment" — promises, deadlines, deliverables ("told Client X we'd deliver the proposal by Friday")
+- "observation" — patterns noticed but not yet confirmed ("Andrew tends to decline Friday afternoon meetings")
 
 "people" array — each person mentioned with:
 - name: Full name if available
@@ -67,9 +76,13 @@ const EXTRACTION_PROMPT = `Extract structured facts from this conversation. Retu
 - relationship: "colleague", "client", "vendor", or "friend" if determinable
 
 Rules:
-- Only extract NEW information — skip greetings, filler, and obvious things
-- One fact per item — don't combine multiple facts
-- Use the user's exact words for preferences
+- Capture the WHY, not just the what — "decided X because Y" is far more useful than just "decided X"
+- Include enough context that the memory is useful months later without the original conversation
+- Store strategies and plans in enough detail to act on later
+- For commitments, include who, what, and when
+- Skip small talk, greetings, and filler
+- One memory per item — don't combine unrelated information
+- Use the user's exact words for preferences and commitments
 - If nothing worth extracting, return {"facts": [], "people": []}
 - Return ONLY valid JSON, no markdown or explanation`;
 
@@ -102,7 +115,7 @@ export async function extractFacts(
     const facts: ExtractedFact[] = (parsed.facts ?? [])
       .filter((f: Record<string, unknown>) =>
         f.content && typeof f.content === 'string' &&
-        f.type && ['fact', 'preference', 'decision', 'observation'].includes(f.type as string)
+        f.type && ['fact', 'preference', 'decision', 'observation', 'strategy', 'conclusion', 'commitment'].includes(f.type as string)
       )
       .map((f: Record<string, unknown>) => ({
         type: f.type as MemoryType,

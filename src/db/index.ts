@@ -58,6 +58,31 @@ export function initDb(): DatabaseSync {
     }
   }
 
+  // Migrate: expand memory type CHECK constraint (v1 → v2)
+  // SQLite can't ALTER CHECK constraints, so we recreate the table if needed
+  try {
+    // Test if new types are accepted
+    db.exec(`INSERT INTO memories (id, type, content, source) VALUES ('__type_test__', 'strategy', 'test', 'migration')`);
+    db.exec(`DELETE FROM memories WHERE id = '__type_test__'`);
+  } catch {
+    // Old constraint — need to migrate
+    logger.info('Migrating memories table to support new memory types...');
+    db.exec(`
+      ALTER TABLE memories RENAME TO memories_old;
+    `);
+    // Re-run schema to create new table with expanded CHECK
+    const newSchema = schema
+      .split('\n')
+      .filter(line => !line.trim().startsWith('CREATE INDEX') || !line.includes('memories'))
+      .join('\n');
+    try { db.exec(newSchema); } catch { /* tables may partially exist */ }
+    db.exec(`
+      INSERT INTO memories SELECT * FROM memories_old;
+      DROP TABLE memories_old;
+    `);
+    logger.info('Memories table migrated successfully');
+  }
+
   // Create vector table (requires sqlite-vec extension)
   try {
     db.exec(`

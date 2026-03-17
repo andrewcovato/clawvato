@@ -12,7 +12,7 @@ import { embeddingToBytes } from './embeddings.js';
 
 // ── Memory types ──
 
-export type MemoryType = 'fact' | 'preference' | 'decision' | 'observation' | 'reflection';
+export type MemoryType = 'fact' | 'preference' | 'decision' | 'observation' | 'reflection' | 'strategy' | 'conclusion' | 'commitment';
 
 export interface Memory {
   id: string;

@@ -7,7 +7,7 @@ PRAGMA foreign_keys = ON;
 -- Core memory store with triple-factor scoring + bi-temporal tracking
 CREATE TABLE IF NOT EXISTS memories (
   id TEXT PRIMARY KEY,
-  type TEXT NOT NULL CHECK(type IN ('fact','preference','decision','observation','reflection')),
+  type TEXT NOT NULL CHECK(type IN ('fact','preference','decision','observation','reflection','strategy','conclusion','commitment')),
   content TEXT NOT NULL,
   source TEXT NOT NULL,
 

@@ -62,6 +62,9 @@ function formatMemory(m: Memory): string {
     m.type === 'decision' ? 'Decision' :
     m.type === 'fact' ? 'Fact' :
     m.type === 'reflection' ? 'Insight' :
+    m.type === 'strategy' ? 'Strategy' :
+    m.type === 'conclusion' ? 'Conclusion' :
+    m.type === 'commitment' ? 'Commitment' :
     'Note';
   const confidence = m.confidence >= 0.9 ? '' : ` [${Math.round(m.confidence * 100)}% confident]`;
   return `${typeLabel}: ${m.content}${confidence}`;
