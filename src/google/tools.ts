@@ -143,6 +143,106 @@ export function createGoogleTools(
       },
     },
 
+    // ── Calendar: Delete/Cancel Event ──
+    {
+      definition: {
+        name: 'google_calendar_delete_event',
+        description:
+          'Delete or cancel a calendar event by its event ID. Always confirm with the owner before deleting.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            event_id: { type: 'string', description: 'Google Calendar event ID (from list_events results)' },
+            send_updates: { type: 'string', enum: ['all', 'externalOnly', 'none'], description: 'Who to notify about the cancellation (default: all)' },
+          },
+          required: ['event_id'],
+        },
+      },
+      handler: async (args) => {
+        const eventId = args.event_id as string;
+        const sendUpdates = (args.send_updates as string) ?? 'all';
+
+        try {
+          // Get event details first for confirmation message
+          const event = await calendar.events.get({
+            calendarId: 'primary',
+            eventId,
+          });
+
+          await calendar.events.delete({
+            calendarId: 'primary',
+            eventId,
+            sendUpdates: sendUpdates as 'all' | 'externalOnly' | 'none',
+          });
+
+          return {
+            content: `Event cancelled: "${event.data.summary ?? 'Untitled'}" (${event.data.start?.dateTime ?? event.data.start?.date ?? 'unknown time'}). Notifications sent: ${sendUpdates}.`,
+          };
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          return { content: `Failed to cancel event: ${msg}`, isError: true };
+        }
+      },
+    },
+
+    // ── Calendar: Update Event ──
+    {
+      definition: {
+        name: 'google_calendar_update_event',
+        description:
+          'Update an existing calendar event — change title, time, attendees, or location.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            event_id: { type: 'string', description: 'Google Calendar event ID' },
+            summary: { type: 'string', description: 'New event title (optional)' },
+            start_time: { type: 'string', description: 'New start time ISO 8601 (optional)' },
+            end_time: { type: 'string', description: 'New end time ISO 8601 (optional)' },
+            location: { type: 'string', description: 'New location (optional)' },
+            description: { type: 'string', description: 'New description (optional)' },
+            add_attendees: { type: 'array', items: { type: 'string' }, description: 'Email addresses to add (optional)' },
+          },
+          required: ['event_id'],
+        },
+      },
+      handler: async (args) => {
+        const eventId = args.event_id as string;
+
+        try {
+          // Get current event
+          const current = await calendar.events.get({
+            calendarId: 'primary',
+            eventId,
+          });
+
+          const patch: Record<string, unknown> = {};
+          if (args.summary) patch.summary = args.summary;
+          if (args.start_time) patch.start = { dateTime: args.start_time as string };
+          if (args.end_time) patch.end = { dateTime: args.end_time as string };
+          if (args.location) patch.location = args.location;
+          if (args.description) patch.description = args.description;
+          if (args.add_attendees) {
+            const existing = current.data.attendees ?? [];
+            const newAttendees = (args.add_attendees as string[]).map(email => ({ email }));
+            patch.attendees = [...existing, ...newAttendees];
+          }
+
+          const result = await calendar.events.patch({
+            calendarId: 'primary',
+            eventId,
+            requestBody: patch,
+          });
+
+          return {
+            content: `Event updated: "${result.data.summary}" (ID: ${eventId})`,
+          };
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          return { content: `Failed to update event: ${msg}`, isError: true };
+        }
+      },
+    },
+
     // ── Calendar: Find Free Time ──
     {
       definition: {

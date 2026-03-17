@@ -64,11 +64,13 @@ describe('Google Workspace Tools', () => {
   }
 
   describe('tool registration', () => {
-    it('registers all 8 Google tools', () => {
-      expect(tools).toHaveLength(8);
+    it('registers all 10 Google tools', () => {
+      expect(tools).toHaveLength(10);
       const names = tools.map(t => t.definition.name);
       expect(names).toContain('google_calendar_list_events');
       expect(names).toContain('google_calendar_create_event');
+      expect(names).toContain('google_calendar_delete_event');
+      expect(names).toContain('google_calendar_update_event');
       expect(names).toContain('google_calendar_find_free');
       expect(names).toContain('google_gmail_search');
       expect(names).toContain('google_gmail_read');
