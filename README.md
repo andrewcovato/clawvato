@@ -143,6 +143,7 @@ All context limits are centralized as named constants in `src/agent/index.ts`:
 
 | Parameter | Default | Purpose |
 |---|---|---|
+| `AGENT_TIMEOUT_MS` | 120000 | Max time per agent interaction (ms) |
 | `SHORT_TERM_MESSAGE_LIMIT` | 50 | Slack messages fetched per interaction |
 | `SHORT_TERM_MSG_CHAR_LIMIT` | 1000 | Max chars per Slack message |
 | `SHORT_TERM_TOKEN_BUDGET` | 2000 | Token cap for Slack context (drops oldest first) |
@@ -173,15 +174,23 @@ Slack interaction parameters:
 
 ## Security Model
 
-**Single-principal authority**: Only the owner (identified by `OWNER_SLACK_USER_ID`) can instruct the bot. All other messages are untrusted data.
+**Single-principal authority**: Only the owner (identified by `OWNER_SLACK_USER_ID`) can instruct the bot. This is **required** — the bot will not start without it configured. If unset, startup fails hard.
+
+**Trust boundaries**: Messages from non-owner Slack users are tagged `[EXTERNAL]` in all contexts. The memory extraction pipeline extracts factual information from all messages but only extracts preferences, decisions, strategies, and commitments from `[TRUSTED]` (owner) messages. This prevents prompt injection via crafted Slack messages.
+
+**External content labels**: Email bodies returned by Gmail tools are wrapped in `[EXTERNAL CONTENT]` markers. The system prompt instructs the agent to treat tool results as data to report, not instructions to follow.
+
+**Secret scanning**: All tool outputs are scanned for credential patterns (API keys, OAuth tokens, etc.) *before* being written to the audit log. Secrets never hit disk.
 
 **Training wheels** (trust levels 0-3):
-- Level 0: All actions require confirmation (current default)
+- Level 0: All actions require confirmation (current default — logs but allows for MVP)
 - Level 1: Read-only actions auto-approved
 - Level 2: Graduated patterns auto-approved
 - Level 3: Most actions auto-approved
 
 **Gmail safety**: Email sending always goes through a draft-then-send flow. The bot creates a draft and asks for confirmation before sending.
+
+**Drive query sanitization**: Search queries are stripped of special characters that could be interpreted as Drive API query operators.
 
 ## Setup
 
@@ -249,7 +258,7 @@ railway up --detach -m "deploy"
 ### Running Tests
 
 ```bash
-npm test          # 264 tests across 20 files
+npm test          # 259 tests across 20 files
 npm run build     # TypeScript compile
 npm run lint      # Type-check without emitting
 ```
