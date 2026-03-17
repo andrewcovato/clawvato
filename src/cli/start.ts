@@ -7,6 +7,8 @@
  * like a human and decides what to do.
  */
 
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { logger } from '../logger.js';
 import { getConfig } from '../config.js';
 import { getDb, closeDb } from '../db/index.js';
@@ -84,6 +86,7 @@ export async function startAgent(): Promise<void> {
   // ── Graceful shutdown ──
   const shutdown = async () => {
     logger.info('Shutting down...');
+    try { writeFileSync(join(config.dataDir, 'last-active.txt'), String(Date.now()), 'utf-8'); } catch { /* */ }
     await agent.shutdown();
     await slack.stop();
     closeDb();
@@ -99,13 +102,28 @@ export async function startAgent(): Promise<void> {
   logger.info('Clawvato agent is running. Listening to all joined channels.');
   logger.info('Press Ctrl+C to stop.');
 
-  // ── Startup crawl (non-blocking) ──
-  // Same code path as live messages: for each channel, enqueue a
-  // "check in" prompt. The agent reads the conversation context
-  // (fetched in processBatch) and decides whether to respond.
-  crawlOnStartup(slack.botClient, slack.handler, config.ownerSlackUserId)
-    .then(() => logger.info('Startup crawl complete'))
-    .catch((error) => logger.warn({ error }, 'Startup crawl failed'));
+  // ── Startup crawl (non-blocking, skip on quick redeploys) ──
+  // Only crawl if bot has been offline for >5 minutes. This prevents
+  // the bot from responding to old messages on every Railway redeploy.
+  const lastActiveFile = join(config.dataDir, 'last-active.txt');
+  let shouldCrawl = true;
+  try {
+    const lastActive = readFileSync(lastActiveFile, 'utf-8').trim();
+    const offlineMs = Date.now() - parseInt(lastActive, 10);
+    if (offlineMs < 5 * 60 * 1000) {
+      shouldCrawl = false;
+      logger.info({ offlineMs }, 'Skipping startup crawl — offline less than 5 minutes');
+    }
+  } catch { /* no file = first run, crawl */ }
+
+  // Write current timestamp
+  writeFileSync(lastActiveFile, String(Date.now()), 'utf-8');
+
+  if (shouldCrawl) {
+    crawlOnStartup(slack.botClient, slack.handler, config.ownerSlackUserId)
+      .then(() => logger.info('Startup crawl complete'))
+      .catch((error) => logger.warn({ error }, 'Startup crawl failed'));
+  }
 
   // Socket Mode keeps the process alive via the WebSocket connection
 }
