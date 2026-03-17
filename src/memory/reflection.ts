@@ -137,7 +137,7 @@ async function runReflection(
 function getLastReflectionTime(db: DatabaseSync): string {
   try {
     const row = db.prepare(
-      `SELECT completed_at FROM consolidation_runs WHERE id = ? ORDER BY completed_at DESC LIMIT 1`
+      `SELECT completed_at FROM consolidation_runs WHERE id = ?`
     ).get(LAST_REFLECTION_KEY) as { completed_at: string } | undefined;
     return row?.completed_at ?? '2000-01-01T00:00:00';
   } catch {

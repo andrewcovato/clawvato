@@ -15,8 +15,9 @@ import { loadConfig } from '../../src/config.js';
 
 // Reset config before each test to avoid contamination from user's
 // ~/.clawvato/config.json (which may have ownerSlackUserId set after setup).
+// Set a default owner so tests that send messages as 'U001' are processed.
 beforeEach(() => {
-  loadConfig({ ownerSlackUserId: '' });
+  loadConfig({ ownerSlackUserId: 'U001' });
 });
 
 function createMockReactions() {
@@ -73,7 +74,7 @@ describe('Socket Mode adapter patterns', () => {
       expect(reactions.add).not.toHaveBeenCalled();
 
       // Reset
-      loadConfig({ ownerSlackUserId: undefined });
+      loadConfig({ ownerSlackUserId: 'U001' });
     });
 
     it('handler processes owner messages with debug reaction', async () => {
@@ -95,7 +96,7 @@ describe('Socket Mode adapter patterns', () => {
       expect(reactions.add).toHaveBeenCalledWith('C123', '1111.0000', 'eyes');
 
       // Reset
-      loadConfig({ ownerSlackUserId: undefined });
+      loadConfig({ ownerSlackUserId: 'U001' });
     });
   });
 
@@ -274,7 +275,7 @@ describe('Socket Mode adapter patterns', () => {
       );
 
       // Reset
-      loadConfig({ ownerSlackUserId: undefined });
+      loadConfig({ ownerSlackUserId: 'U001' });
     });
 
     it('getAssistantAPI returns null when not in assistant mode', () => {

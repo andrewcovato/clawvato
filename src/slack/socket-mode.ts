@@ -97,7 +97,7 @@ export async function createSlackConnection(config: {
   app.use(async ({ body, next }) => {
     const eventBody = body as Record<string, unknown>;
     const eventObj = eventBody.event as Record<string, unknown> | undefined;
-    logger.info({
+    logger.debug({
       bodyType: eventBody.type,
       eventType: eventObj?.type ?? 'none',
     }, 'Bolt middleware: event received');
@@ -243,6 +243,8 @@ export async function createSlackConnection(config: {
     logger.error({ error }, 'Bolt app error');
   });
 
+  let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+
   return {
     app,
     handler,
@@ -277,7 +279,7 @@ export async function createSlackConnection(config: {
       }
 
       // Heartbeat with connection health check
-      setInterval(async () => {
+      heartbeatInterval = setInterval(async () => {
         try {
           // Quick API call to verify the bot token is still working
           await botClient.auth.test();
@@ -289,6 +291,10 @@ export async function createSlackConnection(config: {
     },
 
     async stop() {
+      if (heartbeatInterval) {
+        clearInterval(heartbeatInterval);
+        heartbeatInterval = null;
+      }
       handler.shutdown();
       await app.stop();
       logger.info('Slack Socket Mode connection closed');

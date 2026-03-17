@@ -183,12 +183,12 @@ export class EventQueue extends EventEmitter {
     this.timers.set(key, setTimeout(() => {
       // Before flushing, check if typing recently happened
       const lastTyping = this.lastTypingAt.get(key) ?? 0;
-      const sinceTying = Date.now() - lastTyping;
+      const sinceTypingMs = Date.now() - lastTyping;
 
-      if (sinceTying < TYPING_GRACE_MS) {
+      if (sinceTypingMs < TYPING_GRACE_MS) {
         // Still typing — reset again with the remaining grace period
-        logger.debug({ key, sinceTypingMs: sinceTying }, 'Still typing — extending window');
-        this.resetTimer(key, TYPING_GRACE_MS - sinceTying);
+        logger.debug({ key, sinceTypingMs }, 'Still typing — extending window');
+        this.resetTimer(key, TYPING_GRACE_MS - sinceTypingMs);
         return;
       }
 

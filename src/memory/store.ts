@@ -162,9 +162,11 @@ export function findMemoriesByEntity(
 ): Memory[] {
   const limit = opts?.limit ?? 10;
   // entities is a JSON array — use LIKE for simple substring match
-  const pattern = `%"${entity}"%`;
+  // Escape LIKE wildcards in the entity to prevent injection
+  const escapedEntity = entity.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+  const pattern = `%"${escapedEntity}"%`;
   return db.prepare(
-    `SELECT * FROM memories WHERE entities LIKE ? AND valid_until IS NULL
+    `SELECT * FROM memories WHERE entities LIKE ? ESCAPE '\\' AND valid_until IS NULL
      ORDER BY importance DESC, created_at DESC LIMIT ?`
   ).all(pattern, limit) as unknown as Memory[];
 }
@@ -283,11 +285,12 @@ export function updatePerson(
   id: string,
   updates: Partial<Pick<Person, 'email' | 'slack_id' | 'role' | 'organization' | 'relationship' | 'notes' | 'timezone'>>,
 ): void {
+  const ALLOWED_KEYS = new Set(['email', 'slack_id', 'role', 'organization', 'relationship', 'notes', 'timezone']);
   const fields: string[] = [];
   const values: (string | number | null)[] = [];
 
   for (const [key, value] of Object.entries(updates)) {
-    if (value !== undefined) {
+    if (value !== undefined && ALLOWED_KEYS.has(key)) {
       fields.push(`${key} = ?`);
       values.push(value as string | number | null);
     }

@@ -123,8 +123,8 @@ export class SlackHandler {
   }): Promise<void> {
     const config = getConfig();
 
-    // Single-principal authority: ignore non-owner messages
-    if (config.ownerSlackUserId && event.user !== config.ownerSlackUserId) {
+    // Single-principal authority: block if not configured or non-owner
+    if (!config.ownerSlackUserId || event.user !== config.ownerSlackUserId) {
       logger.debug(
         { user: event.user, channel: event.channel },
         'Ignoring message from non-owner',
@@ -213,8 +213,8 @@ export class SlackHandler {
   }): Promise<void> {
     const config = getConfig();
 
-    // Single-principal authority: only the owner can use the assistant
-    if (config.ownerSlackUserId && event.user !== config.ownerSlackUserId) {
+    // Single-principal authority: block if not configured or non-owner
+    if (!config.ownerSlackUserId || event.user !== config.ownerSlackUserId) {
       logger.debug(
         { user: event.user, channel: event.channel },
         'Ignoring assistant message from non-owner',

@@ -14,9 +14,11 @@ export type CredentialKey =
   | 'github-pat';
 
 // keytar is a CJS module — dynamic import wraps it in { default: ... }
-let keytarModule: typeof import('keytar') | null = null;
+// `false` is a sentinel meaning "tried and failed" — don't retry
+let keytarModule: typeof import('keytar') | false | null = null;
 
 async function getKeytar(): Promise<typeof import('keytar') | null> {
+  if (keytarModule === false) return null;
   if (keytarModule) return keytarModule;
   try {
     const imported = await import('keytar');
@@ -25,6 +27,7 @@ async function getKeytar(): Promise<typeof import('keytar') | null> {
     return keytarModule;
   } catch {
     logger.warn('keytar not available — falling back to environment variables');
+    keytarModule = false;
     return null;
   }
 }

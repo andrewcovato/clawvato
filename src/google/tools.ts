@@ -19,6 +19,13 @@ import { google } from 'googleapis';
 import type Anthropic from '@anthropic-ai/sdk';
 import type { ToolHandlerResult } from '../mcp/slack/server.js';
 import { logger } from '../logger.js';
+import { scanForSecrets } from '../security/output-sanitizer.js';
+
+/** Sanitize error messages to avoid leaking secrets from Google API responses */
+function sanitizeErrorMessage(msg: string): string {
+  const scan = scanForSecrets(msg);
+  return scan.hasSecrets ? scan.redacted : msg;
+}
 
 export interface GoogleTool {
   definition: Anthropic.Tool;
@@ -87,7 +94,7 @@ export function createGoogleTools(
 
           return { content: `${events.length} events in the next ${daysAhead} days:\n${lines.join('\n')}` };
         } catch (error) {
-          const msg = error instanceof Error ? error.message : String(error);
+          const msg = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
           return { content: `Calendar error: ${msg}`, isError: true };
         }
       },
@@ -137,7 +144,7 @@ export function createGoogleTools(
             content: `Event created: "${summary}" on ${startTime} (ID: ${result.data.id})`,
           };
         } catch (error) {
-          const msg = error instanceof Error ? error.message : String(error);
+          const msg = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
           return { content: `Failed to create event: ${msg}`, isError: true };
         }
       },
@@ -179,7 +186,7 @@ export function createGoogleTools(
             content: `Event cancelled: "${event.data.summary ?? 'Untitled'}" (${event.data.start?.dateTime ?? event.data.start?.date ?? 'unknown time'}). Notifications sent: ${sendUpdates}.`,
           };
         } catch (error) {
-          const msg = error instanceof Error ? error.message : String(error);
+          const msg = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
           return { content: `Failed to cancel event: ${msg}`, isError: true };
         }
       },
@@ -237,7 +244,7 @@ export function createGoogleTools(
             content: `Event updated: "${result.data.summary}" (ID: ${eventId})`,
           };
         } catch (error) {
-          const msg = error instanceof Error ? error.message : String(error);
+          const msg = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
           return { content: `Failed to update event: ${msg}`, isError: true };
         }
       },
@@ -327,7 +334,7 @@ export function createGoogleTools(
 
           return { content: `Free slots (${minMinutes}+ min, ${startHour}:00-${endHour}:00):\n${slots.join('\n')}` };
         } catch (error) {
-          const msg = error instanceof Error ? error.message : String(error);
+          const msg = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
           return { content: `Calendar error: ${msg}`, isError: true };
         }
       },
@@ -364,30 +371,33 @@ export function createGoogleTools(
             return { content: `No emails found for "${query}".` };
           }
 
-          // Fetch headers for each message
-          const summaries: string[] = [];
-          for (const msg of messageIds.slice(0, maxResults)) {
-            const detail = await gmail.users.messages.get({
-              userId: 'me',
-              id: msg.id!,
-              format: 'metadata',
-              metadataHeaders: ['From', 'To', 'Subject', 'Date'],
-            });
+          // Fetch headers for each message in parallel
+          const details = await Promise.all(
+            messageIds.slice(0, maxResults).map(msg =>
+              gmail.users.messages.get({
+                userId: 'me',
+                id: msg.id!,
+                format: 'metadata',
+                metadataHeaders: ['From', 'To', 'Subject', 'Date'],
+              })
+            )
+          );
 
+          const summaries = details.map((detail, i) => {
             const headers = detail.data.payload?.headers ?? [];
             const from = headers.find(h => h.name === 'From')?.value ?? 'unknown';
             const subject = headers.find(h => h.name === 'Subject')?.value ?? 'no subject';
             const date = headers.find(h => h.name === 'Date')?.value ?? '';
             const snippet = detail.data.snippet ?? '';
 
-            summaries.push(`- **${subject}** | From: ${from} | ${date} | ID: ${msg.id}\n  ${snippet.slice(0, 150)}`);
-          }
+            return `- **${subject}** | From: ${from} | ${date} | ID: ${messageIds[i].id}\n  ${snippet.slice(0, 150)}`;
+          });
 
           return {
             content: `Found ${result.data.resultSizeEstimate ?? messageIds.length} emails for "${query}":\n\n${summaries.join('\n')}`,
           };
         } catch (error) {
-          const msg = error instanceof Error ? error.message : String(error);
+          const msg = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
           return { content: `Gmail error: ${msg}`, isError: true };
         }
       },
@@ -435,10 +445,10 @@ export function createGoogleTools(
           }
 
           return {
-            content: `From: ${from}\nTo: ${to}\nSubject: ${subject}\nDate: ${date}\n\n${body.slice(0, 3000)}`,
+            content: `From: ${from}\nTo: ${to}\nSubject: ${subject}\nDate: ${date}\n\n[EXTERNAL CONTENT]\n${body.slice(0, 3000)}\n[/EXTERNAL CONTENT]`,
           };
         } catch (error) {
-          const msg = error instanceof Error ? error.message : String(error);
+          const msg = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
           return { content: `Gmail error: ${msg}`, isError: true };
         }
       },
@@ -491,7 +501,7 @@ export function createGoogleTools(
             content: `Draft created: "${subject}" to ${to} (Draft ID: ${result.data.id}). Review and send from Gmail.`,
           };
         } catch (error) {
-          const msg = error instanceof Error ? error.message : String(error);
+          const msg = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
           return { content: `Gmail error: ${msg}`, isError: true };
         }
       },
@@ -539,7 +549,7 @@ export function createGoogleTools(
             content: `RSVP'd "${response}" to "${event.data.summary ?? 'event'}"`,
           };
         } catch (error) {
-          const msg = error instanceof Error ? error.message : String(error);
+          const msg = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
           return { content: `Failed to RSVP: ${msg}`, isError: true };
         }
       },
@@ -593,7 +603,7 @@ export function createGoogleTools(
 
           return { content: `Free/busy for next ${daysAhead} days:\n\n${lines.join('\n\n')}` };
         } catch (error) {
-          const msg = error instanceof Error ? error.message : String(error);
+          const msg = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
           return { content: `Free/busy check failed: ${msg}`, isError: true };
         }
       },
@@ -636,7 +646,7 @@ export function createGoogleTools(
 
           return { content: lines.join('\n') };
         } catch (error) {
-          const msg = error instanceof Error ? error.message : String(error);
+          const msg = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
           return { content: `Failed to get event: ${msg}`, isError: true };
         }
       },
@@ -670,7 +680,7 @@ export function createGoogleTools(
             content: `Email sent (Message ID: ${result.data.id}). Draft has been removed.`,
           };
         } catch (error) {
-          const msg = error instanceof Error ? error.message : String(error);
+          const msg = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
           return { content: `Failed to send draft: ${msg}`, isError: true };
         }
       },
@@ -742,7 +752,7 @@ export function createGoogleTools(
             content: `Reply draft created to ${from} | Subject: "${replySubject}" (Draft ID: ${result.data.id}). Review and send with google_gmail_send_draft.`,
           };
         } catch (error) {
-          const msg = error instanceof Error ? error.message : String(error);
+          const msg = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
           return { content: `Failed to create reply: ${msg}`, isError: true };
         }
       },
@@ -785,7 +795,7 @@ export function createGoogleTools(
 
           return { content: `Labels updated on message ${messageId}. ${actions.join('. ')}` };
         } catch (error) {
-          const msg = error instanceof Error ? error.message : String(error);
+          const msg = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
           return { content: `Failed to update labels: ${msg}`, isError: true };
         }
       },
@@ -847,7 +857,7 @@ export function createGoogleTools(
 
           return { content: `Found ${files.length} files:\n${lines.join('\n')}` };
         } catch (error) {
-          const msg = error instanceof Error ? error.message : String(error);
+          const msg = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
           return { content: `Drive error: ${msg}`, isError: true };
         }
       },
@@ -892,7 +902,7 @@ export function createGoogleTools(
 
           return { content: lines.join('\n') };
         } catch (error) {
-          const msg = error instanceof Error ? error.message : String(error);
+          const msg = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
           return { content: `Drive error: ${msg}`, isError: true };
         }
       },

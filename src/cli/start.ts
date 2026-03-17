@@ -58,8 +58,8 @@ export async function startAgent(): Promise<void> {
 
   // ── Verify owner config ──
   if (!config.ownerSlackUserId) {
-    logger.warn('No ownerSlackUserId configured — agent will not verify senders');
-    logger.warn('Set with: clawvato config set ownerSlackUserId YOUR_SLACK_USER_ID');
+    logger.error('OWNER_SLACK_USER_ID is required. Set it via environment variable or clawvato config set ownerSlackUserId YOUR_ID');
+    process.exit(1);
   }
 
   // ── Log startup summary ──
