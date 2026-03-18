@@ -267,6 +267,53 @@ async function getAllSubfolderIds(
   return allIds;
 }
 
+/**
+ * Store a file summary as a memory, linking it back to the document via source.
+ * This puts file knowledge into the same pipeline as Slack-extracted facts.
+ */
+function storeFileSummaryAsMemory(
+  db: DatabaseSync,
+  fileId: string,
+  fileName: string,
+  summary: string,
+  entities: string[],
+  modifiedTime: string,
+): void {
+  const source = `drive:${fileId}:${modifiedTime}`;
+  const content = `File "${fileName}": ${summary}`;
+
+  // Check for existing memory from this file and supersede if needed
+  const existingPattern = `drive:${fileId}:%`;
+  const existing = db.prepare(`
+    SELECT id, source FROM memories
+    WHERE source LIKE ? AND valid_until IS NULL AND type = 'fact'
+    ORDER BY created_at DESC LIMIT 1
+  `).get(existingPattern) as { id: string; source: string } | undefined;
+
+  const newId = insertMemory(db, {
+    type: 'fact',
+    content,
+    source,
+    importance: 5,
+    confidence: 0.85,
+    entities,
+  });
+
+  if (existing) {
+    supersedeMemory(db, existing.id, newId);
+    deleteEmbedding(db, existing.id);
+  }
+
+  // Embed the new memory
+  if (hasVectorSupport(db)) {
+    embedBatch([content]).then(embeddings => {
+      if (embeddings.length > 0) {
+        insertEmbedding(db, newId, embeddings[0]);
+      }
+    }).catch(() => { /* non-critical */ });
+  }
+}
+
 // ── Sync engine ──
 
 /**
@@ -387,6 +434,11 @@ export async function syncDrive(
         deep_read_at: null,
         status: 'active',
       });
+
+      // Store summary as a memory so it flows through the standard retrieval pipeline
+      if (summary) {
+        storeFileSummaryAsMemory(db, file.id, file.name, summary, fileEntities, file.modifiedTime);
+      }
       newFiles++;
 
     } else if (existing.modified_time !== file.modifiedTime) {
@@ -423,6 +475,12 @@ export async function syncDrive(
 
         // Flag memories from old version as potentially stale
         flagStaleMemories(db, file.id, file.modifiedTime);
+
+        // Update the summary memory
+        if (summary) {
+          const entityList = typeof fileEntities === 'string' ? JSON.parse(fileEntities) : fileEntities;
+          storeFileSummaryAsMemory(db, file.id, file.name, summary, entityList, file.modifiedTime);
+        }
         updatedFiles++;
       } else {
         // Content unchanged — just update sync time

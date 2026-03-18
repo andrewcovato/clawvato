@@ -13,7 +13,7 @@
 
 import type { DatabaseSync } from 'node:sqlite';
 import { logger } from '../logger.js';
-import { findDocumentsByEntity, type Document } from '../google/drive-sync.js';
+// Document summaries are stored as memories — no special document search needed
 import {
   findPersonByName,
   findMemoriesByType,
@@ -217,58 +217,8 @@ export async function retrieveContext(
     }
   }
 
-  // ── 4. Related documents from file catalog ──
-  const seenDocIds = new Set<string>();
-  for (const name of names) {
-    if (tokensUsed >= budget) break;
-    try {
-      const docs = findDocumentsByEntity(db, name, { limit: 3 });
-      for (const doc of docs) {
-        if (tokensUsed >= budget || seenDocIds.has(doc.id)) continue;
-        seenDocIds.add(doc.id);
-        const summary = doc.summary ? `: ${doc.summary.slice(0, 100)}` : '';
-        const line = `File: ${doc.name}${summary} (ID: ${doc.source_id})`;
-        const tokens = estimateTokens(line);
-        if (tokensUsed + tokens <= budget) {
-          parts.push(line);
-          tokensUsed += tokens;
-          memoriesRetrieved++;
-        }
-      }
-    } catch {
-      // documents table may not exist yet — non-critical
-    }
-  }
-
-  // Also search documents by keywords
-  if (tokensUsed < budget && keywords.length > 0) {
-    try {
-      const keywordQuery = keywords.slice(0, 3).join('%');
-      const docs = db.prepare(`
-        SELECT * FROM documents
-        WHERE status = 'active'
-          AND (name LIKE ? OR summary LIKE ?)
-        ORDER BY modified_time DESC LIMIT 3
-      `).all(`%${keywordQuery}%`, `%${keywordQuery}%`) as unknown as Document[];
-
-      for (const doc of docs) {
-        if (tokensUsed >= budget || seenDocIds.has(doc.id)) continue;
-        seenDocIds.add(doc.id);
-        const summary = doc.summary ? `: ${doc.summary.slice(0, 100)}` : '';
-        const line = `File: ${doc.name}${summary} (ID: ${doc.source_id})`;
-        const tokens = estimateTokens(line);
-        if (tokensUsed + tokens <= budget) {
-          parts.push(line);
-          tokensUsed += tokens;
-          memoriesRetrieved++;
-        }
-      }
-    } catch {
-      // documents table may not exist — non-critical
-    }
-  }
-
-  // ── 5. Semantic + keyword search for relevant facts/decisions ──
+  // ── 4. Semantic + keyword search for relevant facts/decisions ──
+  // (File summaries are stored as memories — they surface here naturally)
   if (tokensUsed < budget && keywords.length > 0) {
     const ftsQuery = keywords.slice(0, 5).join(' OR ');
     let searchResults: Memory[];
