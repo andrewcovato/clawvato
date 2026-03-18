@@ -131,11 +131,28 @@ The bot listens to all messages in joined channels like a human would.
 | `google_gmail_reply` | Reply/reply-all (creates draft first) |
 | `google_gmail_label` | Star, archive, mark read, label |
 
-#### Google Drive (2 tools)
+#### Google Drive (5 tools)
 | Tool | Action |
 |---|---|
 | `google_drive_search` | Find files by name/type |
 | `google_drive_get_file` | Metadata, sharing, permissions |
+| `google_drive_sync` | Scan Drive/folder, index files, generate summaries |
+| `google_drive_read_content` | Deep read — export content, extract facts into memory |
+| `google_drive_list_known` | Browse indexed files with summaries |
+
+### Drive Knowledge Sync
+
+The bot maintains a living map of your Drive files using a three-tier model:
+
+- **Tier 1 (File Index)**: Metadata — name, type, owner, modified time. Stored in `documents` table.
+- **Tier 2 (Summaries)**: Haiku-generated conclusions about each file, stored as memories. Folder path used as evidence for categorization ("Acme Corp is a client" not "File is in Clients folder").
+- **Tier 3 (Deep Read)**: Full content export + fact extraction into memory. On-demand.
+
+Sync uses hash-based delta detection — unchanged files are skipped. Self-healing checks that every file summary memory matches the expected content; if the format evolves, stale memories are automatically superseded on next sync.
+
+**Conflict resolution**: Owner's direct Slack statement > recent document > old document > inference. When a document contradicts a recent owner statement, the owner's version is preserved.
+
+**Current limitation**: Only Google-native files (Docs, Sheets, Slides) can be content-exported. Uploaded files (.docx, .pdf, .xlsx) need expanded format support (see backlog).
 
 ## Tunable Parameters
 
@@ -258,7 +275,7 @@ railway up --detach -m "deploy"
 ### Running Tests
 
 ```bash
-npm test          # 259 tests across 20 files
+npm test          # 267 tests across 21 files
 npm run build     # TypeScript compile
 npm run lint      # Type-check without emitting
 ```
@@ -299,6 +316,10 @@ Dockerfile        # Railway deployment (node:22-slim)
 | Gmail draft-then-send | Safety — never auto-sends email without confirmation |
 | keytar optional | Enables headless/Linux deployment via env vars |
 | gws CLI for OAuth, googleapis for runtime | Best of both — easy setup, fast execution |
+| File summaries as memories, not separate table | Unified retrieval — one pipeline searches everything |
+| Conclusion-style summaries | "Acme is a client" not "File contains proposal" — agent reasons better |
+| Self-healing content comparison | Format improvements auto-propagate on next sync |
+| Folder path as evidence, not gospel | Files can be misfiled — content wins over structure |
 
 ## License
 
