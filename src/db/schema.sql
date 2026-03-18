@@ -176,6 +176,7 @@ CREATE TABLE IF NOT EXISTS documents (
   summary TEXT,
   last_synced_at TEXT,
   deep_read_at TEXT,
+  entities TEXT DEFAULT '[]',         -- JSON array of people/topics mentioned
   status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'removed', 'error')),
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -183,6 +184,7 @@ CREATE TABLE IF NOT EXISTS documents (
 CREATE INDEX IF NOT EXISTS idx_documents_source ON documents(source_type, source_id);
 CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);
 CREATE INDEX IF NOT EXISTS idx_documents_name ON documents(name);
+CREATE INDEX IF NOT EXISTS idx_documents_entities ON documents(entities);
 
 -- General-purpose agent state (replaces sentinel rows in other tables)
 CREATE TABLE IF NOT EXISTS agent_state (

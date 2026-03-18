@@ -7,11 +7,13 @@
  * Retrieval order (highest value first):
  * 1. People mentioned in the message (structured lookup, ~30-50 tokens each)
  * 2. Preferences relevant to the action type (structured, ~15-20 tokens each)
- * 3. Keyword search for relevant facts/decisions (FTS5, ~15-20 tokens each)
+ * 3. Related documents from the file catalog (~20-40 tokens each)
+ * 4. Keyword search for relevant facts/decisions (FTS5, ~15-20 tokens each)
  */
 
 import type { DatabaseSync } from 'node:sqlite';
 import { logger } from '../logger.js';
+import { findDocumentsByEntity, type Document } from '../google/drive-sync.js';
 import {
   findPersonByName,
   findMemoriesByType,
@@ -215,7 +217,58 @@ export async function retrieveContext(
     }
   }
 
-  // ── 4. Semantic + keyword search for relevant facts/decisions ──
+  // ── 4. Related documents from file catalog ──
+  const seenDocIds = new Set<string>();
+  for (const name of names) {
+    if (tokensUsed >= budget) break;
+    try {
+      const docs = findDocumentsByEntity(db, name, { limit: 3 });
+      for (const doc of docs) {
+        if (tokensUsed >= budget || seenDocIds.has(doc.id)) continue;
+        seenDocIds.add(doc.id);
+        const summary = doc.summary ? `: ${doc.summary.slice(0, 100)}` : '';
+        const line = `File: ${doc.name}${summary} (ID: ${doc.source_id})`;
+        const tokens = estimateTokens(line);
+        if (tokensUsed + tokens <= budget) {
+          parts.push(line);
+          tokensUsed += tokens;
+          memoriesRetrieved++;
+        }
+      }
+    } catch {
+      // documents table may not exist yet — non-critical
+    }
+  }
+
+  // Also search documents by keywords
+  if (tokensUsed < budget && keywords.length > 0) {
+    try {
+      const keywordQuery = keywords.slice(0, 3).join('%');
+      const docs = db.prepare(`
+        SELECT * FROM documents
+        WHERE status = 'active'
+          AND (name LIKE ? OR summary LIKE ?)
+        ORDER BY modified_time DESC LIMIT 3
+      `).all(`%${keywordQuery}%`, `%${keywordQuery}%`) as unknown as Document[];
+
+      for (const doc of docs) {
+        if (tokensUsed >= budget || seenDocIds.has(doc.id)) continue;
+        seenDocIds.add(doc.id);
+        const summary = doc.summary ? `: ${doc.summary.slice(0, 100)}` : '';
+        const line = `File: ${doc.name}${summary} (ID: ${doc.source_id})`;
+        const tokens = estimateTokens(line);
+        if (tokensUsed + tokens <= budget) {
+          parts.push(line);
+          tokensUsed += tokens;
+          memoriesRetrieved++;
+        }
+      }
+    } catch {
+      // documents table may not exist — non-critical
+    }
+  }
+
+  // ── 5. Semantic + keyword search for relevant facts/decisions ──
   if (tokensUsed < budget && keywords.length > 0) {
     const ftsQuery = keywords.slice(0, 5).join(' OR ');
     let searchResults: Memory[];

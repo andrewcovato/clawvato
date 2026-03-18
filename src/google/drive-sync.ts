@@ -47,6 +47,7 @@ export interface Document {
   modified_time: string | null;
   content_hash: string | null;
   summary: string | null;
+  entities: string; // JSON array
   last_synced_at: string | null;
   deep_read_at: string | null;
   status: string;
@@ -68,9 +69,12 @@ export interface DeepReadResult {
 
 // ── Summary generation prompt ──
 
-const SUMMARY_PROMPT = `Summarize this document in 2-3 sentences. Focus on: what it is, what it contains, and who it's relevant to. Be specific enough that someone could decide whether to read it based on your summary alone.
+const SUMMARY_PROMPT = `Analyze this document and return a JSON object with:
+- "summary": 2-3 sentence summary — what it is, what it contains, who it's relevant to
+- "entities": array of person names, company names, and key topics mentioned
 
-Return ONLY the summary, no preamble.`;
+Be specific enough that someone could decide whether to read it based on your summary alone.
+Return ONLY valid JSON, no markdown.`;
 
 // ── Fact extraction from document content ──
 
@@ -105,16 +109,17 @@ export function upsertDocument(
   doc: Omit<Document, 'id' | 'created_at'> & { id?: string },
 ): string {
   const existing = getDocument(db, doc.source_type, doc.source_id);
+  const entities = doc.entities ?? '[]';
   if (existing) {
     db.prepare(`
       UPDATE documents SET name = ?, mime_type = ?, folder_path = ?, owner = ?,
-        modified_time = ?, content_hash = ?, summary = ?, last_synced_at = ?,
+        modified_time = ?, content_hash = ?, summary = ?, entities = ?, last_synced_at = ?,
         deep_read_at = ?, status = ?
       WHERE id = ?
     `).run(
       doc.name, doc.mime_type ?? null, doc.folder_path ?? null, doc.owner ?? null,
       doc.modified_time ?? null, doc.content_hash ?? null, doc.summary ?? null,
-      doc.last_synced_at ?? null, doc.deep_read_at ?? null, doc.status,
+      entities, doc.last_synced_at ?? null, doc.deep_read_at ?? null, doc.status,
       existing.id,
     );
     return existing.id;
@@ -123,13 +128,13 @@ export function upsertDocument(
   const id = doc.id ?? generateId();
   db.prepare(`
     INSERT INTO documents (id, source_type, source_id, name, mime_type, folder_path, owner,
-      modified_time, content_hash, summary, last_synced_at, deep_read_at, status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      modified_time, content_hash, summary, entities, last_synced_at, deep_read_at, status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id, doc.source_type, doc.source_id, doc.name, doc.mime_type ?? null,
     doc.folder_path ?? null, doc.owner ?? null, doc.modified_time ?? null,
-    doc.content_hash ?? null, doc.summary ?? null, doc.last_synced_at ?? null,
-    doc.deep_read_at ?? null, doc.status,
+    doc.content_hash ?? null, doc.summary ?? null, entities,
+    doc.last_synced_at ?? null, doc.deep_read_at ?? null, doc.status,
   );
   return id;
 }
@@ -140,6 +145,21 @@ export function listDocuments(db: DatabaseSync, opts?: { status?: string; limit?
   return db.prepare(
     'SELECT * FROM documents WHERE status = ? ORDER BY modified_time DESC LIMIT ?'
   ).all(status, limit) as unknown as Document[];
+}
+
+/**
+ * Find documents mentioning a specific entity (person, company, topic).
+ */
+export function findDocumentsByEntity(db: DatabaseSync, entity: string, opts?: { limit?: number }): Document[] {
+  const limit = opts?.limit ?? 5;
+  const escapedEntity = entity.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+  // Search both name and entities JSON array
+  return db.prepare(`
+    SELECT * FROM documents
+    WHERE status = 'active'
+      AND (entities LIKE ? ESCAPE '\\' OR name LIKE ? ESCAPE '\\')
+    ORDER BY modified_time DESC LIMIT ?
+  `).all(`%${escapedEntity}%`, `%${escapedEntity}%`, limit) as unknown as Document[];
 }
 
 export function findDocumentByName(db: DatabaseSync, name: string): Document | null {
@@ -344,8 +364,11 @@ export async function syncDrive(
       const contentHash = content ? hashContent(content) : null;
 
       let summary: string | null = null;
+      let fileEntities: string[] = [];
       if (content && content.length > 50) {
-        summary = await generateSummary(client, model, file.name, content);
+        const result = await generateSummary(client, model, file.name, content);
+        summary = result.summary;
+        fileEntities = result.entities;
         summariesGenerated++;
       }
 
@@ -359,6 +382,7 @@ export async function syncDrive(
         modified_time: file.modifiedTime,
         content_hash: contentHash,
         summary,
+        entities: JSON.stringify(fileEntities),
         last_synced_at: now,
         deep_read_at: null,
         status: 'active',
@@ -373,8 +397,11 @@ export async function syncDrive(
       if (contentHash !== existing.content_hash) {
         // Content actually changed — re-summarize
         let summary = existing.summary;
+        let fileEntities = existing.entities;
         if (content && content.length > 50) {
-          summary = await generateSummary(client, model, file.name, content);
+          const result = await generateSummary(client, model, file.name, content);
+          summary = result.summary;
+          fileEntities = JSON.stringify(result.entities);
           summariesGenerated++;
         }
 
@@ -388,6 +415,7 @@ export async function syncDrive(
           modified_time: file.modifiedTime,
           content_hash: contentHash,
           summary,
+          entities: fileEntities,
           last_synced_at: now,
           deep_read_at: null, // invalidate deep read
           status: 'active',
@@ -585,18 +613,18 @@ function flagStaleMemories(db: DatabaseSync, fileId: string, newModifiedTime: st
 }
 
 /**
- * Generate a Tier 2 summary for a file.
+ * Generate a Tier 2 summary + entity extraction for a file.
  */
 async function generateSummary(
   client: Anthropic,
   model: string,
   fileName: string,
   content: string,
-): Promise<string> {
+): Promise<{ summary: string; entities: string[] }> {
   try {
     const response = await client.messages.create({
       model,
-      max_tokens: 200,
+      max_tokens: 300,
       system: SUMMARY_PROMPT,
       messages: [{ role: 'user', content: `File: "${fileName}"\n\n${content.slice(0, 2000)}` }],
     });
@@ -606,9 +634,19 @@ async function generateSummary(
       .map(b => b.text)
       .join('');
 
-    return text.trim();
+    const jsonStr = text.replace(/^```json?\s*/i, '').replace(/\s*```$/, '').trim();
+    try {
+      const parsed = JSON.parse(jsonStr);
+      return {
+        summary: String(parsed.summary ?? '').trim() || `[Summary unavailable for ${fileName}]`,
+        entities: Array.isArray(parsed.entities) ? parsed.entities.map(String) : [],
+      };
+    } catch {
+      // Haiku returned plain text instead of JSON — use as summary
+      return { summary: text.trim(), entities: [] };
+    }
   } catch (error) {
     logger.error({ error, fileName }, 'Summary generation failed');
-    return `[Summary unavailable for ${fileName}]`;
+    return { summary: `[Summary unavailable for ${fileName}]`, entities: [] };
   }
 }
