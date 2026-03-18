@@ -475,12 +475,14 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
     toolDefs.push({
       name: 'google_drive_list_known',
       description:
-        'List files the bot already knows about from previous syncs. Returns names, summaries, and last sync times. ' +
-        'Use before deep-reading to find the right file.',
+        'List files the bot already knows about from previous syncs. Returns names, folder paths, summaries, and last sync times. ' +
+        'Supports filtering by folder path (e.g., "/Clients/Coles") or file name. ' +
+        'Use to browse a specific folder or find a specific file before deep-reading.',
       input_schema: {
         type: 'object' as const,
         properties: {
           search: { type: 'string', description: 'Optional: filter by file name' },
+          folder_path: { type: 'string', description: 'Optional: filter by folder path (e.g., "/Clients/Coles"). Shows all files under this path, including subfolders.' },
           limit: { type: 'number', description: 'Max results (default 20)' },
         },
         required: [],
@@ -489,8 +491,34 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
     toolHandlers.set('google_drive_list_known', async (args) => {
       const db = getDb();
       const search = args.search as string | undefined;
+      const folderPath = args.folder_path as string | undefined;
       const limit = Math.min((args.limit as number) ?? 20, 50);
 
+      // Folder path filter — list everything under a specific path
+      if (folderPath) {
+        const normalizedPath = folderPath.replace(/\/+$/, ''); // strip trailing slash
+        const docs = db.prepare(`
+          SELECT * FROM documents
+          WHERE status = 'active' AND folder_path LIKE ?
+          ORDER BY folder_path, name
+          LIMIT ?
+        `).all(`%${normalizedPath}%`, limit) as unknown as import('../google/drive-sync.js').Document[];
+
+        if (docs.length === 0) {
+          return { content: `No files found under "${folderPath}". Try google_drive_sync with this folder first.` };
+        }
+
+        const lines = docs.map(d => {
+          const path = d.folder_path && d.folder_path !== '/' ? ` | ${d.folder_path}` : '';
+          const summary = d.summary ? ` — ${d.summary.slice(0, 100)}` : '';
+          const deepRead = d.deep_read_at ? ' [deep read]' : '';
+          return `- ${d.name}${path} | ${d.modified_time} | ID: ${d.source_id}${deepRead}${summary}`;
+        });
+
+        return { content: `${docs.length} files under "${folderPath}":\n${lines.join('\n')}` };
+      }
+
+      // Name search
       if (search) {
         const doc = findDocumentByName(db, search);
         if (!doc) return { content: `No known files matching "${search}". Try google_drive_sync first.` };
@@ -501,6 +529,7 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
         };
       }
 
+      // No filter — list all
       const docs = listDocuments(db, { limit });
       if (docs.length === 0) {
         return { content: 'No files indexed yet. Use google_drive_sync to scan Drive.' };
