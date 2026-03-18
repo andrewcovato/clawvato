@@ -1,0 +1,99 @@
+{
+  "project": {
+    "name": "Clawvato",
+    "description": "Always-on personal AI agent — your chief of staff",
+    "version": "0.1.0",
+    "status": "active",
+    "phase": "build",
+    "startDate": "2026-03-06",
+    "adoptedDate": "2026-03-07"
+  },
+  "tracks": {
+    "A": { "name": "Core Foundation", "status": "complete", "completedDate": "2026-03-06" },
+    "B": { "name": "Slack MCP + Agent Core", "status": "complete", "completedDate": "2026-03-17" },
+    "C": { "name": "Google Workspace", "status": "complete", "completedDate": "2026-03-17", "notes": "19 tools: Calendar (8), Gmail (6), Drive (5). Drive sync needs file type expansion." },
+    "D": { "name": "Memory + Embeddings", "status": "complete", "completedDate": "2026-03-17" },
+    "E": { "name": "Workflow Engine + Scheduling", "status": "not_started", "dependsOn": ["B", "C"] },
+    "F": { "name": "Security + Training Wheels (undo)", "status": "partial", "notes": "Security hardened. Training wheels confirmation gate still MVP." },
+    "G": { "name": "GitHub + Filesystem + Web Research", "status": "not_started", "dependsOn": ["A"] },
+    "H": { "name": "Proactive Intelligence", "status": "not_started", "dependsOn": ["D", "E", "F"] }
+  },
+  "infrastructure": {
+    "local": "macOS, npx tsx src/cli/index.ts start",
+    "cloud": "Railway (Growth By Science workspace)",
+    "railwayProject": "99ecf42e-5142-442c-a79a-2f6fd0864ecf",
+    "railwayService": "clawvato",
+    "dataVolume": "/data (Railway persistent volume)",
+    "deployMethod": "Dockerfile, railway up --detach",
+    "googleAuth": "gws CLI → OAuth export → Railway env vars"
+  },
+  "metrics": {
+    "testFiles": 21,
+    "testCount": 267,
+    "testsPassing": 267,
+    "tools": { "slack": 7, "google": 19, "memory": 2, "total": 28 }
+  },
+  "knownIssues": [
+    {
+      "id": "TW-001",
+      "title": "Training wheels confirmation gate is MVP",
+      "severity": "medium",
+      "affectedFile": "src/agent/index.ts"
+    },
+    {
+      "id": "DEEPREAD-001",
+      "title": "Optimize deep reading — skip re-read if file unchanged",
+      "severity": "low",
+      "description": "When user says 're-read', bot deep-reads even if file hasn't changed and facts are already in memory. Add tool-level guard to check deep_read_at vs modified_time.",
+      "affectedFile": "src/agent/index.ts",
+      "discoveredDate": "2026-03-18"
+    },
+    {
+      "id": "DRIVE-002",
+      "title": "Drive folder scope — allow-list of folder IDs",
+      "severity": "low",
+      "description": "google_drive_search queries all of Drive. Add optional config-level scopedFolders allow-list to restrict search to specific folders.",
+      "discoveredDate": "2026-03-18"
+    },
+    {
+      "id": "OBSIDIAN-001",
+      "title": "Obsidian integration layer — human visibility for agent memory",
+      "severity": "low",
+      "description": "Export/sync memories as Markdown files in an Obsidian vault for browsing, graph visualization, and manual curation. Optionally bidirectional (edits in Obsidian sync back to DB). SQLite stays as runtime engine.",
+      "discoveredDate": "2026-03-18"
+    }
+  ],
+  "currentSprint": {
+    "id": "S2",
+    "name": "Integrations + Polish",
+    "goals": [
+      "Expand Drive file type support (DRIVE-001)",
+      "Track E: Workflow Engine + Scheduling",
+      "Track G: GitHub + Web Research",
+      "Training wheels confirmation gate (TW-001)",
+      "One-click deploy flow"
+    ],
+    "progress": "Drive sync architecture complete, needs file type expansion"
+  },
+  "lastSession": {
+    "number": 10,
+    "date": "2026-03-18",
+    "type": "feature + security + quality + bugfix"
+  },
+  "thingsNotToRedo": [
+    "Don't split schema.sql on semicolons",
+    "Agent SDK is REMOVED — don't re-add it",
+    "schema.sql must be explicitly copied in Dockerfile",
+    "Google OAuth: gws CLI for setup, googleapis npm for runtime",
+    "Don't hard-code bot responses",
+    "Startup crawl skips if offline <5 min",
+    "Non-owner messages tagged [EXTERNAL]",
+    "Audit log sanitized BEFORE writing",
+    "keytar uses false sentinel — logs warning only once",
+    "File summaries are conclusions, not descriptions — stored as memories",
+    "Self-healing compares expected vs actual memory content",
+    "Folder path is evidence, not gospel — content wins over structure",
+    "One-time migrations use agent_state guard keys"
+  ],
+  "lastUpdated": "2026-03-18"
+}

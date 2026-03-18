@@ -373,9 +373,9 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
     toolDefs.push({
       name: 'google_drive_read_content',
       description:
-        'Deep read a specific file — exports full content and extracts facts into memory. ' +
-        'Use when asked "what does this file say?" or "read the Q2 budget". ' +
-        'Facts are automatically stored in memory for future retrieval.',
+        'Read a file from Drive — returns the actual file content so you can answer questions about it. ' +
+        'Also extracts facts into long-term memory in the background. ' +
+        'Use when asked about a specific document, SOW, proposal, deck, etc.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -387,17 +387,50 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
     toolHandlers.set('google_drive_read_content', async (args) => {
       const fileId = args.file_id as string;
       const db = getDb();
+      const driveApi = google.drive({ version: 'v3', auth: googleAuth });
+
       try {
-        const result = await deepReadFile(googleAuth, db, anthropicClient, config.models.classifier, fileId);
+        // Get file metadata
+        const fileMeta = await driveApi.files.get({
+          fileId,
+          fields: 'id, name, mimeType, modifiedTime',
+        });
+        const name = fileMeta.data.name ?? 'Unknown';
+        const mimeType = fileMeta.data.mimeType ?? '';
+
+        // Get file content using the unified extraction pipeline
+        const { getFileContent } = await import('../google/drive-sync.js');
+        const extracted = await getFileContent(driveApi, fileId, mimeType);
+
+        if (!extracted) {
+          return { content: `Could not read "${name}" — unsupported file type (${mimeType}).` };
+        }
+
+        // For text content, return it directly so the agent can use it
+        let contentForAgent = '';
+        if (extracted.kind === 'text') {
+          contentForAgent = extracted.text;
+        } else if (extracted.kind === 'document' || extracted.kind === 'image') {
+          // PDF/image — can't return raw bytes as tool content,
+          // fall back to deep read extraction
+          contentForAgent = '[Binary file — facts extracted below]';
+        }
+
+        // Run fact extraction in background (fire-and-forget)
+        deepReadFile(googleAuth, db, anthropicClient, config.models.classifier, fileId)
+          .then(result => {
+            logger.info({ fileId, name, factsExtracted: result.factsExtracted }, 'Background deep read complete');
+          })
+          .catch(error => {
+            logger.warn({ error: error instanceof Error ? error.message : String(error), fileId }, 'Background deep read failed');
+          });
+
         return {
-          content: `Deep read complete: ${result.factsExtracted} facts extracted into memory. ` +
-            (result.conflictsFound > 0
-              ? `${result.conflictsFound} conflicts detected with existing knowledge — owner's statements preserved.`
-              : 'No conflicts with existing knowledge.'),
+          content: `File: "${name}" (${mimeType})\n\n${contentForAgent}`,
         };
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        return { content: `Deep read failed: ${msg}`, isError: true };
+        return { content: `Failed to read file: ${msg}`, isError: true };
       }
     });
 

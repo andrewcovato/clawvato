@@ -221,7 +221,7 @@ async function downloadFileBuffer(
  * Get content from any Drive file — Google-native or uploaded binary.
  * Tries Google export first, then falls back to download + extraction.
  */
-async function getFileContent(
+export async function getFileContent(
   drive: ReturnType<typeof google.drive>,
   fileId: string,
   mimeType: string,
