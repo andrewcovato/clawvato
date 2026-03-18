@@ -196,6 +196,18 @@ Slack interaction parameters:
 | Slow task threshold | 60s | `src/slack/handler.ts` | When to show ⏳ status |
 | Startup crawl skip | 5 min | `src/cli/start.ts` | Skip crawl if offline less than this |
 
+## Epistemology
+
+The bot operates as a humble scientist — persistently skeptical of its own knowledge:
+
+- **Source tracing**: When retrieving a memory or fact, considers the source. A direct owner statement is stronger than an inference from a file name. If a belief can't be traced to a specific, reliable source, the bot says so.
+- **Owner authority**: When memories conflict with what the owner is saying now, trusts the owner.
+- **Transparent reasoning**: When making categorizations or judgments (like "X is a client"), shows its reasoning and invites correction.
+- **Named assumptions**: If an answer depends on an assumption, names the assumption.
+- **Anti-echo-chamber**: Doesn't reinforce weak memories by repeating them. If something is uncertain, flags it and offers to verify.
+
+This was added after discovering the bot was "laundering memory assumptions as ground truth" — confidently presenting low-quality early extractions as authoritative facts. The epistemology section ensures the bot is honest about what it knows vs what it's guessing.
+
 ## Security Model
 
 **Single-principal authority**: Only the owner (identified by `OWNER_SLACK_USER_ID`) can instruct the bot. This is **required** — the bot will not start without it configured. If unset, startup fails hard.
@@ -329,6 +341,8 @@ Dockerfile        # Railway deployment (node:22-slim)
 | Folder path as evidence, not gospel | Files can be misfiled — content wins over structure |
 | Sleep/wake working context | Never loses operational details — sleeps after 14 days, wakes on query match |
 | Three memory tiers | Working context (active ops) + Slack (short-term) + DB (long-term) |
+| Epistemological humility | Bot traces beliefs to sources, flags uncertainty, invites correction |
+| Folder path map (BFS) | Builds complete folder→path map upfront instead of per-file API calls |
 
 ## License
 
