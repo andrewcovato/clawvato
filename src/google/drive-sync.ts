@@ -275,12 +275,24 @@ function storeFileSummaryAsMemory(
   db: DatabaseSync,
   fileId: string,
   fileName: string,
+  folderPath: string | null,
   summary: string,
   entities: string[],
   modifiedTime: string,
 ): void {
   const source = `drive:${fileId}:${modifiedTime}`;
-  const content = `File "${fileName}": ${summary}`;
+  const pathLabel = folderPath && folderPath !== '/' ? ` (in ${folderPath})` : '';
+  const content = `File "${fileName}"${pathLabel}: ${summary}`;
+
+  // Add folder name as an entity for category-based retrieval
+  if (folderPath && folderPath !== '/') {
+    const folderParts = folderPath.split('/').filter(Boolean);
+    for (const part of folderParts) {
+      if (!entities.includes(part)) {
+        entities.push(part);
+      }
+    }
+  }
 
   // Check for existing memory from this file and supersede if needed
   const existingPattern = `drive:${fileId}:%`;
@@ -437,7 +449,7 @@ export async function syncDrive(
 
       // Store summary as a memory so it flows through the standard retrieval pipeline
       if (summary) {
-        storeFileSummaryAsMemory(db, file.id, file.name, summary, fileEntities, file.modifiedTime);
+        storeFileSummaryAsMemory(db, file.id, file.name, folderPath, summary, fileEntities, file.modifiedTime);
       }
       newFiles++;
 
@@ -479,7 +491,7 @@ export async function syncDrive(
         // Update the summary memory
         if (summary) {
           const entityList = typeof fileEntities === 'string' ? JSON.parse(fileEntities) : fileEntities;
-          storeFileSummaryAsMemory(db, file.id, file.name, summary, entityList, file.modifiedTime);
+          storeFileSummaryAsMemory(db, file.id, file.name, existing.folder_path, summary, entityList, file.modifiedTime);
         }
         updatedFiles++;
       } else {
