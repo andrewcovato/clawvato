@@ -23,6 +23,7 @@ import { google } from 'googleapis';
 import { getGoogleAuth } from '../google/auth.js';
 import { createGoogleTools } from '../google/tools.js';
 import { syncDrive, deepReadFile, listDocuments, findDocumentByName } from '../google/drive-sync.js';
+import { scanEmail, getThreadExtractionState } from '../google/email-scan.js';
 import { retrieveContext } from '../memory/retriever.js';
 import { extractFacts, extractEmailFacts, storeExtractionResult } from '../memory/extractor.js';
 import { maybeReflect } from '../memory/reflection.js';
@@ -322,8 +323,8 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
       toolHandlers.set(tool.definition.name, tool.handler);
     }
 
-    // Override gmail_read to extract facts into memory in the background
-    // Uses the email-specific extraction prompt for richer commitment/action-item tracking
+    // Override gmail_read to extract facts with thread-based source keys
+    // Shares dedup state with gmail_scan — same source key format: gmail:{threadId}:{messageCount}
     const originalGmailRead = toolHandlers.get('google_gmail_read')!;
     toolHandlers.set('google_gmail_read', async (args) => {
       const result = await originalGmailRead(args);
@@ -331,27 +332,97 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
       // Fire-and-forget: extract facts from the thread into memory
       if (!result.isError && result.content.length > 100) {
         const db = getDb();
-        const sourceKey = `gmail:read:${Date.now()}`;
+
+        // Extract thread IDs from args for thread-based source keys
+        const threadIds: string[] = args.thread_ids
+          ? (args.thread_ids as string[])
+          : args.thread_id
+            ? [args.thread_id as string]
+            : [];
+
+        // Count messages per thread from the response (approximate from separator count)
+        const threadSections = result.content.split('=== Next Thread ===');
+
         (async () => {
-          try {
-            const emailResult = await extractEmailFacts(
-              anthropicClient,
-              config.models.classifier,
-              result.content,
-              sourceKey,
-            );
-            if (emailResult.facts.length > 0 || emailResult.people.length > 0) {
-              const stored = await storeExtractionResult(db, emailResult, sourceKey);
-              logger.info({ facts: stored.memoriesStored, people: stored.peopleStored }, 'Background email extraction complete');
+          for (let i = 0; i < threadIds.length && i < threadSections.length; i++) {
+            const threadId = threadIds[i];
+            const section = threadSections[i];
+            // Count messages in this thread section
+            const msgCount = (section.match(/--- Message \(/g) ?? []).length || 1;
+            const sourceKey = `gmail:${threadId}:${msgCount}`;
+
+            // Skip if already extracted at this message count
+            const state = getThreadExtractionState(db, threadId);
+            if (state && state.messageCount >= msgCount) continue;
+
+            try {
+              const ownerEmail = config.google?.agentEmail ?? '';
+              const content = ownerEmail
+                ? `[Owner's email: ${ownerEmail}]\n\n${section}`
+                : section;
+
+              const emailResult = await extractEmailFacts(
+                anthropicClient,
+                config.models.classifier,
+                content,
+                sourceKey,
+              );
+              if (emailResult.facts.length > 0 || emailResult.people.length > 0) {
+                const stored = await storeExtractionResult(db, emailResult, sourceKey);
+                logger.info({ threadId, facts: stored.memoriesStored, people: stored.peopleStored }, 'Background email extraction complete');
+              }
+            } catch (error) {
+              logger.debug({ error: error instanceof Error ? error.message : String(error), threadId }, 'Background email extraction failed');
             }
-          } catch (error) {
-            logger.debug({ error: error instanceof Error ? error.message : String(error) }, 'Background email extraction failed');
           }
         })();
       }
 
       return result;
     });
+
+    // Register gmail_scan tool — implicit email extraction pipeline
+    const gmailApi = google.gmail({ version: 'v1', auth: googleAuth });
+    toolDefs.push({
+      name: 'google_gmail_scan',
+      description:
+        'Scan Gmail threads and extract structured facts into memory. ' +
+        'Use this when you need email context — outstanding items, status checks, "did X reply?". ' +
+        'Returns a structured summary (not raw email). Incremental: skips already-extracted threads, ' +
+        're-extracts when threads grow (new replies). Very cheap (~$0.001/thread). ' +
+        'After scanning, you can answer email questions directly from the summary or use search_memory for follow-ups.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          query: { type: 'string', description: 'Gmail search query (e.g. "after:2026/02/15", "from:sarah", "in:sent after:2026/02/15")' },
+          max_threads: { type: 'number', description: 'Max threads to scan (default 100, max 150)' },
+        },
+        required: ['query'],
+      },
+    });
+    toolHandlers.set('google_gmail_scan', async (args) => {
+      const query = args.query as string;
+      const maxThreads = Math.min((args.max_threads as number) ?? 100, 150);
+      const db = getDb();
+      const ownerEmail = config.google?.agentEmail ?? '';
+
+      if (!ownerEmail) {
+        return { content: 'Owner email not configured (GOOGLE_AGENT_EMAIL). Cannot determine thread resolution status.', isError: true };
+      }
+
+      try {
+        const result = await scanEmail(gmailApi, db, anthropicClient, config.models.classifier, {
+          query,
+          maxThreads,
+          ownerEmail,
+        });
+        return { content: result.summary };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return { content: `Email scan failed: ${msg}`, isError: true };
+      }
+    });
+
     logger.info({ toolCount: googleTools.length }, 'Google Workspace tools loaded');
 
     // Drive knowledge sync tools

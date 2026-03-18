@@ -26,6 +26,10 @@ Memory types for emails:
 
 Rules:
 - PRIORITIZE commitments and action items — especially those with deadlines
+- The owner's email address may be provided in a `[Owner's email: ...]` line at the top. Use this to determine thread resolution:
+  - If the owner sent the LAST message and got no reply → extract as commitment/fact with "awaiting reply" or "owner sent, no response"
+  - If someone else sent the last message → the owner may need to respond
+  - If the owner replied to an action item → note it as resolved or handed off
 - Track whether the owner REPLIED to action items. If the owner sent a reply that addresses an item, note it as resolved or handed off.
 - For threads with multiple messages, focus on the LATEST state — what's current, not what was discussed 3 replies ago
 - Skip email signatures, legal disclaimers, forwarded headers, and boilerplate
