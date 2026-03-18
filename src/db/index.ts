@@ -51,9 +51,15 @@ export function initDb(): DatabaseSync {
   try {
     db.exec(schema);
   } catch (err) {
-    // On subsequent runs, tables/triggers already exist — that's fine
     const msg = err instanceof Error ? err.message : String(err);
-    if (!msg.includes('already exists')) {
+    if (msg.includes('no such column: entities') && msg.includes('documents')) {
+      // Migration: add entities column to existing documents table
+      logger.info('Migrating documents table — adding entities column...');
+      db.exec(`ALTER TABLE documents ADD COLUMN entities TEXT DEFAULT '[]'`);
+      // Retry schema (for the index)
+      try { db.exec(schema); } catch { /* tables exist, fine */ }
+      logger.info('Documents table migrated');
+    } else if (!msg.includes('already exists')) {
       throw err;
     }
   }
