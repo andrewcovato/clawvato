@@ -95,11 +95,13 @@ The bot listens to all messages in joined channels like a human would.
 - General announcements or social chatter
 - Everything already handled
 
-**Debug reactions** (temporary, will be removed):
-- 👀 = message received by handler
-- 🧠 = agent decided to act
+**Reaction lifecycle** (production UX):
+- 👀 = message received (removed when processing starts)
+- 🧠 = agent is processing (removed when response is posted)
+- Progress message appears after 20s with real tool-call descriptions (e.g., "Checking your calendar...")
+- Progress auto-refreshes every 60s if a single tool call is slow
 
-**Message accumulation**: Messages are buffered with a 4-second debounce window before processing, to handle multi-message inputs.
+**Message accumulation**: Messages are buffered with a configurable debounce window (default 4s) before processing, to handle multi-message inputs.
 
 **Startup crawl**: On boot (if offline >5 minutes), checks joined channels for missed messages.
 
@@ -159,42 +161,67 @@ Sync uses hash-based delta detection — unchanged files are skipped. Self-heali
 
 **Conflict resolution**: Owner's direct Slack statement > recent document > old document > inference. When a document contradicts a recent owner statement, the owner's version is preserved.
 
-**Current limitation**: Only Google-native files (Docs, Sheets, Slides) can be content-exported. Uploaded files (.docx, .pdf, .xlsx) need expanded format support (see backlog).
+**File type support**: All common formats — Google-native (Docs, Sheets, Slides) via export, PDF and images via Claude-native document/image blocks, Office formats (docx/xlsx/pptx) via mammoth/exceljs/jszip, HTML via htmlparser2, CSV/TSV/text/JSON via direct read.
 
-## Tunable Parameters
+**Extraction pipeline**: Long documents are split into 8K overlapping chunks, each extracted by Haiku independently, then refined by a Sonnet synthesis pass that deduplicates, resolves conflicts, and enriches context. Cost: ~$0.04/file for full coverage.
 
-All context limits are centralized as named constants in `src/agent/index.ts`:
+## Configuration
 
+### Prompts
+
+All prompts are externalized in `config/prompts/*.md` — edit without code changes, restart to apply:
+
+| File | Purpose |
+|---|---|
+| `system.md` | Main bot personality, behavior, guidelines |
+| `summary.md` | Drive file summary generation |
+| `doc-extraction.md` | Fact extraction from documents |
+| `extraction.md` | Fact extraction from Slack conversations |
+| `reflection.md` | Memory consolidation insights |
+| `interrupt-classification.md` | Interrupt type classification |
+
+Template variables use `{{VARIABLE}}` syntax. See `config/prompts/README.md` for the glossary.
+
+### Tunable Parameters
+
+All operational tunables live in `config/default.json` (override via `~/.clawvato/config.json` or env vars):
+
+**Agent:**
 | Parameter | Default | Purpose |
 |---|---|---|
-| `AGENT_TIMEOUT_MS` | 120000 | Max time per agent interaction (ms) |
-| `SHORT_TERM_MESSAGE_LIMIT` | 50 | Slack messages fetched per interaction |
-| `SHORT_TERM_MSG_CHAR_LIMIT` | 1000 | Max chars per Slack message |
-| `SHORT_TERM_TOKEN_BUDGET` | 2000 | Token cap for Slack context (drops oldest first) |
-| `LONG_TERM_TOKEN_BUDGET` | 1500 | Token cap for DB memory retrieval |
-| `MAX_TURNS` | 15 | Max tool-call turns per interaction |
-| `NO_RESPONSE` | `[NO_RESPONSE]` | Sentinel the agent outputs to stay silent |
+| `agent.maxTurns` | 30 | Max tool-call turns per interaction |
+| `agent.timeoutMs` | 600000 | Max time per interaction (10 min) |
 
-Memory system parameters in their respective files:
+**Context budgets:**
+| Parameter | Default | Purpose |
+|---|---|---|
+| `context.shortTermMessageLimit` | 50 | Slack messages fetched per interaction |
+| `context.shortTermMsgCharLimit` | 1000 | Max chars per Slack message |
+| `context.shortTermTokenBudget` | 2000 | Token cap for Slack context |
+| `context.longTermTokenBudget` | 1500 | Token cap for DB memory retrieval |
+| `context.workingContextTokenBudget` | 1000 | Token cap for working context |
 
-| Parameter | Default | File | Purpose |
-|---|---|---|---|
-| `REFLECTION_THRESHOLD` | 50 | `src/memory/reflection.ts` | Cumulative importance to trigger reflection |
-| `CONSOLIDATION_INTERVAL_HOURS` | 24 | `src/memory/consolidation.ts` | Hours between consolidation runs |
-| `MERGE_SIMILARITY_THRESHOLD` | 0.85 | `src/memory/consolidation.ts` | Content similarity for merging duplicates |
-| `DECAY_THRESHOLD_DAYS_30` | 30 | `src/memory/consolidation.ts` | Days before 10% importance decay |
-| `DECAY_THRESHOLD_DAYS_90` | 90 | `src/memory/consolidation.ts` | Days before 30% importance decay |
-| `ARCHIVE_THRESHOLD` | 1 | `src/memory/consolidation.ts` | Importance at or below this → archived |
-| `DEFAULT_TOKEN_BUDGET` | 1500 | `src/memory/retriever.ts` | Default retrieval budget |
-| `EMBEDDING_DIM` | 384 | `src/memory/embeddings.ts` | all-MiniLM-L6-v2 dimensions |
+**Slack:**
+| Parameter | Default | Purpose |
+|---|---|---|
+| `slack.progressDelayMs` | 20000 | Delay before showing progress message |
+| `slack.progressStaleIntervalMs` | 60000 | Refresh progress if no tool-call update |
+| `slack.accumulationWindows.patient` | 4000 | Default debounce window (ms) |
 
-Slack interaction parameters:
+**Memory:**
+| Parameter | Default | Purpose |
+|---|---|---|
+| `memory.consolidationIntervalHours` | 24 | Hours between consolidation runs |
+| `memory.mergeSimilarityThreshold` | 0.85 | Content similarity for merging duplicates |
+| `memory.reflectionThreshold` | 50 | Cumulative importance to trigger reflection |
+| `memory.workingContextArchiveDays` | 14 | Days before working context sleeps |
 
-| Parameter | Default | File | Purpose |
-|---|---|---|---|
-| Accumulation window | 4s | `src/slack/event-queue.ts` | Debounce before processing |
-| Slow task threshold | 60s | `src/slack/handler.ts` | When to show ⏳ status |
-| Startup crawl skip | 5 min | `src/cli/start.ts` | Skip crawl if offline less than this |
+**Drive:**
+| Parameter | Default | Purpose |
+|---|---|---|
+| `drive.maxExtractedChars` | 50000 | Max chars extracted from files |
+| `drive.syncBatchSize` | 10 | Parallel file processing batch size |
+| `drive.maxFileSizeBytes` | 52428800 | Max file size to download (50 MB) |
 
 ## Epistemology
 
@@ -296,7 +323,7 @@ railway up --detach -m "deploy"
 ### Running Tests
 
 ```bash
-npm test          # 267 tests across 21 files, 29 tools
+npm test          # 297 tests across 22 files, 29 tools
 npm run build     # TypeScript compile
 npm run lint      # Type-check without emitting
 ```
@@ -305,19 +332,23 @@ npm run lint      # Type-check without emitting
 
 ```
 src/
-  agent/          # Agent orchestration, system prompt, tool loop
+  agent/          # Agent orchestration, tool loop, context assembly
   cli/            # Commander.js CLI (setup, start, status)
   db/             # SQLite + sqlite-vec, schema
-  google/         # Google Workspace auth + 16 tools
+  google/         # Google Workspace auth + 19 tools + file extractor
   hooks/          # PreToolUse / PostToolUse security hooks
   memory/         # Extraction, retrieval, embeddings, reflection, consolidation
   mcp/slack/      # Slack tool definitions + handlers
   security/       # Sender verify, output sanitizer, path validator, rate limiter
   slack/          # Event queue, handler, interrupt classifier, Socket Mode
   training-wheels/ # Trust level policy + pattern graduation
-  config.ts       # Zod-validated config
+  config.ts       # Zod-validated config with all tunables
   credentials.ts  # Keychain (macOS) + env var fallback
   logger.ts       # Pino structured logging
+  prompts.ts      # Prompt loader with {{VARIABLE}} template resolution
+config/
+  default.json    # All tunable parameters
+  prompts/        # Externalized prompts (system, extraction, summary, etc.)
 tests/            # Vitest — mirrors src/ structure
 Dockerfile        # Railway deployment (node:22-slim)
 ```
@@ -345,6 +376,13 @@ Dockerfile        # Railway deployment (node:22-slim)
 | Three memory tiers | Working context (active ops) + Slack (short-term) + DB (long-term) |
 | Epistemological humility | Bot traces beliefs to sources, flags uncertainty, invites correction |
 | Folder path map (BFS) | Builds complete folder→path map upfront instead of per-file API calls |
+| Externalized prompts | Edit behavior without code changes — prompts are Markdown files |
+| Consolidated config | All tunables in one JSON file with Zod validation |
+| Chunked extraction + Sonnet synthesis | Full document coverage at ~$0.04/file — Haiku chunks + Sonnet refinement |
+| Claude-native PDF/image handling | No parsing libraries needed — send raw bytes to Claude vision/document API |
+| Return content to agent | drive_read_content returns file text, not just "facts extracted" — agent answers from source |
+| Document tasks require file reads | System prompt forbids answering document questions from memory alone |
+| 20s progress message delay | Quick responses (<20s) show only 🧠 reaction — no flashing status messages |
 
 ## License
 

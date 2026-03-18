@@ -2,7 +2,7 @@
   "project": {
     "name": "Clawvato",
     "description": "Always-on personal AI agent — your chief of staff",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "status": "active",
     "phase": "build",
     "startDate": "2026-03-06",
@@ -11,8 +11,8 @@
   "tracks": {
     "A": { "name": "Core Foundation", "status": "complete", "completedDate": "2026-03-06" },
     "B": { "name": "Slack MCP + Agent Core", "status": "complete", "completedDate": "2026-03-17" },
-    "C": { "name": "Google Workspace", "status": "complete", "completedDate": "2026-03-17", "notes": "19 tools: Calendar (8), Gmail (6), Drive (5). Drive sync needs file type expansion." },
-    "D": { "name": "Memory + Embeddings", "status": "complete", "completedDate": "2026-03-17" },
+    "C": { "name": "Google Workspace", "status": "complete", "completedDate": "2026-03-18", "notes": "19 tools. All file types readable (PDF, Office, images, HTML, CSV). Chunked extraction + Sonnet synthesis." },
+    "D": { "name": "Memory + Embeddings", "status": "complete", "completedDate": "2026-03-18", "notes": "High-resolution extraction: chunked + Sonnet synthesis. Externalized prompts. Configurable tunables." },
     "E": { "name": "Workflow Engine + Scheduling", "status": "not_started", "dependsOn": ["B", "C"] },
     "F": { "name": "Security + Training Wheels (undo)", "status": "partial", "notes": "Security hardened. Training wheels confirmation gate still MVP." },
     "G": { "name": "GitHub + Filesystem + Web Research", "status": "not_started", "dependsOn": ["A"] },
@@ -28,10 +28,10 @@
     "googleAuth": "gws CLI → OAuth export → Railway env vars"
   },
   "metrics": {
-    "testFiles": 21,
-    "testCount": 267,
-    "testsPassing": 267,
-    "tools": { "slack": 7, "google": 19, "memory": 2, "total": 28 }
+    "testFiles": 22,
+    "testCount": 297,
+    "testsPassing": 297,
+    "tools": { "slack": 7, "google": 19, "memory": 3, "total": 29 }
   },
   "knownIssues": [
     {
@@ -67,25 +67,26 @@
     "id": "S2",
     "name": "Integrations + Polish",
     "goals": [
-      "Expand Drive file type support (DRIVE-001)",
       "Track E: Workflow Engine + Scheduling",
       "Track G: GitHub + Web Research",
       "Training wheels confirmation gate (TW-001)",
+      "Cross-source intelligence",
       "One-click deploy flow"
     ],
-    "progress": "Drive sync architecture complete, needs file type expansion"
+    "progress": "Drive file types complete, UX polished, prompts/config externalized, memory quality upgraded"
   },
   "lastSession": {
-    "number": 10,
+    "number": 12,
     "date": "2026-03-18",
-    "type": "feature + security + quality + bugfix"
+    "type": "feature + UX + refactor + bugfix",
+    "commits": 14
   },
   "thingsNotToRedo": [
     "Don't split schema.sql on semicolons",
     "Agent SDK is REMOVED — don't re-add it",
     "schema.sql must be explicitly copied in Dockerfile",
     "Google OAuth: gws CLI for setup, googleapis npm for runtime",
-    "Don't hard-code bot responses",
+    "Don't hard-code bot responses — prompts are in config/prompts/",
     "Startup crawl skips if offline <5 min",
     "Non-owner messages tagged [EXTERNAL]",
     "Audit log sanitized BEFORE writing",
@@ -93,7 +94,12 @@
     "File summaries are conclusions, not descriptions — stored as memories",
     "Self-healing compares expected vs actual memory content",
     "Folder path is evidence, not gospel — content wins over structure",
-    "One-time migrations use agent_state guard keys"
+    "One-time migrations use agent_state guard keys",
+    "Mid-loop text is NOT the final response — only capture text from the final turn",
+    "Don't force premature answers (removed synthesis hack) — let the bot finish",
+    "drive_read_content must return file content to agent, not just 'facts extracted'",
+    "Slack markdown block does NOT support tables — use bulleted key-value pairs",
+    "Document tasks require reading the actual file, not answering from memory"
   ],
   "lastUpdated": "2026-03-18"
 }
