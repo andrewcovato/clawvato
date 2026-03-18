@@ -93,7 +93,7 @@ describe('Socket Mode adapter patterns', () => {
   });
 
   describe('Reaction lifecycle', () => {
-    it('startProcessing removes eyes, adds brain, posts progress message', async () => {
+    it('startProcessing removes eyes, adds brain, delays progress message', async () => {
       const reactions = createMockReactions();
       const messages = createMockMessages();
       const handler = new SlackHandler(reactions, messages);
@@ -107,23 +107,50 @@ describe('Socket Mode adapter patterns', () => {
       // Should add 🧠 to the last message
       expect(reactions.add).toHaveBeenCalledWith('C123', '2222.0000', 'brain');
 
-      // Should post a progress message
-      expect(messages.post).toHaveBeenCalledWith('C123', expect.stringContaining('Working on it'), undefined);
+      // Should NOT post progress message immediately (20s delay)
+      expect(messages.post).not.toHaveBeenCalled();
 
       // Should have an active task
       expect(handler.getActiveTask()).not.toBeNull();
+
+      // Cleanup timer
+      await handler.completeProcessing();
     });
 
-    it('updateProgress updates the progress message', async () => {
+    it('updateProgress queues text when progress message not yet posted', async () => {
       const reactions = createMockReactions();
       const messages = createMockMessages();
       const handler = new SlackHandler(reactions, messages);
 
       await handler.startProcessing('test task', 'C123', ['1111.0000']);
 
+      // Progress message hasn't been posted yet (delay hasn't fired)
       await handler.updateProgress('Checking your calendar...');
 
+      // Should NOT have called update (no message to update yet)
+      expect(messages.update).not.toHaveBeenCalled();
+
+      // The pending text should be used when the delay fires
+      expect(handler.getActiveTask()?.pendingProgressText).toContain('Checking your calendar');
+
+      await handler.completeProcessing();
+    });
+
+    it('updateProgress updates message after it has been posted', async () => {
+      const reactions = createMockReactions();
+      const messages = createMockMessages();
+      const handler = new SlackHandler(reactions, messages);
+
+      await handler.startProcessing('test task', 'C123', ['1111.0000']);
+
+      // Simulate the delay timer firing by calling postProgressMessage directly
+      await handler['postProgressMessage']();
+
+      // Now update should work
+      await handler.updateProgress('Checking your calendar...');
       expect(messages.update).toHaveBeenCalledWith('C123', '1234.5678', expect.stringContaining('Checking your calendar'));
+
+      await handler.completeProcessing();
     });
 
     it('updateProgress skips redundant updates', async () => {
@@ -132,30 +159,47 @@ describe('Socket Mode adapter patterns', () => {
       const handler = new SlackHandler(reactions, messages);
 
       await handler.startProcessing('test task', 'C123', ['1111.0000']);
+      await handler['postProgressMessage']();
 
       await handler.updateProgress('Checking your calendar...');
       await handler.updateProgress('Checking your calendar...');
 
       // Should only update once (same text)
       expect(messages.update).toHaveBeenCalledTimes(1);
+
+      await handler.completeProcessing();
     });
 
-    it('completeProcessing removes brain, deletes progress message', async () => {
+    it('completeProcessing removes brain and cleans up without progress message', async () => {
       const reactions = createMockReactions();
       const messages = createMockMessages();
       const handler = new SlackHandler(reactions, messages);
 
       await handler.startProcessing('test task', 'C123', ['1111.0000']);
 
+      // Complete before the 20s delay — no progress message was posted
       await handler.completeProcessing();
 
       // Should remove 🧠 from the last message
       expect(reactions.remove).toHaveBeenCalledWith('C123', '1111.0000', 'brain');
 
-      // Should delete the progress message
-      expect(messages.delete).toHaveBeenCalledWith('C123', '1234.5678');
+      // Should NOT try to delete a progress message (none was posted)
+      expect(messages.delete).not.toHaveBeenCalled();
 
-      // Active task should be cleared
+      expect(handler.getActiveTask()).toBeNull();
+    });
+
+    it('completeProcessing deletes progress message if it was posted', async () => {
+      const reactions = createMockReactions();
+      const messages = createMockMessages();
+      const handler = new SlackHandler(reactions, messages);
+
+      await handler.startProcessing('test task', 'C123', ['1111.0000']);
+      await handler['postProgressMessage']();
+
+      await handler.completeProcessing();
+
+      expect(messages.delete).toHaveBeenCalledWith('C123', '1234.5678');
       expect(handler.getActiveTask()).toBeNull();
     });
 
@@ -164,7 +208,6 @@ describe('Socket Mode adapter patterns', () => {
       const messages = createMockMessages();
       const handler = new SlackHandler(reactions, messages);
 
-      // Should not throw
       await handler.completeProcessing();
 
       expect(reactions.remove).not.toHaveBeenCalled();

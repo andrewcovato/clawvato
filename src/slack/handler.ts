@@ -43,6 +43,9 @@ export interface AssistantThreadAPI {
 
 export type ProcessingState = 'idle' | 'accumulating' | 'processing';
 
+/** Delay before showing the progress message — quick responses never show it */
+const PROGRESS_DELAY_MS = 20_000;
+
 /** How often to refresh progress when no tool-call update has occurred */
 const PROGRESS_STALE_INTERVAL_MS = 60_000;
 
@@ -52,12 +55,16 @@ interface ActiveTask {
   threadTs?: string;
   /** The 👀-reacted message timestamps (for cleanup) */
   eyesMessageTs: string[];
-  /** Status/progress message posted when processing starts */
+  /** Status/progress message posted after PROGRESS_DELAY_MS */
   progressMessageTs?: string;
   /** Last progress text (to avoid redundant updates) */
   lastProgressText?: string;
+  /** Queued progress text from tool calls that arrived before the delay expired */
+  pendingProgressText?: string;
   startedAt: number;
   lastUpdatedAt: number;
+  /** Timer that posts the progress message after PROGRESS_DELAY_MS */
+  progressDelayTimer?: ReturnType<typeof setTimeout>;
   /** Timer that fires when progress becomes stale (no tool-call update for 60s) */
   staleTimer?: ReturnType<typeof setTimeout>;
 }
@@ -318,43 +325,70 @@ export class SlackHandler {
       } catch { /* non-critical */ }
     }
 
-    // Post initial progress message
-    let progressMessageTs: string | undefined;
-    const initialProgress = `\u{1f9e0} Working on it...`;
-    try {
-      const result = await this.messages.post(channel, initialProgress, threadTs);
-      progressMessageTs = result.ts;
-    } catch {
-      // Non-critical — we can still process without a progress message
-    }
-
-    // Start the stale-progress timer
+    // Delay the progress message — quick responses (< 20s) never show it.
+    // The 🧠 reaction is immediate feedback; the message only appears for longer tasks.
     const now = Date.now();
-    const staleTimer = setTimeout(() => {
-      void this.refreshStaleProgress();
-    }, PROGRESS_STALE_INTERVAL_MS);
+    const progressDelayTimer = setTimeout(() => {
+      void this.postProgressMessage();
+    }, PROGRESS_DELAY_MS);
 
     this.activeTask = {
       description,
       channel,
       threadTs,
       eyesMessageTs: messageTimestamps,
-      progressMessageTs,
-      lastProgressText: initialProgress,
       startedAt: now,
       lastUpdatedAt: now,
-      staleTimer,
+      progressDelayTimer,
     };
+  }
+
+  /**
+   * Post the progress message after the delay expires.
+   * Uses any pending progress text from tool calls, or falls back to generic.
+   */
+  private async postProgressMessage(): Promise<void> {
+    if (!this.activeTask) return;
+
+    const text = this.activeTask.pendingProgressText
+      ?? `\u{1f9e0} Working on it...`;
+
+    try {
+      const result = await this.messages.post(
+        this.activeTask.channel,
+        text,
+        this.activeTask.threadTs,
+      );
+      this.activeTask.progressMessageTs = result.ts;
+      this.activeTask.lastProgressText = text;
+      this.activeTask.pendingProgressText = undefined;
+    } catch {
+      // Non-critical
+    }
+
+    // Start the stale-progress refresh timer
+    this.activeTask.staleTimer = setTimeout(() => {
+      void this.refreshStaleProgress();
+    }, PROGRESS_STALE_INTERVAL_MS);
   }
 
   /**
    * Update the progress message with what the agent is actually doing.
    * Called at tool-call boundaries by the agent loop.
+   *
+   * If the progress message hasn't been posted yet (delay hasn't fired),
+   * queues the text so it appears when the message is eventually posted.
    */
   async updateProgress(text: string): Promise<void> {
-    if (!this.activeTask?.progressMessageTs) return;
+    if (!this.activeTask) return;
 
     const progressText = `\u{1f9e0} ${text}`;
+
+    // If progress message hasn't been posted yet, queue the text
+    if (!this.activeTask.progressMessageTs) {
+      this.activeTask.pendingProgressText = progressText;
+      return;
+    }
 
     // Skip redundant updates
     if (progressText === this.activeTask.lastProgressText) return;
@@ -406,6 +440,9 @@ export class SlackHandler {
     }
 
     // Clear timers and state
+    if (this.activeTask.progressDelayTimer) {
+      clearTimeout(this.activeTask.progressDelayTimer);
+    }
     if (this.activeTask.staleTimer) {
       clearTimeout(this.activeTask.staleTimer);
     }
@@ -458,6 +495,9 @@ export class SlackHandler {
    */
   shutdown(): void {
     this.queue.clear();
+    if (this.activeTask?.progressDelayTimer) {
+      clearTimeout(this.activeTask.progressDelayTimer);
+    }
     if (this.activeTask?.staleTimer) {
       clearTimeout(this.activeTask.staleTimer);
     }
