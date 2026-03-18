@@ -395,60 +395,66 @@ export function createGoogleTools(
     },
 
     // ── Gmail: Search ──
+    // Searches by THREAD (not message) so each result is a unique conversation.
+    // This prevents long threads from consuming multiple result slots and ensures
+    // outbound-only emails (sent with no reply) are not crowded out.
     {
       definition: {
         name: 'google_gmail_search',
         description:
-          'Search Gmail for emails matching a query. Uses Gmail search syntax (from:, to:, subject:, after:, before:, has:attachment, label:, is:, etc.). ' +
-          'Returns up to max_results emails (default 20, max 50). For comprehensive sweeps, use multiple searches with different queries or date ranges.',
+          'Search Gmail for email threads matching a query. Uses Gmail search syntax (from:, to:, subject:, after:, before:, has:attachment, label:, is:, in:sent, etc.). ' +
+          'Each result is a unique conversation thread (not individual messages). ' +
+          'Returns up to max_results threads (default 25, max 75). For comprehensive sweeps, use multiple searches with different queries or date ranges. ' +
+          'To find emails you sent, include "in:sent" or "from:me" in the query.',
         input_schema: {
           type: 'object' as const,
           properties: {
-            query: { type: 'string', description: 'Gmail search query (e.g. "from:sarah subject:budget after:2026/02/15")' },
-            max_results: { type: 'number', description: 'Max emails to return (default 20, max 50)' },
+            query: { type: 'string', description: 'Gmail search query (e.g. "from:sarah subject:budget after:2026/02/15", "in:sent after:2026/02/15")' },
+            max_results: { type: 'number', description: 'Max threads to return (default 25, max 75). Use high values for comprehensive sweeps.' },
           },
           required: ['query'],
         },
       },
       handler: async (args) => {
         const query = args.query as string;
-        const maxResults = Math.min((args.max_results as number) ?? 20, 50);
+        const maxResults = Math.min((args.max_results as number) ?? 25, 75);
 
         try {
-          // Paginate through results to hit maxResults
-          const allMessageIds: Array<{ id: string; threadId?: string }> = [];
+          // Paginate through THREADS (not messages) — each result is a unique conversation
+          const allThreads: Array<{ id: string; snippet?: string }> = [];
           let pageToken: string | undefined;
 
-          while (allMessageIds.length < maxResults) {
-            const result = await gmail.users.messages.list({
+          while (allThreads.length < maxResults) {
+            const result = await gmail.users.threads.list({
               userId: 'me',
               q: query,
-              maxResults: Math.min(maxResults - allMessageIds.length, 50),
+              maxResults: Math.min(maxResults - allThreads.length, 100),
               ...(pageToken ? { pageToken } : {}),
             });
 
-            const messages = result.data.messages ?? [];
-            if (messages.length === 0) break;
+            const threads = result.data.threads ?? [];
+            if (threads.length === 0) break;
 
-            for (const msg of messages) {
-              if (allMessageIds.length >= maxResults) break;
-              allMessageIds.push({ id: msg.id!, threadId: msg.threadId ?? undefined });
+            for (const t of threads) {
+              if (allThreads.length >= maxResults) break;
+              allThreads.push({ id: t.id!, snippet: t.snippet ?? undefined });
             }
 
             pageToken = result.data.nextPageToken ?? undefined;
             if (!pageToken) break;
           }
 
-          if (allMessageIds.length === 0) {
+          if (allThreads.length === 0) {
             return { content: `No emails found for "${query}".` };
           }
 
-          // Fetch headers for each message in parallel
+          // Fetch metadata for the first message of each thread in parallel
+          // (threads.list only gives snippet — we need From/Subject/Date)
           const details = await Promise.all(
-            allMessageIds.map(msg =>
-              gmail.users.messages.get({
+            allThreads.map(t =>
+              gmail.users.threads.get({
                 userId: 'me',
-                id: msg.id,
+                id: t.id,
                 format: 'metadata',
                 metadataHeaders: ['From', 'To', 'Subject', 'Date'],
               })
@@ -456,20 +462,28 @@ export function createGoogleTools(
           );
 
           const summaries = details.map((detail, i) => {
-            const headers = detail.data.payload?.headers ?? [];
-            const from = headers.find(h => h.name === 'From')?.value ?? 'unknown';
-            const subject = headers.find(h => h.name === 'Subject')?.value ?? 'no subject';
-            const date = headers.find(h => h.name === 'Date')?.value ?? '';
-            const snippet = detail.data.snippet ?? '';
+            const messages = detail.data.messages ?? [];
+            const msgCount = messages.length;
+            // Use first message for subject, last message for most recent date/sender
+            const firstMsg = messages[0];
+            const lastMsg = messages[messages.length - 1] ?? firstMsg;
 
-            return `- **${subject}** | From: ${from} | ${date} | ID: ${allMessageIds[i].id}\n  ${snippet.slice(0, 300)}`;
+            const firstHeaders = firstMsg?.payload?.headers ?? [];
+            const lastHeaders = lastMsg?.payload?.headers ?? [];
+
+            const subject = firstHeaders.find(h => h.name === 'Subject')?.value ?? 'no subject';
+            const from = lastHeaders.find(h => h.name === 'From')?.value ?? 'unknown';
+            const date = lastHeaders.find(h => h.name === 'Date')?.value ?? '';
+            const snippet = detail.data.messages?.[messages.length - 1]?.snippet ?? allThreads[i].snippet ?? '';
+            const threadLabel = msgCount > 1 ? ` (${msgCount} messages)` : '';
+
+            return `- **${subject}**${threadLabel} | Last: ${from} | ${date} | Thread ID: ${allThreads[i].id}\n  ${snippet.slice(0, 300)}`;
           });
 
-          const totalEstimate = details.length;
           const moreAvailable = pageToken ? ` (more results available — refine query or increase max_results)` : '';
 
           return {
-            content: `Found ${totalEstimate} emails for "${query}"${moreAvailable}:\n\n${summaries.join('\n')}`,
+            content: `Found ${allThreads.length} threads for "${query}"${moreAvailable}:\n\n${summaries.join('\n')}`,
           };
         } catch (error) {
           const msg = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
@@ -479,61 +493,88 @@ export function createGoogleTools(
     },
 
     // ── Gmail: Read ──
+    // Accepts thread IDs directly (from search results) or message IDs (legacy).
+    // Thread IDs skip the message→thread lookup hop, saving an API call per thread.
     {
       definition: {
         name: 'google_gmail_read',
         description:
-          'Read one or more emails with their full threads (all replies). ' +
-          'Accepts a single message ID or an array of IDs — fetches all threads in parallel. ' +
+          'Read one or more email threads with all replies. ' +
+          'Accepts thread_id/thread_ids (from search results — preferred, faster) or message_id/message_ids (legacy). ' +
           'Use to check multiple conversations at once (e.g., scanning for outstanding items). ' +
           'For comprehensive sweeps, read ALL threads from search results — don\'t rely on snippets.',
         input_schema: {
           type: 'object' as const,
           properties: {
-            message_id: { type: 'string', description: 'Gmail message ID (from search results)' },
+            thread_id: { type: 'string', description: 'Gmail thread ID (from search results — preferred)' },
+            thread_ids: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Multiple Gmail thread IDs to read in parallel (max 15)',
+            },
+            message_id: { type: 'string', description: 'Gmail message ID (legacy — will look up thread)' },
             message_ids: {
               type: 'array',
               items: { type: 'string' },
-              description: 'Multiple Gmail message IDs to read in parallel (max 15)',
+              description: 'Multiple Gmail message IDs to read in parallel (max 15, legacy)',
             },
           },
           required: [],
         },
       },
       handler: async (args) => {
-        // Accept single ID or array
-        const ids: string[] = args.message_ids
-          ? (args.message_ids as string[]).slice(0, 15)
-          : args.message_id
-            ? [args.message_id as string]
+        // Collect thread IDs directly if provided
+        let threadIds: string[] = args.thread_ids
+          ? (args.thread_ids as string[]).slice(0, 15)
+          : args.thread_id
+            ? [args.thread_id as string]
             : [];
 
-        if (ids.length === 0) {
-          return { content: 'No message ID provided. Use message_id or message_ids.', isError: true };
+        // Fall back to message IDs (legacy path — needs extra API call per ID)
+        if (threadIds.length === 0) {
+          const msgIds: string[] = args.message_ids
+            ? (args.message_ids as string[]).slice(0, 15)
+            : args.message_id
+              ? [args.message_id as string]
+              : [];
+
+          if (msgIds.length === 0) {
+            return { content: 'No thread or message ID provided. Use thread_id, thread_ids, message_id, or message_ids.', isError: true };
+          }
+
+          // Look up thread IDs from message IDs
+          const lookups = await Promise.all(msgIds.map(async (id) => {
+            try {
+              const msg = await gmail.users.messages.get({
+                userId: 'me', id, format: 'metadata', metadataHeaders: ['Subject'],
+              });
+              return msg.data.threadId ?? null;
+            } catch { return null; }
+          }));
+
+          // Deduplicate thread IDs (multiple messages may be in the same thread)
+          const seen = new Set<string>();
+          for (const tid of lookups) {
+            if (tid && !seen.has(tid)) {
+              seen.add(tid);
+              threadIds.push(tid);
+            }
+          }
+        }
+
+        if (threadIds.length === 0) {
+          return { content: 'Could not resolve any thread IDs.', isError: true };
         }
 
         try {
-          // Fetch all threads in parallel
-          const threadResults = await Promise.all(ids.map(async (messageId) => {
+          // Fetch all threads in parallel (direct — no intermediate lookup)
+          const threadResults = await Promise.all(threadIds.map(async (threadId) => {
             try {
-              // Get thread ID from message
-              const msg = await gmail.users.messages.get({
-                userId: 'me',
-                id: messageId,
-                format: 'metadata',
-                metadataHeaders: ['Subject'],
-              });
-
-              const threadId = msg.data.threadId;
-              if (!threadId) return null;
-
-              // Fetch full thread
               const thread = await gmail.users.threads.get({
                 userId: 'me',
                 id: threadId,
                 format: 'full',
               });
-
               return thread.data.messages ?? [];
             } catch {
               return null;
@@ -541,11 +582,11 @@ export function createGoogleTools(
           }));
 
           // Format results
-          const allThreads: string[] = [];
+          const allFormattedThreads: string[] = [];
 
           for (const messages of threadResults) {
             if (!messages) {
-              allThreads.push('--- Thread not found ---');
+              allFormattedThreads.push('--- Thread not found ---');
               continue;
             }
 
@@ -571,11 +612,11 @@ export function createGoogleTools(
             const threadLabel = messages.length > 1
               ? `Thread with ${messages.length} messages:`
               : 'Single message (no replies):';
-            allThreads.push(`${threadLabel}\n\n${parts.join('\n\n')}`);
+            allFormattedThreads.push(`${threadLabel}\n\n${parts.join('\n\n')}`);
           }
 
           return {
-            content: allThreads.join('\n\n=== Next Thread ===\n\n'),
+            content: allFormattedThreads.join('\n\n=== Next Thread ===\n\n'),
           };
         } catch (error) {
           const msg = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));

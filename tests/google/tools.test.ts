@@ -29,6 +29,7 @@ vi.mock('googleapis', () => {
         modify: vi.fn(),
       },
       threads: {
+        list: vi.fn(),
         get: vi.fn(),
       },
       drafts: {
@@ -171,36 +172,44 @@ describe('Google Workspace Tools', () => {
 
   describe('google_gmail_search', () => {
     it('returns email summaries', async () => {
-      mocks.gmail.users.messages.list.mockResolvedValue({
+      // threads.list returns thread IDs
+      mocks.gmail.users.threads.list.mockResolvedValue({
         data: {
-          messages: [{ id: 'msg_1' }, { id: 'msg_2' }],
-          resultSizeEstimate: 2,
+          threads: [
+            { id: 'thread_1', snippet: 'Please review the attached budget...' },
+            { id: 'thread_2', snippet: 'Updated the timeline as discussed...' },
+          ],
         },
       });
 
-      mocks.gmail.users.messages.get
+      // threads.get returns metadata for each thread
+      mocks.gmail.users.threads.get
         .mockResolvedValueOnce({
           data: {
-            payload: {
-              headers: [
-                { name: 'From', value: 'sarah@acme.com' },
-                { name: 'Subject', value: 'Q2 Budget Review' },
-                { name: 'Date', value: 'Mon, 17 Mar 2026' },
-              ],
-            },
-            snippet: 'Please review the attached budget...',
+            messages: [{
+              payload: {
+                headers: [
+                  { name: 'From', value: 'sarah@acme.com' },
+                  { name: 'Subject', value: 'Q2 Budget Review' },
+                  { name: 'Date', value: 'Mon, 17 Mar 2026' },
+                ],
+              },
+              snippet: 'Please review the attached budget...',
+            }],
           },
         })
         .mockResolvedValueOnce({
           data: {
-            payload: {
-              headers: [
-                { name: 'From', value: 'jake@acme.com' },
-                { name: 'Subject', value: 'Re: Project Timeline' },
-                { name: 'Date', value: 'Sun, 16 Mar 2026' },
-              ],
-            },
-            snippet: 'Updated the timeline as discussed...',
+            messages: [{
+              payload: {
+                headers: [
+                  { name: 'From', value: 'jake@acme.com' },
+                  { name: 'Subject', value: 'Re: Project Timeline' },
+                  { name: 'Date', value: 'Sun, 16 Mar 2026' },
+                ],
+              },
+              snippet: 'Updated the timeline as discussed...',
+            }],
           },
         });
 
@@ -213,7 +222,7 @@ describe('Google Workspace Tools', () => {
     });
 
     it('handles no results', async () => {
-      mocks.gmail.users.messages.list.mockResolvedValue({ data: { messages: [] } });
+      mocks.gmail.users.threads.list.mockResolvedValue({ data: { threads: [] } });
 
       const tool = findTool('google_gmail_search');
       const result = await tool.handler({ query: 'nonexistent' });
@@ -224,12 +233,7 @@ describe('Google Workspace Tools', () => {
 
   describe('google_gmail_read', () => {
     it('returns full thread content', async () => {
-      // First call gets the message metadata (to find threadId)
-      mocks.gmail.users.messages.get.mockResolvedValue({
-        data: { threadId: 'thread_1' },
-      });
-
-      // Second call gets the full thread
+      // threads.get returns the full thread directly when using thread_id
       mocks.gmail.users.threads.get.mockResolvedValue({
         data: {
           messages: [
@@ -263,7 +267,7 @@ describe('Google Workspace Tools', () => {
       });
 
       const tool = findTool('google_gmail_read');
-      const result = await tool.handler({ message_id: 'msg_1' });
+      const result = await tool.handler({ thread_id: 'thread_1' });
 
       expect(result.content).toContain('sarah@acme.com');
       expect(result.content).toContain('Meeting Notes');
