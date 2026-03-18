@@ -11,7 +11,8 @@ export type CredentialKey =
   | 'google-client-id'
   | 'google-client-secret'
   | 'google-refresh-token'
-  | 'github-pat';
+  | 'github-pat'
+  | 'fireflies-api-key';
 
 // keytar is a CJS module — dynamic import wraps it in { default: ... }
 // `false` is a sentinel meaning "tried and failed" — don't retry
@@ -42,6 +43,7 @@ const ENV_MAP: Record<CredentialKey, string> = {
   'google-client-secret': 'GOOGLE_CLIENT_SECRET',
   'google-refresh-token': 'GOOGLE_REFRESH_TOKEN',
   'github-pat': 'GITHUB_PAT',
+  'fireflies-api-key': 'FIREFLIES_API_KEY',
 };
 
 /**

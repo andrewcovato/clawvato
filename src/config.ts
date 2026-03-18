@@ -121,6 +121,16 @@ const ConfigSchema = z.object({
     maxFileSizeBytes: 50 * 1024 * 1024,
     maxExtractedChars: 10_000,
   })),
+
+  fireflies: z.object({
+    syncIntervalHours: z.number().default(6),
+    maxTranscriptsPerSync: z.number().int().default(20),
+    defaultDaysBack: z.number().int().default(7),
+  }).default(() => ({
+    syncIntervalHours: 6,
+    maxTranscriptsPerSync: 20,
+    defaultDaysBack: 7,
+  })),
 });
 
 export type ClawvatoConfig = z.infer<typeof ConfigSchema>;
@@ -175,6 +185,11 @@ function getDefaultConfig(): Partial<ClawvatoConfig> {
       syncBatchSize: 10,
       maxFileSizeBytes: 50 * 1024 * 1024,
       maxExtractedChars: 10_000,
+    },
+    fireflies: {
+      syncIntervalHours: 6,
+      maxTranscriptsPerSync: 20,
+      defaultDaysBack: 7,
     },
   };
 }

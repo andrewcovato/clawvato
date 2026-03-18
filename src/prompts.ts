@@ -84,6 +84,7 @@ interface LoadedPrompts {
   extraction: string;
   reflection: string;
   interruptClassification: string;
+  meetingExtraction: string;
 }
 
 let cachedPrompts: LoadedPrompts | null = null;
@@ -106,6 +107,7 @@ export function loadPrompts(): LoadedPrompts {
     extraction: 'extraction.md',
     reflection: 'reflection.md',
     interruptClassification: 'interrupt-classification.md',
+    meetingExtraction: 'meeting-extraction.md',
   };
 
   const loaded: Partial<LoadedPrompts> = {};

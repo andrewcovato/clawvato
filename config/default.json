@@ -48,6 +48,11 @@
     "maxFileSizeBytes": 52428800,
     "maxExtractedChars": 50000
   },
+  "fireflies": {
+    "syncIntervalHours": 6,
+    "maxTranscriptsPerSync": 20,
+    "defaultDaysBack": 7
+  },
   "google": {},
   "github": {}
 }

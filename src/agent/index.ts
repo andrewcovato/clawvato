@@ -15,7 +15,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { logger } from '../logger.js';
 import { getConfig } from '../config.js';
-import { requireCredential } from '../credentials.js';
+import { requireCredential, getCredential } from '../credentials.js';
 import { getPrompts, NO_RESPONSE } from '../prompts.js';
 import { getDb } from '../db/index.js';
 import { createSlackTools, type SlackTool, type ToolHandlerResult } from '../mcp/slack/server.js';
@@ -71,6 +71,11 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
   slack_get_thread: 'Reading a thread...',
   slack_get_user_info: 'Looking up a user...',
   slack_get_channel_history: 'Reading channel history...',
+  // Fireflies
+  fireflies_search_meetings: 'Searching meeting transcripts...',
+  fireflies_get_summary: 'Reading meeting summary...',
+  fireflies_read_transcript: 'Reading meeting transcript...',
+  fireflies_sync_meetings: 'Syncing meeting transcripts...',
   // Memory
   search_memory: 'Searching memory...',
   update_working_context: 'Updating working context...',
@@ -517,6 +522,95 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
     });
   } else {
     logger.info('Google Workspace tools not loaded — credentials not configured');
+  }
+
+  // ── Fireflies meeting tools (conditional) ──
+  const firefliesApiKey = await getCredential('fireflies-api-key');
+  if (firefliesApiKey) {
+    const { FirefliesClient } = await import('../fireflies/api.js');
+    const { createFirefliesTools } = await import('../fireflies/tools.js');
+    const { syncMeetings, deepReadMeeting } = await import('../fireflies/sync.js');
+
+    const firefliesClient = new FirefliesClient(firefliesApiKey);
+    const firefliesTools = createFirefliesTools(firefliesClient);
+
+    for (const tool of firefliesTools) {
+      toolDefs.push(tool.definition);
+      toolHandlers.set(tool.definition.name, tool.handler);
+    }
+
+    // Override sync handler to inject DB and Anthropic client
+    toolHandlers.set('fireflies_sync_meetings', async (args) => {
+      const db = getDb();
+      try {
+        const result = await syncMeetings(
+          firefliesClient, db, anthropicClient,
+          config.models.classifier, config.models.executor,
+          {
+            daysBack: (args.days_back as number) ?? config.fireflies.defaultDaysBack,
+            maxTranscripts: Math.min(
+              (args.max_transcripts as number) ?? config.fireflies.maxTranscriptsPerSync,
+              50,
+            ),
+          },
+        );
+        return {
+          content: `Meeting sync complete: ${result.meetingsScanned} meetings scanned. ` +
+            `${result.newMeetings} new, ${result.skippedMeetings} already synced. ` +
+            `${result.factsExtracted} facts + ${result.commitmentsExtracted} commitments extracted.`,
+        };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return { content: `Meeting sync failed: ${msg}`, isError: true };
+      }
+    });
+
+    // Override deep read handler to inject DB and Anthropic client + return transcript
+    toolHandlers.set('fireflies_read_transcript', async (args) => {
+      const id = args.transcript_id as string;
+      const maxSentences = Math.min((args.max_sentences as number) ?? 500, 1000);
+      const db = getDb();
+
+      try {
+        const t = await firefliesClient.getTranscriptFull(id);
+        const { formatMeetingDate: fmtDate, formatDuration: fmtDur } = await import('../fireflies/api.js');
+        const date = fmtDate(t.date);
+        const dur = fmtDur(t.duration);
+        const speakers = t.speakers.map(s => s.name).join(', ');
+
+        const header = `Meeting: "${t.title}"\nDate: ${date} | Duration: ${dur}\nSpeakers: ${speakers}`;
+
+        const sentences = t.sentences.slice(0, maxSentences);
+        const formatted = sentences.map(s => {
+          const mins = Math.floor(s.start_time / 60);
+          const secs = Math.floor(s.start_time % 60);
+          const ts = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+          return `[${s.speaker_name}, ${ts}]: ${s.text}`;
+        }).join('\n');
+
+        const truncated = sentences.length < t.sentences.length
+          ? `\n\n[Showing ${sentences.length} of ${t.sentences.length} sentences]`
+          : '';
+
+        // Background deep read extraction (fire-and-forget)
+        deepReadMeeting(firefliesClient, db, anthropicClient, config.models.classifier, config.models.executor, id)
+          .then(result => {
+            logger.info({ id, title: t.title, facts: result.factsExtracted, commitments: result.commitmentsExtracted }, 'Background meeting deep read complete');
+          })
+          .catch(error => {
+            logger.warn({ error: error instanceof Error ? error.message : String(error), id }, 'Background meeting deep read failed');
+          });
+
+        return { content: `${header}\n\n--- Transcript ---\n\n${formatted}${truncated}` };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return { content: `Failed to read transcript: ${msg}`, isError: true };
+      }
+    });
+
+    logger.info({ toolCount: firefliesTools.length }, 'Fireflies tools loaded');
+  } else {
+    logger.info('Fireflies tools not loaded — API key not configured');
   }
 
   // Working context tool — scratch pad for operational details
