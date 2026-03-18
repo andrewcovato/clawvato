@@ -316,7 +316,7 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
   // Google Workspace tools (conditional — only if credentials configured)
   const googleAuth = await getGoogleAuth();
   if (googleAuth) {
-    const googleTools = createGoogleTools(googleAuth);
+    const googleTools = createGoogleTools(googleAuth, config.google?.agentEmail);
     for (const tool of googleTools) {
       toolDefs.push(tool.definition);
       toolHandlers.set(tool.definition.name, tool.handler);
