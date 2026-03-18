@@ -71,39 +71,63 @@ export async function syncMeetings(
   let commitmentsExtracted = 0;
   let peopleExtracted = 0;
 
-  for (const meta of transcripts) {
-    // Delta detection: check if we already have memories from this transcript
+  // Delta detection: filter to only new meetings
+  const newTranscripts = transcripts.filter(meta => {
     const existingPattern = `fireflies:${meta.id}:%`;
     const existing = db.prepare(
       "SELECT id FROM memories WHERE source LIKE ? AND valid_until IS NULL LIMIT 1"
     ).get(existingPattern);
-
     if (existing) {
       skippedMeetings++;
-      continue;
+      return false;
     }
+    return true;
+  });
 
-    // Fetch Tier 2 summary for this meeting
-    try {
-      const summary = await client.getTranscriptSummary(meta.id);
-      const result = await extractMeetingSummary(db, anthropicClient, classifierModel, synthesisModel, summary);
-      factsExtracted += result.factsExtracted;
-      commitmentsExtracted += result.commitmentsExtracted;
-      peopleExtracted += result.peopleExtracted;
-      newMeetings++;
+  logger.info({ newMeetings: newTranscripts.length, skipped: skippedMeetings }, 'Delta detection complete');
 
-      logger.info({
-        id: meta.id,
-        title: meta.title,
-        facts: result.factsExtracted,
-        commitments: result.commitmentsExtracted,
-      }, 'Meeting synced');
-    } catch (error) {
-      logger.warn({
-        error: error instanceof Error ? error.message : String(error),
-        id: meta.id,
-        title: meta.title,
-      }, 'Failed to sync meeting — skipping');
+  // Fetch summaries in parallel batches, write to DB sequentially
+  const BATCH_SIZE = 5;
+  for (let batchStart = 0; batchStart < newTranscripts.length; batchStart += BATCH_SIZE) {
+    const batch = newTranscripts.slice(batchStart, batchStart + BATCH_SIZE);
+
+    // Fetch summaries from Fireflies API in parallel
+    const summaries = await Promise.all(batch.map(async (meta) => {
+      try {
+        const summary = await client.getTranscriptSummary(meta.id);
+        return { meta, summary, error: null };
+      } catch (error) {
+        return { meta, summary: null, error: error instanceof Error ? error.message : String(error) };
+      }
+    }));
+
+    // Extract and store sequentially (DB writes)
+    for (const { meta, summary, error } of summaries) {
+      if (!summary) {
+        logger.warn({ error, id: meta.id, title: meta.title }, 'Failed to fetch meeting summary — skipping');
+        continue;
+      }
+
+      try {
+        const result = await extractMeetingSummary(db, anthropicClient, classifierModel, synthesisModel, summary);
+        factsExtracted += result.factsExtracted;
+        commitmentsExtracted += result.commitmentsExtracted;
+        peopleExtracted += result.peopleExtracted;
+        newMeetings++;
+
+        logger.info({
+          id: meta.id,
+          title: meta.title,
+          facts: result.factsExtracted,
+          commitments: result.commitmentsExtracted,
+        }, 'Meeting synced');
+      } catch (error) {
+        logger.warn({
+          error: error instanceof Error ? error.message : String(error),
+          id: meta.id,
+          title: meta.title,
+        }, 'Failed to extract meeting — skipping');
+      }
     }
   }
 
