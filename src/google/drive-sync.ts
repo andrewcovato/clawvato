@@ -269,8 +269,34 @@ async function getAllSubfolderIds(
 }
 
 /**
+ * Build the expected memory content for a file.
+ * Used both for creating new memories and checking if existing ones are current.
+ */
+function buildFileMemoryContent(
+  fileName: string,
+  folderPath: string | null,
+  summary: string,
+): string {
+  const pathLabel = folderPath && folderPath !== '/' ? ` (in ${folderPath})` : '';
+  return `File "${fileName}"${pathLabel}: ${summary}`;
+}
+
+/**
+ * Build the full entity list for a file memory (includes folder names).
+ */
+function buildFileEntities(entities: string[], folderPath: string | null): string[] {
+  const result = [...entities];
+  if (folderPath && folderPath !== '/') {
+    for (const part of folderPath.split('/').filter(Boolean)) {
+      if (!result.includes(part)) result.push(part);
+    }
+  }
+  return result;
+}
+
+/**
  * Store a file summary as a memory, linking it back to the document via source.
- * This puts file knowledge into the same pipeline as Slack-extracted facts.
+ * Supersedes any existing memory for this file.
  */
 function storeFileSummaryAsMemory(
   db: DatabaseSync,
@@ -282,26 +308,16 @@ function storeFileSummaryAsMemory(
   modifiedTime: string,
 ): void {
   const source = `drive:${fileId}:${modifiedTime}`;
-  const pathLabel = folderPath && folderPath !== '/' ? ` (in ${folderPath})` : '';
-  const content = `File "${fileName}"${pathLabel}: ${summary}`;
+  const content = buildFileMemoryContent(fileName, folderPath, summary);
+  const allEntities = buildFileEntities(entities, folderPath);
 
-  // Add folder name as an entity for category-based retrieval
-  if (folderPath && folderPath !== '/') {
-    const folderParts = folderPath.split('/').filter(Boolean);
-    for (const part of folderParts) {
-      if (!entities.includes(part)) {
-        entities.push(part);
-      }
-    }
-  }
-
-  // Check for existing memory from this file and supersede if needed
+  // Supersede any existing memory from this file
   const existingPattern = `drive:${fileId}:%`;
   const existing = db.prepare(`
-    SELECT id, source FROM memories
+    SELECT id FROM memories
     WHERE source LIKE ? AND valid_until IS NULL AND type = 'fact'
     ORDER BY created_at DESC LIMIT 1
-  `).get(existingPattern) as { id: string; source: string } | undefined;
+  `).get(existingPattern) as { id: string } | undefined;
 
   const newId = insertMemory(db, {
     type: 'fact',
@@ -309,7 +325,7 @@ function storeFileSummaryAsMemory(
     source,
     importance: 5,
     confidence: 0.85,
-    entities,
+    entities: allEntities,
   });
 
   if (existing) {
@@ -510,18 +526,23 @@ export async function syncDrive(
   }
 
   // ── 3. Self-heal: ensure every file with a summary has a corresponding memory ──
-  const toBackfill: Array<{ fileId: string; name: string; folderPath: string | null; summary: string; entities: string[]; modifiedTime: string }> = [];
+  const toBackfill: Array<{ fileId: string; name: string; folderPath: string | null; summary: string; entities: string[]; modifiedTime: string; existingMemoryId?: string }> = [];
 
   for (const file of driveFiles) {
     const doc = getDocument(db, 'gdrive', file.id);
     if (!doc || !doc.summary) continue;
 
-    const memoryExists = db.prepare(
-      "SELECT 1 FROM memories WHERE source LIKE ? AND valid_until IS NULL LIMIT 1"
-    ).get(`drive:${file.id}:%`);
+    const entities = doc.entities ? JSON.parse(doc.entities) as string[] : [];
+    const expectedContent = buildFileMemoryContent(doc.name, doc.folder_path, doc.summary);
 
-    if (!memoryExists) {
-      const entities = doc.entities ? JSON.parse(doc.entities) as string[] : [];
+    // Check if a current, correct memory exists for this file
+    const existingMemory = db.prepare(
+      "SELECT id, content FROM memories WHERE source LIKE ? AND valid_until IS NULL AND type = 'fact' LIMIT 1"
+    ).get(`drive:${file.id}:%`) as { id: string; content: string } | undefined;
+
+    const needsUpdate = !existingMemory || existingMemory.content !== expectedContent;
+
+    if (needsUpdate) {
       toBackfill.push({
         fileId: file.id,
         name: doc.name,
@@ -529,28 +550,21 @@ export async function syncDrive(
         summary: doc.summary,
         entities,
         modifiedTime: doc.modified_time ?? now,
+        existingMemoryId: existingMemory?.id,
       });
     }
   }
 
   let memoriesBackfilled = 0;
   if (toBackfill.length > 0) {
-    logger.info({ count: toBackfill.length }, 'Backfilling missing file memories');
+    logger.info({ count: toBackfill.length }, 'Backfilling/updating file memories');
 
     // Store all memories first (fast, DB only)
     const newMemoryIds: { id: string; content: string }[] = [];
     for (const item of toBackfill) {
       const source = `drive:${item.fileId}:${item.modifiedTime}`;
-      const pathLabel = item.folderPath && item.folderPath !== '/' ? ` (in ${item.folderPath})` : '';
-      const content = `File "${item.name}"${pathLabel}: ${item.summary}`;
-
-      // Add folder parts as entities
-      const entities = [...item.entities];
-      if (item.folderPath && item.folderPath !== '/') {
-        for (const part of item.folderPath.split('/').filter(Boolean)) {
-          if (!entities.includes(part)) entities.push(part);
-        }
-      }
+      const content = buildFileMemoryContent(item.name, item.folderPath, item.summary);
+      const entities = buildFileEntities(item.entities, item.folderPath);
 
       const newId = insertMemory(db, {
         type: 'fact',
@@ -560,6 +574,13 @@ export async function syncDrive(
         confidence: 0.85,
         entities,
       });
+
+      // Supersede the old memory if it existed but was outdated
+      if (item.existingMemoryId) {
+        supersedeMemory(db, item.existingMemoryId, newId);
+        deleteEmbedding(db, item.existingMemoryId);
+      }
+
       newMemoryIds.push({ id: newId, content });
       memoriesBackfilled++;
     }
