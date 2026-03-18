@@ -437,9 +437,10 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
       if (search) {
         const doc = findDocumentByName(db, search);
         if (!doc) return { content: `No known files matching "${search}". Try google_drive_sync first.` };
+        const path = doc.folder_path && doc.folder_path !== '/' ? ` | Path: ${doc.folder_path}` : '';
         const summary = doc.summary ? `\n  Summary: ${doc.summary}` : '';
         return {
-          content: `Found: ${doc.name} (${doc.mime_type}) | Modified: ${doc.modified_time} | ID: ${doc.source_id}${summary}`,
+          content: `Found: ${doc.name} (${doc.mime_type})${path} | Modified: ${doc.modified_time} | ID: ${doc.source_id}${summary}`,
         };
       }
 
@@ -449,9 +450,10 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
       }
 
       const lines = docs.map(d => {
+        const path = d.folder_path && d.folder_path !== '/' ? ` | ${d.folder_path}` : '';
         const summary = d.summary ? ` — ${d.summary.slice(0, 100)}` : '';
         const deepRead = d.deep_read_at ? ' [deep read]' : '';
-        return `- ${d.name} | ${d.modified_time} | ID: ${d.source_id}${deepRead}${summary}`;
+        return `- ${d.name}${path} | ${d.modified_time} | ID: ${d.source_id}${deepRead}${summary}`;
       });
 
       return { content: `${docs.length} known files:\n${lines.join('\n')}` };
