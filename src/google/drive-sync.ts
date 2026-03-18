@@ -758,6 +758,7 @@ export async function deepReadFile(
   client: Anthropic,
   model: string,
   fileId: string,
+  synthesisModel?: string,
 ): Promise<DeepReadResult> {
   const drive = google.drive({ version: 'v3', auth });
 
@@ -778,55 +779,79 @@ export async function deepReadFile(
 
   logger.info({ fileId, name, contentKind: extracted.kind }, 'Deep reading file');
 
-  // Extract facts via Haiku
+  // ── Chunked extraction: split document into chunks, extract from each ──
   const source = `drive:${fileId}:${fileMeta.data.modifiedTime ?? 'unknown'}`;
   let factsExtracted = 0;
   let conflictsFound = 0;
 
   try {
-    // Build message content based on extracted content type
-    const messageContent = buildSummaryMessageContent(name, null, extracted);
-    // Replace the preamble text with the extraction prompt context
-    const lastBlock = messageContent[messageContent.length - 1];
-    if (lastBlock.type === 'text') {
-      lastBlock.text = `Document: "${name}"\n\n${extracted.kind === 'text' ? extracted.text : 'Analyze the file above and extract structured facts.'}`;
-    }
+    // For non-text content (PDF/images), use single-pass extraction
+    const chunks = extracted.kind === 'text'
+      ? chunkText(extracted.text, CHUNK_SIZE, CHUNK_OVERLAP)
+      : [null]; // null = use multimodal content block
 
-    const response = await client.messages.create({
-      model,
-      max_tokens: 4096,
-      system: getPrompts().docExtraction,
-      messages: [{ role: 'user', content: messageContent }],
-    });
+    logger.info({ fileId, name, chunks: chunks.length, contentKind: extracted.kind }, 'Starting chunked extraction');
 
-    const text = response.content
-      .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-      .map(b => b.text)
-      .join('');
+    const allFacts: Array<Record<string, unknown>> = [];
 
-    const jsonStr = text.replace(/^```json?\s*/i, '').replace(/\s*```$/, '').trim();
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
 
-    // Resilient JSON parsing — if truncated, try to salvage complete entries
-    let facts: unknown[];
-    try {
-      const parsed = JSON.parse(jsonStr);
-      facts = Array.isArray(parsed) ? parsed : [];
-    } catch {
-      // JSON may be truncated (max_tokens hit). Try to close the array and parse what we have.
-      const salvaged = jsonStr.replace(/,\s*\{[^}]*$/, '') + ']';
+      // Build message content for this chunk
+      let messageContent: Anthropic.ContentBlockParam[];
+      if (chunk !== null) {
+        // Text chunk
+        const chunkLabel = chunks.length > 1 ? ` (section ${i + 1}/${chunks.length})` : '';
+        messageContent = [{ type: 'text', text: `Document: "${name}"${chunkLabel}\n\n${chunk}` }];
+      } else {
+        // Binary content (PDF/image) — use multimodal block
+        messageContent = buildSummaryMessageContent(name, null, extracted);
+        const lastBlock = messageContent[messageContent.length - 1];
+        if (lastBlock.type === 'text') {
+          lastBlock.text = `Document: "${name}"\n\nAnalyze the file above and extract structured facts.`;
+        }
+      }
+
       try {
-        const parsed = JSON.parse(salvaged);
-        facts = Array.isArray(parsed) ? parsed : [];
-        logger.info({ salvaged: facts.length }, 'Salvaged partial JSON from truncated extraction');
-      } catch {
-        logger.warn({ textLength: text.length }, 'Document extraction returned unparseable JSON');
-        return { factsExtracted: 0, conflictsFound: 0 };
+        const response = await client.messages.create({
+          model,
+          max_tokens: 4096,
+          system: getPrompts().docExtraction,
+          messages: [{ role: 'user', content: messageContent }],
+        });
+
+        const text = response.content
+          .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+          .map(b => b.text)
+          .join('');
+
+        const jsonStr = text.replace(/^```json?\s*/i, '').replace(/\s*```$/, '').trim();
+        const parsed = parseJsonResilient(jsonStr);
+        if (parsed) {
+          allFacts.push(...parsed);
+        }
+      } catch (error) {
+        logger.warn({ error: error instanceof Error ? error.message : String(error), chunk: i }, 'Chunk extraction failed — continuing');
       }
     }
 
+    logger.info({ fileId, rawFacts: allFacts.length, chunks: chunks.length }, 'Chunked extraction complete');
+
+    // ── Sonnet synthesis pass: deduplicate, resolve conflicts, catch nuance ──
+    let synthesizedFacts = allFacts;
+    if (allFacts.length > 0 && synthesisModel) {
+      try {
+        synthesizedFacts = await synthesizeFacts(client, synthesisModel, name, allFacts);
+        logger.info({ fileId, rawFacts: allFacts.length, synthesized: synthesizedFacts.length }, 'Sonnet synthesis complete');
+      } catch (error) {
+        logger.warn({ error: error instanceof Error ? error.message : String(error) }, 'Synthesis failed — using raw facts');
+      }
+    }
+
+    // ── Store facts ──
     const newMemoryIds: { id: string; content: string }[] = [];
 
-    for (const rawFact of facts) {
+    for (const rawFact of synthesizedFacts) {
       const fact = rawFact as Record<string, unknown>;
       if (!fact.content || !fact.type) continue;
 
@@ -841,23 +866,15 @@ export async function deepReadFile(
       const closeMatch = duplicates.find(d => contentSimilarity(d.content, factContent) > 0.7);
 
       if (closeMatch) {
-        // Conflict detection
         const isSlackSource = closeMatch.source.startsWith('slack:');
         const isRecent = closeMatch.created_at > new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
         if (isSlackSource && isRecent && closeMatch.confidence >= confidence) {
-          // Owner's recent Slack statement outranks document — flag conflict but keep owner's version
           conflictsFound++;
-          logger.info({
-            existing: closeMatch.content.slice(0, 80),
-            new: factContent.slice(0, 80),
-            source: 'drive',
-          }, 'Conflict detected: owner statement vs document — keeping owner version');
           continue;
         }
 
         if (confidence > closeMatch.confidence || !isSlackSource) {
-          // Document outranks old memory — supersede
           const newId = insertMemory(db, {
             type: factType, content: factContent, source, importance, confidence, entities,
           });
@@ -866,9 +883,7 @@ export async function deepReadFile(
           newMemoryIds.push({ id: newId, content: factContent });
           factsExtracted++;
         }
-        // Otherwise skip (existing memory is better)
       } else {
-        // No conflict — store as new
         const newId = insertMemory(db, {
           type: factType, content: factContent, source, importance, confidence, entities,
         });
@@ -902,6 +917,101 @@ export async function deepReadFile(
 
   logger.info({ fileId, name, factsExtracted, conflictsFound }, 'Deep read complete');
   return { factsExtracted, conflictsFound };
+}
+
+// ── Chunking and synthesis helpers ──
+
+/** Chunk size in characters (~2K tokens) */
+const CHUNK_SIZE = 8000;
+
+/** Overlap between chunks to avoid splitting facts at boundaries */
+const CHUNK_OVERLAP = 500;
+
+/**
+ * Split text into overlapping chunks, breaking at paragraph boundaries when possible.
+ */
+function chunkText(text: string, chunkSize: number, overlap: number): string[] {
+  if (text.length <= chunkSize) return [text];
+
+  const chunks: string[] = [];
+  let start = 0;
+
+  while (start < text.length) {
+    let end = start + chunkSize;
+
+    // Try to break at a paragraph boundary
+    if (end < text.length) {
+      const lastParagraph = text.lastIndexOf('\n\n', end);
+      if (lastParagraph > start + chunkSize / 2) {
+        end = lastParagraph;
+      }
+    }
+
+    chunks.push(text.slice(start, end));
+    start = end - overlap;
+    if (start >= text.length) break;
+  }
+
+  return chunks;
+}
+
+/**
+ * Resilient JSON array parser — handles truncated responses.
+ */
+function parseJsonResilient(jsonStr: string): Array<Record<string, unknown>> | null {
+  try {
+    const parsed = JSON.parse(jsonStr);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    const salvaged = jsonStr.replace(/,\s*\{[^}]*$/, '') + ']';
+    try {
+      const parsed = JSON.parse(salvaged);
+      return Array.isArray(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+}
+
+/**
+ * Sonnet synthesis pass — deduplicates, resolves conflicts, and catches nuance
+ * that Haiku may have missed. Takes the raw facts from chunked extraction
+ * and produces a refined, higher-quality set.
+ */
+async function synthesizeFacts(
+  client: Anthropic,
+  model: string,
+  fileName: string,
+  rawFacts: Array<Record<string, unknown>>,
+): Promise<Array<Record<string, unknown>>> {
+  const factsJson = JSON.stringify(rawFacts, null, 2);
+
+  const response = await client.messages.create({
+    model,
+    max_tokens: 4096,
+    system: `You are refining facts extracted from a document. Your job:
+1. Deduplicate — merge facts that say the same thing in different words
+2. Resolve conflicts — if two facts contradict, keep the more specific/confident one
+3. Enrich — add context or nuance that makes facts more useful long-term
+4. Re-score — adjust importance (1-10) based on the full picture
+5. Preserve all entities accurately
+
+Return a JSON array in the same format. Every fact must have: type, content, confidence, importance, entities.
+Return ONLY valid JSON, no markdown.`,
+    messages: [{
+      role: 'user',
+      content: `Document: "${fileName}"\n\nRaw extracted facts (${rawFacts.length} items):\n${factsJson}`,
+    }],
+  });
+
+  const text = response.content
+    .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+    .map(b => b.text)
+    .join('');
+
+  const jsonStr = text.replace(/^```json?\s*/i, '').replace(/\s*```$/, '').trim();
+  const parsed = parseJsonResilient(jsonStr);
+  return parsed ?? rawFacts; // fall back to raw facts if synthesis parsing fails
 }
 
 /**

@@ -46,7 +46,7 @@
   "drive": {
     "syncBatchSize": 10,
     "maxFileSizeBytes": 52428800,
-    "maxExtractedChars": 10000
+    "maxExtractedChars": 50000
   },
   "google": {},
   "github": {}

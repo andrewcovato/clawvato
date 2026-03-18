@@ -417,7 +417,7 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
         }
 
         // Run fact extraction in background (fire-and-forget)
-        deepReadFile(googleAuth, db, anthropicClient, config.models.classifier, fileId)
+        deepReadFile(googleAuth, db, anthropicClient, config.models.classifier, fileId, config.models.executor)
           .then(result => {
             logger.info({ fileId, name, factsExtracted: result.factsExtracted }, 'Background deep read complete');
           })
