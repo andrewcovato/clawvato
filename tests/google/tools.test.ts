@@ -238,7 +238,9 @@ describe('Google Workspace Tools', () => {
       });
 
       const tool = findTool('google_gmail_read');
-      const result = await tool.handler({ thread_id: 'thread_1' });
+
+      // Full read mode (headers_only: false) returns message bodies
+      const result = await tool.handler({ thread_id: 'thread_1', headers_only: false });
 
       expect(result.content).toContain('sarah@acme.com');
       expect(result.content).toContain('Meeting Notes');

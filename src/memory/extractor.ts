@@ -130,7 +130,7 @@ export async function extractEmailFacts(
   try {
     const response = await client.messages.create({
       model,
-      max_tokens: 2000,
+      max_tokens: 4096,
       system: getPrompts().emailExtraction,
       messages: [{ role: 'user', content: emailContent }],
     });
