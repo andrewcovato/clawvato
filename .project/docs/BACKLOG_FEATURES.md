@@ -46,6 +46,13 @@
 - [ ] **Track H: Suggestion engine** — "What Would You Do?" mode with feedback learning
 - [ ] **Fireflies integration** — Extract facts from meeting transcripts into memory
 - [ ] **Embedding-based change detection** — Compare old vs new document embeddings to detect meaningful changes without full re-read
+- [ ] **Cross-source intelligence engine** — Scan and cross-reference Slack messages, emails, and meeting transcripts (Fireflies) to automatically generate and maintain:
+  - **Auto-updating to-do list** — Extracted from commitments, action items, and deadlines across all sources. Organized by client/project. Detects when items are completed (mentioned in follow-up messages).
+  - **CRM-like client tracker** — Auto-built from interactions. Per-client: key contacts, last interaction, active projects, outstanding asks, relationship health. Updated continuously from Slack/email/meetings.
+  - **Project management** — Active projects with status, milestones, blockers, and owners. Inferred from conversation patterns across channels.
+  - Scan modes: on-demand ("scan all my Slack messages"), scheduled (cron job — daily/weekly digest), or continuous (extract as messages flow in, which we already do for the bot's channels)
+  - Key challenge: deduplication across sources (same action item mentioned in Slack, email, and a meeting)
+  - Builds on: memory system (storage), Drive sync (file context), working context (active state)
 - [ ] **Claude Code orchestration** — Clawvato as product manager, Claude Code as coder. Agent assembles rich business context (memories, files, decisions, working context) into a Claude Code prompt, spawns a session, reviews output, reports back via Slack. Solves cold-start problem — every Claude Code session starts with full business context. Can be used for:
   - Building/maintaining external projects (agent knows the business, directs the coding)
   - Self-improvement (agent identifies its own gaps, spawns Claude Code to fix them, runs tests, deploys via Railway)
