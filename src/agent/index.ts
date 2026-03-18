@@ -65,7 +65,6 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
   google_drive_sync: 'Syncing Drive files...',
   google_drive_read_content: 'Reading file content...',
   google_drive_list_known: 'Listing known files...',
-  google_gmail_sync: 'Syncing email threads...',
   // Slack
   slack_search_messages: 'Searching Slack messages...',
   slack_post_message: 'Posting a message...',
@@ -322,6 +321,35 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
       toolDefs.push(tool.definition);
       toolHandlers.set(tool.definition.name, tool.handler);
     }
+
+    // Override gmail_read to extract facts into memory in the background
+    const originalGmailRead = toolHandlers.get('google_gmail_read')!;
+    toolHandlers.set('google_gmail_read', async (args) => {
+      const result = await originalGmailRead(args);
+
+      // Fire-and-forget: extract facts from the thread into memory
+      if (!result.isError && result.content.length > 100) {
+        const db = getDb();
+        (async () => {
+          try {
+            const emailResult = await extractFacts(
+              anthropicClient,
+              config.models.classifier,
+              result.content,
+              `gmail:read:${Date.now()}`,
+            );
+            if (emailResult.facts.length > 0 || emailResult.people.length > 0) {
+              const stored = await storeExtractionResult(db, emailResult, `gmail:read:${Date.now()}`);
+              logger.info({ facts: stored.memoriesStored, people: stored.peopleStored }, 'Background email extraction complete');
+            }
+          } catch (error) {
+            logger.debug({ error: error instanceof Error ? error.message : String(error) }, 'Background email extraction failed');
+          }
+        })();
+      }
+
+      return result;
+    });
     logger.info({ toolCount: googleTools.length }, 'Google Workspace tools loaded');
 
     // Drive knowledge sync tools
@@ -522,48 +550,6 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
       return { content: `${docs.length} known files:\n${lines.join('\n')}` };
     });
 
-    // ── Gmail sync tool ──
-    toolDefs.push({
-      name: 'google_gmail_sync',
-      description:
-        'Sync recent email threads into long-term memory. Filters out junk/newsletters, ' +
-        'extracts action items and facts from real conversations. Use when asked to ' +
-        '"scan my emails", "check for outstanding items", or "what emails need attention".',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          days_back: { type: 'number', description: 'Sync emails from the last N days (default 7)' },
-          max_threads: { type: 'number', description: 'Max threads to process (default 50)' },
-        },
-        required: [],
-      },
-    });
-    toolHandlers.set('google_gmail_sync', async (args) => {
-      const db = getDb();
-      try {
-        const { syncGmail } = await import('../google/gmail-sync.js');
-        const ownerEmail = config.google.agentEmail ?? '';
-        if (!ownerEmail) {
-          return { content: 'Gmail sync requires google.agentEmail in config (the owner\'s email address).', isError: true };
-        }
-        const result = await syncGmail(
-          googleAuth, db, anthropicClient, config.models.classifier, ownerEmail,
-          {
-            daysBack: (args.days_back as number) ?? 7,
-            maxThreads: Math.min((args.max_threads as number) ?? 50, 100),
-          },
-        );
-        return {
-          content: `Gmail sync complete: ${result.threadsScanned} threads scanned. ` +
-            `${result.threadsExtracted} extracted, ${result.threadsSkipped} already synced, ` +
-            `${result.threadsFiltered} filtered (junk/newsletters). ` +
-            `${result.factsExtracted} facts + ${result.commitmentsExtracted} commitments stored.`,
-        };
-      } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        return { content: `Gmail sync failed: ${msg}`, isError: true };
-      }
-    });
   } else {
     logger.info('Google Workspace tools not loaded — credentials not configured');
   }
