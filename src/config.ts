@@ -219,6 +219,7 @@ export function loadConfig(overrides?: Partial<ClawvatoConfig>): ClawvatoConfig 
   if (process.env.OWNER_SLACK_USER_ID) envConfig.ownerSlackUserId = process.env.OWNER_SLACK_USER_ID;
   if (process.env.LOG_LEVEL) envConfig.logLevel = process.env.LOG_LEVEL;
   if (process.env.DATA_DIR) envConfig.dataDir = process.env.DATA_DIR;
+  if (process.env.TRUST_LEVEL) envConfig.trustLevel = Number(process.env.TRUST_LEVEL);
 
   // Merge: defaults < file < env < overrides
   const merged = { ...defaults, ...fileConfig, ...envConfig, ...overrides };
