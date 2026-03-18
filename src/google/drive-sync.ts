@@ -456,6 +456,7 @@ export async function syncDrive(
       const summary = genSummary;
       const fileEntities = genEntities;
       summariesGenerated++;
+      logger.debug({ name: file.name, folderPath, summaryLen: summary.length, entities: fileEntities.length }, 'Generated summary for new file');
 
       upsertDocument(db, {
         source_type: 'gdrive',
