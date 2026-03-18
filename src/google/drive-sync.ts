@@ -818,7 +818,7 @@ export async function deepReadFile(
 
     const response = await client.messages.create({
       model,
-      max_tokens: 2000,
+      max_tokens: 4096,
       system: DOC_EXTRACTION_PROMPT,
       messages: [{ role: 'user', content: messageContent }],
     });
@@ -829,16 +829,29 @@ export async function deepReadFile(
       .join('');
 
     const jsonStr = text.replace(/^```json?\s*/i, '').replace(/\s*```$/, '').trim();
-    const facts = JSON.parse(jsonStr);
 
-    if (!Array.isArray(facts)) {
-      logger.warn('Document extraction returned non-array');
-      return { factsExtracted: 0, conflictsFound: 0 };
+    // Resilient JSON parsing — if truncated, try to salvage complete entries
+    let facts: unknown[];
+    try {
+      const parsed = JSON.parse(jsonStr);
+      facts = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      // JSON may be truncated (max_tokens hit). Try to close the array and parse what we have.
+      const salvaged = jsonStr.replace(/,\s*\{[^}]*$/, '') + ']';
+      try {
+        const parsed = JSON.parse(salvaged);
+        facts = Array.isArray(parsed) ? parsed : [];
+        logger.info({ salvaged: facts.length }, 'Salvaged partial JSON from truncated extraction');
+      } catch {
+        logger.warn({ textLength: text.length }, 'Document extraction returned unparseable JSON');
+        return { factsExtracted: 0, conflictsFound: 0 };
+      }
     }
 
     const newMemoryIds: { id: string; content: string }[] = [];
 
-    for (const fact of facts) {
+    for (const rawFact of facts) {
+      const fact = rawFact as Record<string, unknown>;
       if (!fact.content || !fact.type) continue;
 
       const factContent = String(fact.content).slice(0, 500);
