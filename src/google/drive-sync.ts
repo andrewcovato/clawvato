@@ -235,6 +235,80 @@ async function getFilePath(
 }
 
 /**
+ * Build a complete folder ID → path map by recursively discovering all folders.
+ * Much more reliable than per-file getFilePath which makes N API calls and fails under concurrency.
+ */
+async function buildFolderPathMap(
+  drive: ReturnType<typeof google.drive>,
+  rootFolderId?: string,
+): Promise<Map<string, string>> {
+  const pathMap = new Map<string, string>();
+
+  // If we have a root folder, get its name first
+  if (rootFolderId) {
+    try {
+      const root = await drive.files.get({ fileId: rootFolderId, fields: 'name, parents' });
+      const rootName = root.data.name ?? 'root';
+      // Walk up to get full path of root
+      const rootPath = await getFilePath(drive, [rootFolderId]);
+      pathMap.set(rootFolderId, rootPath);
+    } catch {
+      pathMap.set(rootFolderId, '/');
+    }
+  }
+
+  // Discover all folders recursively
+  const queue = rootFolderId ? [rootFolderId] : [];
+
+  // If no root, discover top-level folders
+  if (!rootFolderId) {
+    try {
+      const result = await drive.files.list({
+        q: "mimeType = 'application/vnd.google-apps.folder' and trashed = false and 'root' in parents",
+        pageSize: 200,
+        fields: 'files(id, name)',
+      });
+      for (const f of result.data.files ?? []) {
+        if (f.id && f.name) {
+          pathMap.set(f.id, `/${f.name}`);
+          queue.push(f.id);
+        }
+      }
+    } catch { /* non-critical */ }
+  }
+
+  // BFS to find all subfolders and build paths
+  while (queue.length > 0) {
+    const parentId = queue.shift()!;
+    const parentPath = pathMap.get(parentId) ?? '/';
+
+    try {
+      let pageToken: string | undefined;
+      do {
+        const result = await drive.files.list({
+          q: `'${parentId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+          pageSize: 200,
+          pageToken,
+          fields: 'nextPageToken, files(id, name)',
+        });
+        for (const f of result.data.files ?? []) {
+          if (f.id && f.name) {
+            pathMap.set(f.id, `${parentPath}/${f.name}`);
+            queue.push(f.id);
+          }
+        }
+        pageToken = result.data.nextPageToken ?? undefined;
+      } while (pageToken);
+    } catch (error) {
+      logger.debug({ error, parentId }, 'Failed to list subfolders');
+    }
+  }
+
+  logger.info({ folderCount: pathMap.size }, 'Built folder path map');
+  return pathMap;
+}
+
+/**
  * Recursively collect all subfolder IDs under a given folder.
  */
 async function getAllSubfolderIds(
@@ -423,6 +497,9 @@ export async function syncDrive(
 
   logger.info({ filesFound: driveFiles.length }, 'Drive files listed');
 
+  // Build folder path map upfront — much faster and more reliable than per-file API calls
+  const folderPathMap = await buildFolderPathMap(drive, opts?.folderId);
+
   // ── 2. Compare against document registry ──
   const existingDocs = new Map<string, Document>();
   for (const doc of listDocuments(db, { limit: 10000 })) {
@@ -446,8 +523,9 @@ export async function syncDrive(
     const existing = existingDocs.get(file.id);
 
     if (!existing) {
-      // New file
-      const folderPath = await getFilePath(drive, file.parents);
+      // New file — resolve folder path from pre-built map
+      const parentId = file.parents?.[0];
+      const folderPath = parentId ? (folderPathMap.get(parentId) ?? '/') : '/';
       const content = await exportFileContent(drive, file.id, file.mimeType, 2000);
       const contentHash = content ? hashContent(content) : null;
 
