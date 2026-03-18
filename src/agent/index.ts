@@ -60,6 +60,9 @@ const SHORT_TERM_TOKEN_BUDGET = 2000;
 /** Max tokens for long-term memory retrieval (from DB) */
 const LONG_TERM_TOKEN_BUDGET = 1500;
 
+/** Max tokens for working context scratch pad */
+const WORKING_CONTEXT_TOKEN_BUDGET = 1000;
+
 const SYSTEM_PROMPT = `You are Clawvato, a personal AI chief of staff running in Slack. You help your owner manage their work life — Slack messages, meetings, emails, documents, and tasks.
 
 ## How you see conversations
@@ -98,7 +101,7 @@ Stay silent when:
 - If Google tools are available, you can check calendar, search email, create drafts, and search Drive
 - Always confirm before sending messages or creating events on the owner's behalf
 - **Search efficiency**: Start with 1-2 targeted searches. If initial results aren't what the owner needs, check in before continuing — let them know what you found so far and that a deeper search is possible but will take longer. Never silently loop through many searches. Summarize from snippets unless asked to read a full message.
-- **Working context**: When you perform an action that produces an ID or reference (folder ID, file ID, draft ID, event ID), save it to your working context using the update_working_context tool. This persists across messages so you can pick up where you left off. Clear entries when the task is done.
+- **Working context**: You have a scratch pad (update_working_context tool) that persists across messages and channels. Use it to track active work: folder/file/draft IDs, project status, what you're waiting on, next steps. Keep entries concise but detailed enough to pick up where you left off without re-reading the full conversation. Update when something meaningful changes — not every message. Clear entries when work is complete. Some overlap with long-term memory is fine; gaps are worse than duplication.
 - Never share the owner's private information with others
 - When you complete a task, report the result briefly
 - If a task has multiple steps, report meaningful milestones`;
@@ -677,14 +680,25 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
         channelLabel = (ch?.name as string) ?? (ch?.id as string) ?? batch.channel;
       } catch { /* non-critical — use ID as fallback */ }
 
-      // Load working context from agent_state
+      // Load working context from agent_state (token-budgeted)
       let workingContext = '';
       try {
         const rows = db.prepare(
-          "SELECT key, value FROM agent_state WHERE key LIKE 'wctx:%' ORDER BY updated_at DESC LIMIT 10"
+          "SELECT key, value FROM agent_state WHERE key LIKE 'wctx:%' ORDER BY updated_at DESC LIMIT 20"
         ).all() as unknown as Array<{ key: string; value: string }>;
         if (rows.length > 0) {
-          workingContext = `## Working Context\n${rows.map(r => `- ${r.value}`).join('\n')}`;
+          const lines: string[] = [];
+          let wctxTokens = 0;
+          for (const r of rows) {
+            const line = `- ${r.value}`;
+            const tokens = estimateTokens(line);
+            if (wctxTokens + tokens > WORKING_CONTEXT_TOKEN_BUDGET) break;
+            lines.push(line);
+            wctxTokens += tokens;
+          }
+          if (lines.length > 0) {
+            workingContext = `## Working Context\n${lines.join('\n')}`;
+          }
         }
       } catch { /* agent_state may not exist */ }
 
