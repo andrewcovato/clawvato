@@ -60,6 +60,7 @@ export interface SyncResult {
   updatedFiles: number;
   removedFiles: number;
   summariesGenerated: number;
+  memoriesBackfilled: number;
 }
 
 export interface DeepReadResult {
@@ -508,7 +509,32 @@ export async function syncDrive(
     }
   }
 
-  // ── 3. Detect removed files ──
+  // ── 3. Self-heal: ensure every file with a summary has a corresponding memory ──
+  let memoriesBackfilled = 0;
+  for (const file of driveFiles) {
+    const doc = getDocument(db, 'gdrive', file.id);
+    if (!doc || !doc.summary) continue;
+
+    // Check if a memory exists for this file
+    const memoryExists = db.prepare(
+      "SELECT 1 FROM memories WHERE source LIKE ? AND valid_until IS NULL LIMIT 1"
+    ).get(`drive:${file.id}:%`);
+
+    if (!memoryExists) {
+      const entities = doc.entities ? JSON.parse(doc.entities) as string[] : [];
+      storeFileSummaryAsMemory(
+        db, file.id, doc.name, doc.folder_path, doc.summary,
+        entities, doc.modified_time ?? now,
+      );
+      memoriesBackfilled++;
+    }
+  }
+
+  if (memoriesBackfilled > 0) {
+    logger.info({ memoriesBackfilled }, 'Backfilled missing file memories');
+  }
+
+  // ── 4. Detect removed files ──
   let removedFiles = 0;
   for (const [sourceId, doc] of existingDocs) {
     if (!seenIds.has(sourceId) && doc.status === 'active') {
@@ -526,6 +552,7 @@ export async function syncDrive(
     updatedFiles,
     removedFiles,
     summariesGenerated,
+    memoriesBackfilled,
   };
 
   logger.info(result, 'Drive sync complete');
