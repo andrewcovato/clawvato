@@ -621,7 +621,7 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
   });
   toolHandlers.set('scan_channel_history', async (args) => {
     const channel = args.channel as string;
-    const messageCount = Math.min((args.message_count as number) ?? 100, 200);
+    const messageCount = Math.min((args.message_count as number) ?? 100, 500);
     const db = getDb();
 
     try {
