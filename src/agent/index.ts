@@ -20,6 +20,7 @@ import { getDb } from '../db/index.js';
 import { createSlackTools, type SlackTool, type ToolHandlerResult } from '../mcp/slack/server.js';
 import { getGoogleAuth } from '../google/auth.js';
 import { createGoogleTools } from '../google/tools.js';
+import { syncDrive, deepReadFile, listDocuments, findDocumentByName } from '../google/drive-sync.js';
 import { retrieveContext } from '../memory/retriever.js';
 import { extractFacts, storeExtractionResult } from '../memory/extractor.js';
 import { maybeReflect } from '../memory/reflection.js';
@@ -322,6 +323,112 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
       toolHandlers.set(tool.definition.name, tool.handler);
     }
     logger.info({ toolCount: googleTools.length }, 'Google Workspace tools loaded');
+
+    // Drive knowledge sync tools
+    toolDefs.push({
+      name: 'google_drive_sync',
+      description:
+        'Scan Google Drive and update knowledge of what files exist. Detects new, modified, and removed files. ' +
+        'Generates summaries for new/changed files. Use when asked to "sync Drive", "scan my files", or "what files do I have".',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          folder_id: { type: 'string', description: 'Optional: specific folder ID to scan (default: all files)' },
+          max_files: { type: 'number', description: 'Max files to scan (default 200, max 500)' },
+        },
+        required: [],
+      },
+    });
+    toolHandlers.set('google_drive_sync', async (args) => {
+      const db = getDb();
+      try {
+        const result = await syncDrive(googleAuth, db, anthropicClient, config.models.classifier, {
+          folderId: args.folder_id as string | undefined,
+          maxFiles: Math.min((args.max_files as number) ?? 200, 500),
+        });
+        return {
+          content: `Drive sync complete: ${result.filesScanned} files scanned. ` +
+            `${result.newFiles} new, ${result.updatedFiles} updated, ${result.removedFiles} removed. ` +
+            `${result.summariesGenerated} summaries generated.`,
+        };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return { content: `Drive sync failed: ${msg}`, isError: true };
+      }
+    });
+
+    toolDefs.push({
+      name: 'google_drive_read_content',
+      description:
+        'Deep read a specific file — exports full content and extracts facts into memory. ' +
+        'Use when asked "what does this file say?" or "read the Q2 budget". ' +
+        'Facts are automatically stored in memory for future retrieval.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          file_id: { type: 'string', description: 'Google Drive file ID' },
+        },
+        required: ['file_id'],
+      },
+    });
+    toolHandlers.set('google_drive_read_content', async (args) => {
+      const fileId = args.file_id as string;
+      const db = getDb();
+      try {
+        const result = await deepReadFile(googleAuth, db, anthropicClient, config.models.classifier, fileId);
+        return {
+          content: `Deep read complete: ${result.factsExtracted} facts extracted into memory. ` +
+            (result.conflictsFound > 0
+              ? `${result.conflictsFound} conflicts detected with existing knowledge — owner's statements preserved.`
+              : 'No conflicts with existing knowledge.'),
+        };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return { content: `Deep read failed: ${msg}`, isError: true };
+      }
+    });
+
+    toolDefs.push({
+      name: 'google_drive_list_known',
+      description:
+        'List files the bot already knows about from previous syncs. Returns names, summaries, and last sync times. ' +
+        'Use before deep-reading to find the right file.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          search: { type: 'string', description: 'Optional: filter by file name' },
+          limit: { type: 'number', description: 'Max results (default 20)' },
+        },
+        required: [],
+      },
+    });
+    toolHandlers.set('google_drive_list_known', async (args) => {
+      const db = getDb();
+      const search = args.search as string | undefined;
+      const limit = Math.min((args.limit as number) ?? 20, 50);
+
+      if (search) {
+        const doc = findDocumentByName(db, search);
+        if (!doc) return { content: `No known files matching "${search}". Try google_drive_sync first.` };
+        const summary = doc.summary ? `\n  Summary: ${doc.summary}` : '';
+        return {
+          content: `Found: ${doc.name} (${doc.mime_type}) | Modified: ${doc.modified_time} | ID: ${doc.source_id}${summary}`,
+        };
+      }
+
+      const docs = listDocuments(db, { limit });
+      if (docs.length === 0) {
+        return { content: 'No files indexed yet. Use google_drive_sync to scan Drive.' };
+      }
+
+      const lines = docs.map(d => {
+        const summary = d.summary ? ` — ${d.summary.slice(0, 100)}` : '';
+        const deepRead = d.deep_read_at ? ' [deep read]' : '';
+        return `- ${d.name} | ${d.modified_time} | ID: ${d.source_id}${deepRead}${summary}`;
+      });
+
+      return { content: `${docs.length} known files:\n${lines.join('\n')}` };
+    });
   } else {
     logger.info('Google Workspace tools not loaded — credentials not configured');
   }

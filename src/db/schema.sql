@@ -162,6 +162,28 @@ CREATE TABLE IF NOT EXISTS plugins (
   approved_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Document registry for knowledge sync (Drive, local files, etc.)
+CREATE TABLE IF NOT EXISTS documents (
+  id TEXT PRIMARY KEY,
+  source_type TEXT NOT NULL CHECK(source_type IN ('gdrive', 'local', 'slack_canvas')),
+  source_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  mime_type TEXT,
+  folder_path TEXT,
+  owner TEXT,
+  modified_time TEXT,
+  content_hash TEXT,
+  summary TEXT,
+  last_synced_at TEXT,
+  deep_read_at TEXT,
+  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'removed', 'error')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_documents_source ON documents(source_type, source_id);
+CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);
+CREATE INDEX IF NOT EXISTS idx_documents_name ON documents(name);
+
 -- General-purpose agent state (replaces sentinel rows in other tables)
 CREATE TABLE IF NOT EXISTS agent_state (
   key TEXT PRIMARY KEY,

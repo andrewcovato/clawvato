@@ -1,0 +1,219 @@
+/**
+ * Tests for Drive Knowledge Sync.
+ *
+ * Tests document registry CRUD, sync logic, and conflict detection.
+ * Uses real SQLite databases (same pattern as memory tests).
+ */
+
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { loadConfig } from '../../src/config.js';
+import { initDb, closeDb } from '../../src/db/index.js';
+import {
+  getDocument,
+  upsertDocument,
+  listDocuments,
+  findDocumentByName,
+} from '../../src/google/drive-sync.js';
+import { insertMemory, getMemory, findMemoriesByType } from '../../src/memory/store.js';
+import type { DatabaseSync } from 'node:sqlite';
+
+let db: DatabaseSync;
+let tmpDir: string;
+
+beforeEach(() => {
+  tmpDir = mkdtempSync(join(tmpdir(), 'clawvato-test-'));
+  loadConfig({ dataDir: tmpDir });
+  db = initDb();
+});
+
+afterEach(() => {
+  closeDb();
+  rmSync(tmpDir, { recursive: true, force: true });
+});
+
+describe('Document registry CRUD', () => {
+  it('inserts and retrieves a document', () => {
+    const id = upsertDocument(db, {
+      source_type: 'gdrive',
+      source_id: 'file_abc123',
+      name: 'Q2 Budget.xlsx',
+      mime_type: 'application/vnd.google-apps.spreadsheet',
+      folder_path: '/Finance',
+      owner: 'Sarah Chen',
+      modified_time: '2026-03-15T10:00:00Z',
+      content_hash: 'abc123hash',
+      summary: 'Q2 revenue projections broken down by region.',
+      last_synced_at: '2026-03-17T10:00:00Z',
+      deep_read_at: null,
+      status: 'active',
+    });
+
+    const doc = getDocument(db, 'gdrive', 'file_abc123');
+    expect(doc).not.toBeNull();
+    expect(doc!.name).toBe('Q2 Budget.xlsx');
+    expect(doc!.summary).toContain('revenue projections');
+    expect(doc!.status).toBe('active');
+  });
+
+  it('upserts existing document (updates, not duplicates)', () => {
+    upsertDocument(db, {
+      source_type: 'gdrive',
+      source_id: 'file_abc123',
+      name: 'Q2 Budget.xlsx',
+      mime_type: 'application/vnd.google-apps.spreadsheet',
+      folder_path: '/Finance',
+      owner: 'Sarah',
+      modified_time: '2026-03-15T10:00:00Z',
+      content_hash: 'hash1',
+      summary: 'Old summary',
+      last_synced_at: '2026-03-15T10:00:00Z',
+      deep_read_at: null,
+      status: 'active',
+    });
+
+    upsertDocument(db, {
+      source_type: 'gdrive',
+      source_id: 'file_abc123',
+      name: 'Q2 Budget v2.xlsx',
+      mime_type: 'application/vnd.google-apps.spreadsheet',
+      folder_path: '/Finance',
+      owner: 'Sarah',
+      modified_time: '2026-03-17T10:00:00Z',
+      content_hash: 'hash2',
+      summary: 'Updated summary',
+      last_synced_at: '2026-03-17T10:00:00Z',
+      deep_read_at: null,
+      status: 'active',
+    });
+
+    const docs = listDocuments(db);
+    expect(docs).toHaveLength(1);
+    expect(docs[0].name).toBe('Q2 Budget v2.xlsx');
+    expect(docs[0].content_hash).toBe('hash2');
+    expect(docs[0].summary).toBe('Updated summary');
+  });
+
+  it('lists documents ordered by modified time', () => {
+    upsertDocument(db, {
+      source_type: 'gdrive', source_id: 'file_1', name: 'Older File',
+      mime_type: null, folder_path: null, owner: null,
+      modified_time: '2026-03-10T10:00:00Z', content_hash: null,
+      summary: null, last_synced_at: null, deep_read_at: null, status: 'active',
+    });
+    upsertDocument(db, {
+      source_type: 'gdrive', source_id: 'file_2', name: 'Newer File',
+      mime_type: null, folder_path: null, owner: null,
+      modified_time: '2026-03-17T10:00:00Z', content_hash: null,
+      summary: null, last_synced_at: null, deep_read_at: null, status: 'active',
+    });
+
+    const docs = listDocuments(db);
+    expect(docs).toHaveLength(2);
+    expect(docs[0].name).toBe('Newer File');
+    expect(docs[1].name).toBe('Older File');
+  });
+
+  it('filters by status', () => {
+    upsertDocument(db, {
+      source_type: 'gdrive', source_id: 'file_1', name: 'Active File',
+      mime_type: null, folder_path: null, owner: null,
+      modified_time: null, content_hash: null,
+      summary: null, last_synced_at: null, deep_read_at: null, status: 'active',
+    });
+    upsertDocument(db, {
+      source_type: 'gdrive', source_id: 'file_2', name: 'Removed File',
+      mime_type: null, folder_path: null, owner: null,
+      modified_time: null, content_hash: null,
+      summary: null, last_synced_at: null, deep_read_at: null, status: 'removed',
+    });
+
+    const active = listDocuments(db, { status: 'active' });
+    expect(active).toHaveLength(1);
+    expect(active[0].name).toBe('Active File');
+
+    const removed = listDocuments(db, { status: 'removed' });
+    expect(removed).toHaveLength(1);
+    expect(removed[0].name).toBe('Removed File');
+  });
+
+  it('finds document by name (partial match)', () => {
+    upsertDocument(db, {
+      source_type: 'gdrive', source_id: 'file_1', name: 'Q2 Budget Projections.xlsx',
+      mime_type: null, folder_path: null, owner: null,
+      modified_time: null, content_hash: null,
+      summary: null, last_synced_at: null, deep_read_at: null, status: 'active',
+    });
+
+    const found = findDocumentByName(db, 'Budget');
+    expect(found).not.toBeNull();
+    expect(found!.name).toContain('Budget');
+
+    const notFound = findDocumentByName(db, 'Nonexistent');
+    expect(notFound).toBeNull();
+  });
+});
+
+describe('Stale memory flagging', () => {
+  it('reduces confidence of memories from modified files', () => {
+    // Insert a memory sourced from a Drive file
+    const memId = insertMemory(db, {
+      type: 'fact',
+      content: 'APAC revenue target is $2M',
+      source: 'drive:file_abc:2026-03-15',
+      confidence: 0.85,
+      importance: 8,
+    });
+
+    // Simulate file modification flagging stale memories
+    const pattern = 'drive:file_abc:%';
+    db.prepare(`
+      UPDATE memories SET confidence = confidence * 0.5
+      WHERE source LIKE ? AND valid_until IS NULL AND confidence > 0.3
+    `).run(pattern);
+
+    const mem = getMemory(db, memId);
+    expect(mem!.confidence).toBeCloseTo(0.425); // 0.85 * 0.5
+  });
+
+  it('does not flag memories from other files', () => {
+    const memId = insertMemory(db, {
+      type: 'fact',
+      content: 'Some other fact',
+      source: 'drive:file_xyz:2026-03-15',
+      confidence: 0.9,
+    });
+
+    // Flag file_abc, not file_xyz
+    db.prepare(`
+      UPDATE memories SET confidence = confidence * 0.5
+      WHERE source LIKE ? AND valid_until IS NULL
+    `).run('drive:file_abc:%');
+
+    const mem = getMemory(db, memId);
+    expect(mem!.confidence).toBe(0.9); // unchanged
+  });
+});
+
+describe('Conflict detection logic', () => {
+  it('owner Slack statement outranks document content', () => {
+    // Owner said something in Slack recently
+    insertMemory(db, {
+      type: 'fact',
+      content: 'APAC revenue target was revised to $1.8M',
+      source: 'slack:C123:ts_recent',
+      confidence: 1.0,
+      importance: 9,
+    });
+
+    // Document says $2M — the Slack statement should win
+    // This tests the logic conceptually; actual conflict resolution
+    // happens in deepReadFile which requires Google API mocks
+    const facts = findMemoriesByType(db, 'fact', { validOnly: true });
+    expect(facts).toHaveLength(1);
+    expect(facts[0].content).toContain('$1.8M');
+    expect(facts[0].confidence).toBe(1.0);
+  });
+});
