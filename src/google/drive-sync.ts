@@ -444,14 +444,14 @@ export async function syncDrive(
       const content = await exportFileContent(drive, file.id, file.mimeType, 2000);
       const contentHash = content ? hashContent(content) : null;
 
-      let summary: string | null = null;
-      let fileEntities: string[] = [];
-      if (content && content.length > 50) {
-        const result = await generateSummary(client, model, file.name, folderPath, content);
-        summary = result.summary;
-        fileEntities = result.entities;
-        summariesGenerated++;
-      }
+      // Always generate a summary — content is a bonus, not a requirement.
+      // Haiku can infer "Acme Corp is a client" from folder path + file name alone.
+      const { summary: genSummary, entities: genEntities } = await generateSummary(
+        client, model, file.name, folderPath, content ?? '',
+      );
+      const summary = genSummary;
+      const fileEntities = genEntities;
+      summariesGenerated++;
 
       upsertDocument(db, {
         source_type: 'gdrive',
@@ -482,14 +482,12 @@ export async function syncDrive(
 
       if (contentHash !== existing.content_hash) {
         // Content actually changed — re-summarize
-        let summary = existing.summary;
-        let fileEntities = existing.entities;
-        if (content && content.length > 50) {
-          const result = await generateSummary(client, model, file.name, existing.folder_path, content);
-          summary = result.summary;
-          fileEntities = JSON.stringify(result.entities);
-          summariesGenerated++;
-        }
+        const { summary: genSummary, entities: genEntities } = await generateSummary(
+          client, model, file.name, existing.folder_path, content ?? '',
+        );
+        const summary = genSummary;
+        const fileEntities = JSON.stringify(genEntities);
+        summariesGenerated++;
 
         upsertDocument(db, {
           source_type: 'gdrive',

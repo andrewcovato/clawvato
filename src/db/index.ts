@@ -93,14 +93,14 @@ export function initDb(): DatabaseSync {
   // Safe to remove this block after it has run once on Railway (2026-03-18)
   try {
     const needsReset = db.prepare(
-      "SELECT 1 FROM agent_state WHERE key = 'drive_reset_v2'"
+      "SELECT 1 FROM agent_state WHERE key = 'drive_reset_v3'"
     ).get();
     if (!needsReset) {
-      logger.info('One-time reset: clearing documents and drive memories for re-sync');
+      logger.info('One-time reset: clearing documents and drive memories for re-sync (v3 — always-summarize)');
       db.exec("DELETE FROM documents");
       db.exec("UPDATE memories SET valid_until = datetime('now') WHERE source LIKE 'drive:%'");
       db.prepare(
-        "INSERT OR REPLACE INTO agent_state (key, value) VALUES ('drive_reset_v2', ?)"
+        "INSERT OR REPLACE INTO agent_state (key, value) VALUES ('drive_reset_v3', ?)"
       ).run(new Date().toISOString());
     }
   } catch {
