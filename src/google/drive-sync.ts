@@ -70,11 +70,14 @@ export interface DeepReadResult {
 
 // ── Summary generation prompt ──
 
-const SUMMARY_PROMPT = `Analyze this document and return a JSON object with:
-- "summary": 2-3 sentence summary — what it is, what it contains, who it's relevant to
-- "entities": array of person names, company names, and key topics mentioned
+const SUMMARY_PROMPT = `You are analyzing a file to build knowledge about the owner's world. You will be given the file name, its folder path, and its content.
 
-Be specific enough that someone could decide whether to read it based on your summary alone.
+Use ALL available evidence — file name, folder location, and content — to draw conclusions about what this file represents. The folder path is a strong signal (a file in "Clients/Acme" is likely about a client called Acme) but files can be misfiled, mislabeled, or in catch-all folders. Trust content over folder structure when they conflict.
+
+Return a JSON object with:
+- "summary": 2-3 sentences describing what this file is about, who/what it relates to, and any categorization you can infer (e.g., "Acme Corp is a client" if the evidence supports it). Write conclusions, not file descriptions — "Acme Corp is a client with an active proposal" is better than "This file contains a proposal document."
+- "entities": array of person names, company names, project names, and key topics
+
 Return ONLY valid JSON, no markdown.`;
 
 // ── Fact extraction from document content ──
@@ -271,14 +274,16 @@ async function getAllSubfolderIds(
 /**
  * Build the expected memory content for a file.
  * Used both for creating new memories and checking if existing ones are current.
+ * The summary is a conclusion (e.g., "Acme Corp is a client with an active proposal")
+ * not a file description, so we include the file name as context but let the summary lead.
  */
 function buildFileMemoryContent(
   fileName: string,
   folderPath: string | null,
   summary: string,
 ): string {
-  const pathLabel = folderPath && folderPath !== '/' ? ` (in ${folderPath})` : '';
-  return `File "${fileName}"${pathLabel}: ${summary}`;
+  const pathLabel = folderPath && folderPath !== '/' ? ` [source: ${folderPath}/${fileName}]` : ` [source: ${fileName}]`;
+  return `${summary}${pathLabel}`;
 }
 
 /**
@@ -442,7 +447,7 @@ export async function syncDrive(
       let summary: string | null = null;
       let fileEntities: string[] = [];
       if (content && content.length > 50) {
-        const result = await generateSummary(client, model, file.name, content);
+        const result = await generateSummary(client, model, file.name, folderPath, content);
         summary = result.summary;
         fileEntities = result.entities;
         summariesGenerated++;
@@ -480,7 +485,7 @@ export async function syncDrive(
         let summary = existing.summary;
         let fileEntities = existing.entities;
         if (content && content.length > 50) {
-          const result = await generateSummary(client, model, file.name, content);
+          const result = await generateSummary(client, model, file.name, existing.folder_path, content);
           summary = result.summary;
           fileEntities = JSON.stringify(result.entities);
           summariesGenerated++;
@@ -783,14 +788,16 @@ async function generateSummary(
   client: Anthropic,
   model: string,
   fileName: string,
+  folderPath: string | null,
   content: string,
 ): Promise<{ summary: string; entities: string[] }> {
   try {
+    const pathContext = folderPath && folderPath !== '/' ? `Folder path: ${folderPath}\n` : '';
     const response = await client.messages.create({
       model,
       max_tokens: 300,
       system: SUMMARY_PROMPT,
-      messages: [{ role: 'user', content: `File: "${fileName}"\n\n${content.slice(0, 2000)}` }],
+      messages: [{ role: 'user', content: `${pathContext}File name: "${fileName}"\n\n${content.slice(0, 2000)}` }],
     });
 
     const text = response.content
