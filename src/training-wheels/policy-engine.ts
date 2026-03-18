@@ -46,16 +46,18 @@ const ALWAYS_CONFIRM: RegExp[] = [
  * Read-only action types (auto-approved at trust level 1+).
  */
 const READ_ACTIONS: RegExp[] = [
-  /^search/i,
-  /^list/i,
-  /^get/i,
-  /^read/i,
-  /^find/i,
-  /^check/i,
-  /^lookup/i,
-  /^fetch/i,
-  /^query/i,
-  /^view/i,
+  /(?:^|_)search/i,
+  /(?:^|_)list/i,
+  /(?:^|_)get/i,
+  /(?:^|_)read/i,
+  /(?:^|_)find/i,
+  /(?:^|_)check/i,
+  /(?:^|_)lookup/i,
+  /(?:^|_)fetch/i,
+  /(?:^|_)query/i,
+  /(?:^|_)view/i,
+  /(?:^|_)sync/i,
+  /(?:^|_)scan/i,
 ];
 
 /**
