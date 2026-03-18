@@ -76,15 +76,40 @@ export async function createSlackConnection(config: {
   // ── Implement SlackMessageAPI ──
   const messages: SlackMessageAPI = {
     async post(channel: string, text: string, threadTs?: string) {
-      const result = await botClient.chat.postMessage({
-        channel,
-        text,
-        thread_ts: threadTs,
-      });
-      return { ts: result.ts as string };
+      // Try native markdown block first, fall back to plain text
+      try {
+        const result = await botClient.chat.postMessage({
+          channel,
+          text, // fallback for notifications
+          blocks: [{ type: 'markdown', text }] as never[],
+          thread_ts: threadTs,
+        });
+        return { ts: result.ts as string };
+      } catch (error) {
+        // If markdown block is rejected, fall back to plain text
+        const errMsg = error instanceof Error ? error.message : '';
+        if (errMsg.includes('invalid_blocks') || errMsg.includes('markdown')) {
+          logger.debug('Markdown block not supported — falling back to plain text');
+          const result = await botClient.chat.postMessage({
+            channel,
+            text,
+            thread_ts: threadTs,
+          });
+          return { ts: result.ts as string };
+        }
+        throw error;
+      }
     },
     async update(channel: string, ts: string, text: string) {
-      await botClient.chat.update({ channel, ts, text });
+      try {
+        await botClient.chat.update({
+          channel, ts, text,
+          blocks: [{ type: 'markdown', text }] as never[],
+        });
+      } catch {
+        // Fall back to plain text update
+        await botClient.chat.update({ channel, ts, text });
+      }
     },
     async delete(channel: string, ts: string) {
       await botClient.chat.delete({ channel, ts });

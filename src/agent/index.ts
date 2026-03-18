@@ -112,57 +112,6 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
   return `Working on ${friendly}...`;
 }
 
-// ── Markdown → Slack mrkdwn conversion ──
-
-/**
- * Convert Markdown formatting to Slack mrkdwn.
- * Catches cases where Claude outputs standard Markdown despite the prompt.
- */
-function toSlackMrkdwn(text: string): string {
-  let result = text;
-
-  // Bold: **text** or __text__ → *text*
-  result = result.replace(/\*\*(.+?)\*\*/g, '*$1*');
-  result = result.replace(/__(.+?)__/g, '*$1*');
-
-  // Headings: ### Title → *Title*
-  result = result.replace(/^#{1,6}\s+(.+)$/gm, '*$1*');
-
-  // Links: [text](url) → <url|text>
-  result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<$2|$1>');
-
-  // Tables → bulleted key-value pairs
-  // Detect table blocks (lines starting with |)
-  result = result.replace(
-    /(?:^[ \t]*\|.+\|[ \t]*\n)+/gm,
-    (tableBlock) => {
-      const rows = tableBlock.trim().split('\n').map(row =>
-        row.split('|').map(cell => cell.trim()).filter(Boolean)
-      );
-      if (rows.length < 2) return tableBlock;
-
-      // First row is headers, skip separator row (contains ---)
-      const headers = rows[0];
-      const dataRows = rows.filter(row =>
-        !row.every(cell => /^[-:\s]+$/.test(cell))
-      ).slice(1);
-
-      if (dataRows.length === 0) return tableBlock;
-
-      return dataRows.map(row =>
-        row.map((cell, i) => {
-          const header = headers[i];
-          return header ? `${header}: ${cell}` : cell;
-        }).join(' | ')
-      ).map(line => `- ${line}`).join('\n') + '\n';
-    },
-  );
-
-  // Emoji shortcodes that Slack renders: :page_facing_up: etc. — leave as-is
-
-  return result;
-}
-
 const SYSTEM_PROMPT = `You are Clawvato, a personal AI chief of staff running in Slack. You help your owner manage their work life — Slack messages, meetings, emails, documents, and tasks.
 
 ## How you see conversations
@@ -215,16 +164,8 @@ Act as a humble scientist: be persistently skeptical of your own knowledge, and 
 - When you complete a task, report the result briefly
 - If a task has multiple steps, report meaningful milestones
 
-## Formatting (Slack mrkdwn)
-You are writing for Slack, which uses mrkdwn — NOT standard Markdown.
-- Bold: *text* (single asterisks, NOT double)
-- Italic: _text_ (underscores)
-- Strikethrough: ~text~
-- Code: \`inline\` or \`\`\`block\`\`\`
-- Links: <url|text>
-- Lists: use bullet points (-)
-- NEVER use Markdown tables (| col | col |) — Slack cannot render them. Use bulleted lists or key: value pairs instead.
-- NEVER use # headings — use *bold text* on its own line instead.`;
+## Formatting
+You are writing for Slack which supports standard Markdown. Use headings, bold, tables, code blocks, and lists normally.`;
 
 export interface Agent {
   /** Process an accumulated batch of messages from the owner */
@@ -1046,7 +987,7 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
 
         // ── Post response (or stay silent) ──
         if (finalResponse && !finalResponse.trim().includes(NO_RESPONSE)) {
-          const cleanResponse = toSlackMrkdwn(finalResponse.replace(/\[NO_RESPONSE\]/g, '').trim());
+          const cleanResponse = finalResponse.replace(/\[NO_RESPONSE\]/g, '').trim();
           if (cleanResponse) {
             logger.info({ responseLength: cleanResponse.length }, 'Posting agent response');
             try {
