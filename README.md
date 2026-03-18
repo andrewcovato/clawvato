@@ -44,10 +44,17 @@ Message arrives → Agent responds → Haiku extracts facts in background
                               → inject into prompt as context
 ```
 
-**Short-term memory**: Last 50 Slack messages from the channel (re-fetched each time).
-**Long-term memory**: SQLite database with extracted facts, searched via hybrid Reciprocal Rank Fusion.
+**Three memory tiers:**
 
-Each API call is a **fresh session** — no persistent conversation state. Memory DB + Slack history provide continuity between interactions.
+| Tier | Source | Budget | Lifecycle |
+|---|---|---|---|
+| **Working context** | `agent_state` scratch pad | 1000 tokens | Active → sleeping (14 days) → wakes on query match. Never deleted. |
+| **Short-term** | Slack messages (last 50) | 2000 tokens | Re-fetched each interaction. Channel name included for context. |
+| **Long-term** | SQLite memories DB | 1500 tokens | Extracted facts, searched via hybrid FTS5 + vector (RRF). |
+
+Working context tracks operational details (folder IDs, draft IDs, project status) that persist across messages and channels. After 14 days without update, entries sleep — they're excluded from prompts but remain searchable. When a query matches a sleeping entry, it automatically wakes and re-enters the active prompt. Summaries are promoted to long-term memory on sleep.
+
+Each API call is a **fresh session** — no persistent conversation state. The three memory tiers provide continuity between interactions.
 
 #### Memory Types
 
@@ -275,7 +282,7 @@ railway up --detach -m "deploy"
 ### Running Tests
 
 ```bash
-npm test          # 267 tests across 21 files
+npm test          # 267 tests across 21 files, 29 tools
 npm run build     # TypeScript compile
 npm run lint      # Type-check without emitting
 ```
@@ -320,6 +327,8 @@ Dockerfile        # Railway deployment (node:22-slim)
 | Conclusion-style summaries | "Acme is a client" not "File contains proposal" — agent reasons better |
 | Self-healing content comparison | Format improvements auto-propagate on next sync |
 | Folder path as evidence, not gospel | Files can be misfiled — content wins over structure |
+| Sleep/wake working context | Never loses operational details — sleeps after 14 days, wakes on query match |
+| Three memory tiers | Working context (active ops) + Slack (short-term) + DB (long-term) |
 
 ## License
 
