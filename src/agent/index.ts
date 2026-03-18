@@ -39,11 +39,10 @@ import type { WebClient } from '@slack/web-api';
 const NO_RESPONSE = '[NO_RESPONSE]';
 
 /** Max tool-call turns before forcing a stop */
-const MAX_TURNS = 15;
+const MAX_TURNS = 30;
 
-/** Agent query timeout in milliseconds */
-/** Agent query timeout — 5 min to accommodate bulk operations like Drive sync */
-const AGENT_TIMEOUT_MS = 300_000;
+/** Agent query timeout — 10 min to accommodate multi-file analysis and Drive sync */
+const AGENT_TIMEOUT_MS = 600_000;
 
 // ── Context limits (centralized for tuning) ──
 // See CLAUDE.md "Context Limits" section for documentation
@@ -813,7 +812,6 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
         ];
 
         let finalResponse = '';
-        let lastMidLoopText = '';
 
         for (let turn = 0; turn < MAX_TURNS; turn++) {
           if (abortController.signal.aborted) break;
@@ -836,16 +834,10 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
           const hasToolCalls = toolUseBlocks.length > 0;
           const isLastTurn = !hasToolCalls || response.stop_reason === 'end_turn';
 
-          if (textBlocks.length > 0) {
-            const joinedText = textBlocks.join('\n');
-            if (isLastTurn) {
-              // Final turn — this is the actual response to the user
-              finalResponse = joinedText;
-            } else {
-              // Mid-loop text — keep as fallback in case we exhaust MAX_TURNS
-              // without getting a clean final turn. Better than nothing.
-              lastMidLoopText = joinedText;
-            }
+          if (textBlocks.length > 0 && isLastTurn) {
+            // Final turn — this is the actual response to the user.
+            // Mid-loop text (alongside tool calls) is planning/status — we skip it.
+            finalResponse = textBlocks.join('\n');
           }
 
           if (isLastTurn) {
@@ -918,30 +910,6 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
           // Add assistant message + tool results to conversation
           messages.push({ role: 'assistant', content: response.content });
           messages.push({ role: 'user', content: toolResults });
-        }
-
-        // If we exhausted turns without a clean final response,
-        // make one last call without tools to force Claude to synthesize an answer.
-        if (!finalResponse && !interruptState.type && !abortController.signal.aborted) {
-          logger.info({ lastMidLoopText: lastMidLoopText.slice(0, 100) }, 'No final response after tool loop — forcing synthesis call');
-          try {
-            messages.push({ role: 'user', content: 'You have run out of tool calls. Based on everything you have gathered so far, please provide your complete, detailed response to the user now.' });
-            const synthResponse = await anthropicClient.messages.create({
-              model: config.models.executor,
-              max_tokens: 4096,
-              system: SYSTEM_PROMPT,
-              messages,
-            });
-            const synthText = synthResponse.content
-              .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-              .map(b => b.text)
-              .join('\n');
-            if (synthText) {
-              finalResponse = synthText;
-            }
-          } catch (error) {
-            logger.warn({ error }, 'Synthesis call failed');
-          }
         }
 
         // ── Handle interrupts ──
