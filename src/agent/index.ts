@@ -112,6 +112,57 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
   return `Working on ${friendly}...`;
 }
 
+// ── Markdown → Slack mrkdwn conversion ──
+
+/**
+ * Convert Markdown formatting to Slack mrkdwn.
+ * Catches cases where Claude outputs standard Markdown despite the prompt.
+ */
+function toSlackMrkdwn(text: string): string {
+  let result = text;
+
+  // Bold: **text** or __text__ → *text*
+  result = result.replace(/\*\*(.+?)\*\*/g, '*$1*');
+  result = result.replace(/__(.+?)__/g, '*$1*');
+
+  // Headings: ### Title → *Title*
+  result = result.replace(/^#{1,6}\s+(.+)$/gm, '*$1*');
+
+  // Links: [text](url) → <url|text>
+  result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<$2|$1>');
+
+  // Tables → bulleted key-value pairs
+  // Detect table blocks (lines starting with |)
+  result = result.replace(
+    /(?:^[ \t]*\|.+\|[ \t]*\n)+/gm,
+    (tableBlock) => {
+      const rows = tableBlock.trim().split('\n').map(row =>
+        row.split('|').map(cell => cell.trim()).filter(Boolean)
+      );
+      if (rows.length < 2) return tableBlock;
+
+      // First row is headers, skip separator row (contains ---)
+      const headers = rows[0];
+      const dataRows = rows.filter(row =>
+        !row.every(cell => /^[-:\s]+$/.test(cell))
+      ).slice(1);
+
+      if (dataRows.length === 0) return tableBlock;
+
+      return dataRows.map(row =>
+        row.map((cell, i) => {
+          const header = headers[i];
+          return header ? `${header}: ${cell}` : cell;
+        }).join(' | ')
+      ).map(line => `- ${line}`).join('\n') + '\n';
+    },
+  );
+
+  // Emoji shortcodes that Slack renders: :page_facing_up: etc. — leave as-is
+
+  return result;
+}
+
 const SYSTEM_PROMPT = `You are Clawvato, a personal AI chief of staff running in Slack. You help your owner manage their work life — Slack messages, meetings, emails, documents, and tasks.
 
 ## How you see conversations
@@ -162,7 +213,18 @@ Act as a humble scientist: be persistently skeptical of your own knowledge, and 
 - **Working context**: You have a scratch pad (update_working_context tool) that persists across messages and channels. Use it to track what you're actively working on, key findings, decisions made, and what's pending — in human terms, not implementation details. For example: "Synced GBS Inc Drive folder. Confirmed clients: Vail, Coles, Roblox, GYG. Partner: CashmanCo. Pending: owner to clarify GNOG and DraftKings status." Don't store raw IDs — you can look those up by name when needed. Update when something meaningful changes. Clear entries when work is complete. Some overlap with long-term memory is fine; gaps are worse than duplication.
 - Never share the owner's private information with others
 - When you complete a task, report the result briefly
-- If a task has multiple steps, report meaningful milestones`;
+- If a task has multiple steps, report meaningful milestones
+
+## Formatting (Slack mrkdwn)
+You are writing for Slack, which uses mrkdwn — NOT standard Markdown.
+- Bold: *text* (single asterisks, NOT double)
+- Italic: _text_ (underscores)
+- Strikethrough: ~text~
+- Code: \`inline\` or \`\`\`block\`\`\`
+- Links: <url|text>
+- Lists: use bullet points (-)
+- NEVER use Markdown tables (| col | col |) — Slack cannot render them. Use bulleted lists or key: value pairs instead.
+- NEVER use # headings — use *bold text* on its own line instead.`;
 
 export interface Agent {
   /** Process an accumulated batch of messages from the owner */
@@ -984,7 +1046,7 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
 
         // ── Post response (or stay silent) ──
         if (finalResponse && !finalResponse.trim().includes(NO_RESPONSE)) {
-          const cleanResponse = finalResponse.replace(/\[NO_RESPONSE\]/g, '').trim();
+          const cleanResponse = toSlackMrkdwn(finalResponse.replace(/\[NO_RESPONSE\]/g, '').trim());
           if (cleanResponse) {
             logger.info({ responseLength: cleanResponse.length }, 'Posting agent response');
             try {
