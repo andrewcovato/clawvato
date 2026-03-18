@@ -98,6 +98,7 @@ Stay silent when:
 - If Google tools are available, you can check calendar, search email, create drafts, and search Drive
 - Always confirm before sending messages or creating events on the owner's behalf
 - **Search efficiency**: Start with 1-2 targeted searches. If initial results aren't what the owner needs, check in before continuing — let them know what you found so far and that a deeper search is possible but will take longer. Never silently loop through many searches. Summarize from snippets unless asked to read a full message.
+- **Working context**: When you perform an action that produces an ID or reference (folder ID, file ID, draft ID, event ID), save it to your working context using the update_working_context tool. This persists across messages so you can pick up where you left off. Clear entries when the task is done.
 - Never share the owner's private information with others
 - When you complete a task, report the result briefly
 - If a task has multiple steps, report meaningful milestones`;
@@ -456,6 +457,43 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
     logger.info('Google Workspace tools not loaded — credentials not configured');
   }
 
+  // Working context tool — scratch pad for operational details
+  toolDefs.push({
+    name: 'update_working_context',
+    description:
+      'Update your working scratch pad with important operational details: folder IDs, file IDs, ' +
+      'draft IDs, task progress, or anything you need to remember across messages. ' +
+      'Use this whenever you perform an action that produces an ID or reference you might need later. ' +
+      'Also use it to note what you\'re actively working on.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        key: { type: 'string', description: 'Short label (e.g. "sync_folder", "draft_email", "current_task")' },
+        value: { type: 'string', description: 'The detail to remember (e.g. "Clients folder ID: 1Jk-abc123")' },
+        clear: { type: 'boolean', description: 'Set to true to remove this key (task complete)' },
+      },
+      required: ['key'],
+    },
+  });
+  toolHandlers.set('update_working_context', async (args) => {
+    const key = `wctx:${args.key as string}`;
+    const db = getDb();
+    try {
+      if (args.clear) {
+        db.prepare("DELETE FROM agent_state WHERE key = ?").run(key);
+        return { content: `Working context cleared: ${args.key}` };
+      }
+      const value = args.value as string;
+      db.prepare(
+        "INSERT OR REPLACE INTO agent_state (key, value, updated_at) VALUES (?, ?, datetime('now'))"
+      ).run(key, value);
+      return { content: `Working context updated: ${args.key} = ${value}` };
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return { content: `Failed to update working context: ${msg}`, isError: true };
+    }
+  });
+
   // Memory search tool — Tier 3 deep search, agent calls explicitly
   toolDefs.push({
     name: 'search_memory',
@@ -631,13 +669,35 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
 
       let userPrompt: string;
       const parts: string[] = [];
+      // Resolve channel name for context
+      let channelLabel = batch.channel;
+      try {
+        const channelInfo = await options.botClient.conversations.info({ channel: batch.channel });
+        const ch = channelInfo.channel as Record<string, unknown> | undefined;
+        channelLabel = (ch?.name as string) ?? (ch?.id as string) ?? batch.channel;
+      } catch { /* non-critical — use ID as fallback */ }
+
+      // Load working context from agent_state
+      let workingContext = '';
+      try {
+        const rows = db.prepare(
+          "SELECT key, value FROM agent_state WHERE key LIKE 'wctx:%' ORDER BY updated_at DESC LIMIT 10"
+        ).all() as unknown as Array<{ key: string; value: string }>;
+        if (rows.length > 0) {
+          workingContext = `## Working Context\n${rows.map(r => `- ${r.value}`).join('\n')}`;
+        }
+      } catch { /* agent_state may not exist */ }
+
+      if (workingContext) {
+        parts.push(workingContext);
+      }
       if (memoryResult.context) {
         parts.push(memoryResult.context);
       }
       if (conversationHistory) {
-        parts.push(`## Recent conversation\n${conversationHistory}`);
+        parts.push(`## Recent conversation (in #${channelLabel})\n${conversationHistory}`);
       }
-      parts.push(`## New message\n${message}`);
+      parts.push(`## New message (in #${channelLabel})\n${message}`);
       userPrompt = parts.join('\n\n---\n\n');
 
       // Debug reaction: 🧠 = thinking about this
