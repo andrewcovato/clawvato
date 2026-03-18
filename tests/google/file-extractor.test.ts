@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   extractContent,
-  MAX_FILE_SIZE_BYTES,
-  MAX_EXTRACTED_CHARS,
+  getMaxFileSizeBytes,
+  getMaxExtractedChars,
 } from '../../src/google/file-extractor.js';
 import ExcelJS from 'exceljs';
 
@@ -65,7 +65,7 @@ describe('file-extractor', () => {
 
     it('returns null for oversized buffer', async () => {
       // Create a buffer just over the limit (don't actually allocate 50MB — mock the check)
-      const buf = Buffer.alloc(MAX_FILE_SIZE_BYTES + 1);
+      const buf = Buffer.alloc(getMaxFileSizeBytes() + 1);
       const result = await extractContent(buf, 'text/plain');
       expect(result).toBeNull();
     });
@@ -111,11 +111,11 @@ describe('file-extractor', () => {
       expect(result).toEqual({ kind: 'text', text: md });
     });
 
-    it('truncates text exceeding MAX_EXTRACTED_CHARS', async () => {
-      const longText = 'x'.repeat(MAX_EXTRACTED_CHARS + 100);
+    it('truncates text exceeding getMaxExtractedChars()', async () => {
+      const longText = 'x'.repeat(getMaxExtractedChars() + 100);
       const result = await extractContent(Buffer.from(longText), 'text/plain');
       expect(result?.kind).toBe('text');
-      expect((result as { text: string }).text.length).toBe(MAX_EXTRACTED_CHARS);
+      expect((result as { text: string }).text.length).toBe(getMaxExtractedChars());
     });
   });
 

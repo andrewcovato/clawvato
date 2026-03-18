@@ -26,9 +26,7 @@ import {
   type Person,
 } from './store.js';
 import { embed } from './embeddings.js';
-
-/** Maximum tokens to inject as memory context */
-const DEFAULT_TOKEN_BUDGET = 1500;
+import { getConfig } from '../config.js';
 
 /** Rough estimate: 1 token ≈ 4 characters */
 function estimateTokens(text: string): number {
@@ -157,7 +155,7 @@ export async function retrieveContext(
   message: string,
   opts?: { tokenBudget?: number },
 ): Promise<RetrievalResult> {
-  const budget = opts?.tokenBudget ?? DEFAULT_TOKEN_BUDGET;
+  const budget = opts?.tokenBudget ?? getConfig().context.longTermTokenBudget;
   const parts: string[] = [];
   let tokensUsed = 0;
   let memoriesRetrieved = 0;

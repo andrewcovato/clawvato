@@ -22,19 +22,14 @@
 
 import { EventEmitter } from 'node:events';
 import { logger } from '../logger.js';
+import { getConfig } from '../config.js';
 
 export type AccumulationMode = 'snappy' | 'patient' | 'wait_for_me';
 
-const WINDOW_MS: Record<AccumulationMode, number> = {
-  snappy: 2000,
-  patient: 4000,
-  wait_for_me: 15000,
-};
-
-const HARD_CAP_MS = 30_000;
-
-// Typing events fire every ~3s; we wait slightly longer to detect the gap.
-const TYPING_GRACE_MS = 4000;
+function getWindowMs(): Record<AccumulationMode, number> {
+  const cfg = getConfig().slack.accumulationWindows;
+  return { snappy: cfg.snappy, patient: cfg.patient, wait_for_me: cfg.waitForMe };
+}
 
 export interface QueuedMessage {
   text: string;
@@ -79,12 +74,12 @@ export class EventQueue extends EventEmitter {
   private mode: AccumulationMode = 'patient';
 
   get windowMs(): number {
-    return WINDOW_MS[this.mode];
+    return getWindowMs()[this.mode];
   }
 
   setMode(mode: AccumulationMode): void {
     this.mode = mode;
-    logger.info({ mode, windowMs: WINDOW_MS[mode] }, 'Accumulation mode changed');
+    logger.info({ mode, windowMs: getWindowMs()[mode] }, 'Accumulation mode changed');
   }
 
   getMode(): AccumulationMode {
@@ -114,7 +109,7 @@ export class EventQueue extends EventEmitter {
       this.hardCapTimers.set(key, setTimeout(() => {
         logger.debug({ key }, 'Hard cap reached — flushing');
         this.flush(key);
-      }, HARD_CAP_MS));
+      }, getConfig().slack.hardCapMs));
     }
 
     // Reset the debounce timer
@@ -131,7 +126,7 @@ export class EventQueue extends EventEmitter {
 
     // Only reset timer if we have messages buffered for this conversation
     if (this.buffers.has(key) && this.buffers.get(key)!.length > 0) {
-      this.resetTimer(key, TYPING_GRACE_MS);
+      this.resetTimer(key, getConfig().slack.typingGraceMs);
     }
   }
 
@@ -185,10 +180,10 @@ export class EventQueue extends EventEmitter {
       const lastTyping = this.lastTypingAt.get(key) ?? 0;
       const sinceTypingMs = Date.now() - lastTyping;
 
-      if (sinceTypingMs < TYPING_GRACE_MS) {
+      if (sinceTypingMs < getConfig().slack.typingGraceMs) {
         // Still typing — reset again with the remaining grace period
         logger.debug({ key, sinceTypingMs }, 'Still typing — extending window');
-        this.resetTimer(key, TYPING_GRACE_MS - sinceTypingMs);
+        this.resetTimer(key, getConfig().slack.typingGraceMs - sinceTypingMs);
         return;
       }
 

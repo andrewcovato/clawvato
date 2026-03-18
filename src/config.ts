@@ -38,13 +38,6 @@ const ConfigSchema = z.object({
     fileSharesPerHour: 50,
   })),
 
-  // Slack configuration
-  slack: z.object({
-    botToken: z.string().optional(),
-    appToken: z.string().optional(),
-    userToken: z.string().optional(),
-  }).default({}),
-
   // Google configuration
   google: z.object({
     clientId: z.string().optional(),
@@ -57,6 +50,77 @@ const ConfigSchema = z.object({
     pat: z.string().optional(),
     defaultOrg: z.string().optional(),
   }).default({}),
+
+  // ── Operational tunables ──
+  // See CLAUDE.md "Context Limits" section for documentation
+
+  agent: z.object({
+    maxTurns: z.number().int().min(1).default(30),
+    timeoutMs: z.number().int().min(10_000).default(600_000),
+  }).default(() => ({ maxTurns: 30, timeoutMs: 600_000 })),
+
+  context: z.object({
+    shortTermMessageLimit: z.number().int().default(50),
+    shortTermMsgCharLimit: z.number().int().default(1000),
+    shortTermTokenBudget: z.number().int().default(2000),
+    longTermTokenBudget: z.number().int().default(1500),
+    workingContextTokenBudget: z.number().int().default(1000),
+  }).default(() => ({
+    shortTermMessageLimit: 50,
+    shortTermMsgCharLimit: 1000,
+    shortTermTokenBudget: 2000,
+    longTermTokenBudget: 1500,
+    workingContextTokenBudget: 1000,
+  })),
+
+  slack: z.object({
+    botToken: z.string().optional(),
+    appToken: z.string().optional(),
+    userToken: z.string().optional(),
+    accumulationWindows: z.object({
+      snappy: z.number().int().default(2000),
+      patient: z.number().int().default(4000),
+      waitForMe: z.number().int().default(15_000),
+    }).default(() => ({ snappy: 2000, patient: 4000, waitForMe: 15_000 })),
+    hardCapMs: z.number().int().default(30_000),
+    typingGraceMs: z.number().int().default(4000),
+    progressDelayMs: z.number().int().default(20_000),
+    progressStaleIntervalMs: z.number().int().default(60_000),
+  }).default(() => ({
+    accumulationWindows: { snappy: 2000, patient: 4000, waitForMe: 15_000 },
+    hardCapMs: 30_000,
+    typingGraceMs: 4000,
+    progressDelayMs: 20_000,
+    progressStaleIntervalMs: 60_000,
+  })),
+
+  memory: z.object({
+    consolidationIntervalHours: z.number().default(24),
+    workingContextArchiveDays: z.number().int().default(14),
+    decayThresholdDays30: z.number().int().default(30),
+    decayThresholdDays90: z.number().int().default(90),
+    archiveThreshold: z.number().default(1),
+    mergeSimilarityThreshold: z.number().default(0.85),
+    reflectionThreshold: z.number().int().default(50),
+  }).default(() => ({
+    consolidationIntervalHours: 24,
+    workingContextArchiveDays: 14,
+    decayThresholdDays30: 30,
+    decayThresholdDays90: 90,
+    archiveThreshold: 1,
+    mergeSimilarityThreshold: 0.85,
+    reflectionThreshold: 50,
+  })),
+
+  drive: z.object({
+    syncBatchSize: z.number().int().default(10),
+    maxFileSizeBytes: z.number().int().default(50 * 1024 * 1024),
+    maxExtractedChars: z.number().int().default(10_000),
+  }).default(() => ({
+    syncBatchSize: 10,
+    maxFileSizeBytes: 50 * 1024 * 1024,
+    maxExtractedChars: 10_000,
+  })),
 });
 
 export type ClawvatoConfig = z.infer<typeof ConfigSchema>;
@@ -81,9 +145,37 @@ function getDefaultConfig(): Partial<ClawvatoConfig> {
       fileSharesPerHour: 50,
     },
     sandboxRoots: [],
-    slack: {},
     google: {},
     github: {},
+    agent: { maxTurns: 30, timeoutMs: 600_000 },
+    context: {
+      shortTermMessageLimit: 50,
+      shortTermMsgCharLimit: 1000,
+      shortTermTokenBudget: 2000,
+      longTermTokenBudget: 1500,
+      workingContextTokenBudget: 1000,
+    },
+    slack: {
+      accumulationWindows: { snappy: 2000, patient: 4000, waitForMe: 15_000 },
+      hardCapMs: 30_000,
+      typingGraceMs: 4000,
+      progressDelayMs: 20_000,
+      progressStaleIntervalMs: 60_000,
+    },
+    memory: {
+      consolidationIntervalHours: 24,
+      workingContextArchiveDays: 14,
+      decayThresholdDays30: 30,
+      decayThresholdDays90: 90,
+      archiveThreshold: 1,
+      mergeSimilarityThreshold: 0.85,
+      reflectionThreshold: 50,
+    },
+    drive: {
+      syncBatchSize: 10,
+      maxFileSizeBytes: 50 * 1024 * 1024,
+      maxExtractedChars: 10_000,
+    },
   };
 }
 

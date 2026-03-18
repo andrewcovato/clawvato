@@ -14,27 +14,16 @@ import type Anthropic from '@anthropic-ai/sdk';
 import type { DatabaseSync } from 'node:sqlite';
 import { logger } from '../logger.js';
 import { getRecentMemories, insertMemory, type Memory } from './store.js';
+import { getPrompts } from '../prompts.js';
+import { getConfig } from '../config.js';
 
 /** Cumulative importance threshold to trigger reflection */
-const REFLECTION_THRESHOLD = 50;
+// Reflection threshold loaded from config (memory.reflectionThreshold)
 
 /** Key used to store last reflection timestamp in agent_state */
 const LAST_REFLECTION_KEY = 'last_reflection_at';
 
-const REFLECTION_PROMPT = `You are analyzing recent memories stored by a personal AI assistant. Identify 3-5 high-level insights, patterns, or conclusions from these memories.
-
-Focus on:
-- Recurring patterns (e.g., "owner consistently declines Friday afternoon meetings")
-- Relationship dynamics (e.g., "owner collaborates closely with Sarah on marketing")
-- Workflow opportunities (e.g., "owner often shares standup notes — could automate")
-- Strategic themes (e.g., "Client X engagement is shifting from sales to marketing focus")
-- Preference changes (e.g., "owner has started preferring shorter meetings")
-
-For each insight, return a JSON array of objects with:
-- content: The insight in 1-2 clear sentences with enough context to be useful months later
-- importance: 1-10 (how critical is this insight for future decisions?)
-
-Return ONLY a valid JSON array. No markdown, no explanation.`;
+// Prompt loaded from config/prompts/reflection.md
 
 /**
  * Check if reflection should be triggered, and if so, run it.
@@ -54,9 +43,9 @@ export async function maybeReflect(
 
   const cumulativeImportance = recentMemories.reduce((sum, m) => sum + m.importance, 0);
 
-  if (cumulativeImportance < REFLECTION_THRESHOLD) {
+  if (cumulativeImportance < getConfig().memory.reflectionThreshold) {
     logger.debug(
-      { cumulativeImportance, threshold: REFLECTION_THRESHOLD, memoriesSince: recentMemories.length },
+      { cumulativeImportance, threshold: getConfig().memory.reflectionThreshold, memoriesSince: recentMemories.length },
       'Reflection not triggered — below threshold',
     );
     return { reflected: false, insightsGenerated: 0 };
@@ -92,7 +81,7 @@ async function runReflection(
     const response = await client.messages.create({
       model,
       max_tokens: 1000,
-      system: REFLECTION_PROMPT,
+      system: getPrompts().reflection,
       messages: [{ role: 'user', content: `Recent memories:\n${memoryList}` }],
     });
 

@@ -17,6 +17,7 @@ import mammoth from 'mammoth';
 import ExcelJS from 'exceljs';
 import { Parser as HtmlParser } from 'htmlparser2';
 import { logger } from '../logger.js';
+import { getConfig } from '../config.js';
 
 // JSZip is a transitive dep of exceljs — import dynamically to avoid
 // adding it as a direct dependency.
@@ -30,12 +31,13 @@ async function getJSZip() {
 }
 
 // ── Constants ──
+// File size and extraction limits loaded from config (drive.*)
 
-/** Max file size we'll attempt to parse (50 MB) */
-export const MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024;
+/** Max file size we'll attempt to parse — loaded from config */
+export function getMaxFileSizeBytes(): number { return getConfig().drive.maxFileSizeBytes; }
 
-/** Max text output from extraction (characters) — keeps Claude context bounded */
-export const MAX_EXTRACTED_CHARS = 10_000;
+/** Max text output from extraction — loaded from config */
+export function getMaxExtractedChars(): number { return getConfig().drive.maxExtractedChars; }
 
 /** Max PDF size for Claude document blocks (32 MB API limit, leave headroom for base64 overhead) */
 const MAX_PDF_SIZE_BYTES = 20 * 1024 * 1024;
@@ -97,8 +99,8 @@ export async function extractContent(
   buffer: Buffer,
   mimeType: string,
 ): Promise<ExtractedContent | null> {
-  if (buffer.length > MAX_FILE_SIZE_BYTES) {
-    logger.warn({ mimeType, size: buffer.length, max: MAX_FILE_SIZE_BYTES }, 'File exceeds max size — skipping extraction');
+  if (buffer.length > getMaxFileSizeBytes()) {
+    logger.warn({ mimeType, size: buffer.length, max: getMaxFileSizeBytes() }, 'File exceeds max size — skipping extraction');
     return null;
   }
 
@@ -187,7 +189,7 @@ function extractImage(buffer: Buffer, mediaType: ImageContent['mediaType']): Ext
 }
 
 function extractPlainText(buffer: Buffer): TextContent {
-  const text = buffer.toString('utf-8').slice(0, MAX_EXTRACTED_CHARS);
+  const text = buffer.toString('utf-8').slice(0, getMaxExtractedChars());
   return { kind: 'text', text };
 }
 
@@ -209,10 +211,10 @@ function extractHtml(buffer: Buffer): TextContent {
       }
     },
     ontext(text) {
-      if (skipContent || totalChars >= MAX_EXTRACTED_CHARS) return;
+      if (skipContent || totalChars >= getMaxExtractedChars()) return;
       const trimmed = text.replace(/\s+/g, ' ');
       if (trimmed.trim()) {
-        const remaining = MAX_EXTRACTED_CHARS - totalChars;
+        const remaining = getMaxExtractedChars() - totalChars;
         const sliced = trimmed.slice(0, remaining);
         chunks.push(sliced);
         totalChars += sliced.length;
@@ -243,7 +245,7 @@ const BLOCK_ELEMENTS = new Set([
 
 async function extractDocx(buffer: Buffer): Promise<TextContent> {
   const result = await mammoth.extractRawText({ buffer });
-  const text = result.value.slice(0, MAX_EXTRACTED_CHARS);
+  const text = result.value.slice(0, getMaxExtractedChars());
   return { kind: 'text', text };
 }
 
@@ -256,13 +258,13 @@ async function extractXlsx(buffer: Buffer): Promise<TextContent> {
   let totalChars = 0;
 
   for (const sheet of workbook.worksheets) {
-    if (totalChars >= MAX_EXTRACTED_CHARS) break;
+    if (totalChars >= getMaxExtractedChars()) break;
 
     lines.push(`--- Sheet: ${sheet.name} ---`);
     totalChars += sheet.name.length + 16;
 
     sheet.eachRow((row) => {
-      if (totalChars >= MAX_EXTRACTED_CHARS) return;
+      if (totalChars >= getMaxExtractedChars()) return;
       const values = row.values as (string | number | boolean | null | undefined)[];
       // row.values is 1-indexed — first element is undefined
       const cells = values.slice(1).map(v => {
@@ -276,7 +278,7 @@ async function extractXlsx(buffer: Buffer): Promise<TextContent> {
     });
   }
 
-  const text = lines.join('\n').slice(0, MAX_EXTRACTED_CHARS);
+  const text = lines.join('\n').slice(0, getMaxExtractedChars());
   return { kind: 'text', text };
 }
 
@@ -296,7 +298,7 @@ async function extractPptx(buffer: Buffer): Promise<TextContent> {
   let totalChars = 0;
 
   for (const slidePath of slideFiles) {
-    if (totalChars >= MAX_EXTRACTED_CHARS) break;
+    if (totalChars >= getMaxExtractedChars()) break;
 
     const xml = await zip.files[slidePath].async('text');
     // Extract text from <a:t> tags (PowerPoint text runs)
@@ -313,6 +315,6 @@ async function extractPptx(buffer: Buffer): Promise<TextContent> {
     }
   }
 
-  const text = textParts.join('\n\n').slice(0, MAX_EXTRACTED_CHARS);
+  const text = textParts.join('\n\n').slice(0, getMaxExtractedChars());
   return { kind: 'text', text };
 }

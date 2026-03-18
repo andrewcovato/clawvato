@@ -17,7 +17,7 @@
  */
 
 import { logger } from '../logger.js';
-import { getConfig } from '../config.js';
+import { getConfig, type ClawvatoConfig } from '../config.js';
 import { EventQueue, type AccumulatedBatch, type QueuedMessage } from './event-queue.js';
 
 export interface SlackReactionAPI {
@@ -43,11 +43,7 @@ export interface AssistantThreadAPI {
 
 export type ProcessingState = 'idle' | 'accumulating' | 'processing';
 
-/** Delay before showing the progress message — quick responses never show it */
-const PROGRESS_DELAY_MS = 20_000;
-
-/** How often to refresh progress when no tool-call update has occurred */
-const PROGRESS_STALE_INTERVAL_MS = 60_000;
+// Progress timing loaded from config (slack.progressDelayMs, slack.progressStaleIntervalMs)
 
 interface ActiveTask {
   description: string;
@@ -55,7 +51,7 @@ interface ActiveTask {
   threadTs?: string;
   /** The 👀-reacted message timestamps (for cleanup) */
   eyesMessageTs: string[];
-  /** Status/progress message posted after PROGRESS_DELAY_MS */
+  /** Status/progress message posted after getConfig().slack.progressDelayMs */
   progressMessageTs?: string;
   /** Last progress text (to avoid redundant updates) */
   lastProgressText?: string;
@@ -63,7 +59,7 @@ interface ActiveTask {
   pendingProgressText?: string;
   startedAt: number;
   lastUpdatedAt: number;
-  /** Timer that posts the progress message after PROGRESS_DELAY_MS */
+  /** Timer that posts the progress message after getConfig().slack.progressDelayMs */
   progressDelayTimer?: ReturnType<typeof setTimeout>;
   /** Timer that fires when progress becomes stale (no tool-call update for 60s) */
   staleTimer?: ReturnType<typeof setTimeout>;
@@ -330,7 +326,7 @@ export class SlackHandler {
     const now = Date.now();
     const progressDelayTimer = setTimeout(() => {
       void this.postProgressMessage();
-    }, PROGRESS_DELAY_MS);
+    }, getConfig().slack.progressDelayMs);
 
     this.activeTask = {
       description,
@@ -369,7 +365,7 @@ export class SlackHandler {
     // Start the stale-progress refresh timer
     this.activeTask.staleTimer = setTimeout(() => {
       void this.refreshStaleProgress();
-    }, PROGRESS_STALE_INTERVAL_MS);
+    }, getConfig().slack.progressStaleIntervalMs);
   }
 
   /**
@@ -408,7 +404,7 @@ export class SlackHandler {
       }
       this.activeTask.staleTimer = setTimeout(() => {
         void this.refreshStaleProgress();
-      }, PROGRESS_STALE_INTERVAL_MS);
+      }, getConfig().slack.progressStaleIntervalMs);
     } catch (error) {
       logger.debug({ error }, 'Failed to update progress — non-critical');
     }
@@ -533,7 +529,7 @@ export class SlackHandler {
     // Schedule next refresh
     this.activeTask.staleTimer = setTimeout(() => {
       void this.refreshStaleProgress();
-    }, PROGRESS_STALE_INTERVAL_MS);
+    }, getConfig().slack.progressStaleIntervalMs);
   }
 
   private async processBatch(batch: AccumulatedBatch): Promise<void> {

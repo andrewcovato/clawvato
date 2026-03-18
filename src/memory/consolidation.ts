@@ -15,25 +15,12 @@
 
 import type { DatabaseSync } from 'node:sqlite';
 import { logger } from '../logger.js';
+import { getConfig } from '../config.js';
 import { generateId } from '../db/index.js';
 import { contentSimilarity } from './extractor.js';
 import { deleteEmbedding, insertMemory } from './store.js';
 
-/** Hours between consolidation runs */
-const CONSOLIDATION_INTERVAL_HOURS = 24;
-
-/** Working context: promote to LTM after this many days without update */
-const WORKING_CONTEXT_ARCHIVE_DAYS = 14;
-
-/** Memories not accessed in this many days get importance decayed */
-const DECAY_THRESHOLD_DAYS_30 = 30;
-const DECAY_THRESHOLD_DAYS_90 = 90;
-
-/** Memories below this importance after decay get archived */
-const ARCHIVE_THRESHOLD = 1;
-
-/** Content similarity threshold for merging duplicates */
-const MERGE_SIMILARITY_THRESHOLD = 0.85;
+// Memory consolidation tunables loaded from config (memory.*)
 
 export interface ConsolidationResult {
   memoriesProcessed: number;
@@ -56,7 +43,7 @@ export function shouldConsolidate(db: DatabaseSync): boolean {
 
     const lastRun = new Date(row.completed_at).getTime();
     const hoursSince = (Date.now() - lastRun) / (1000 * 60 * 60);
-    return hoursSince >= CONSOLIDATION_INTERVAL_HOURS;
+    return hoursSince >= getConfig().memory.consolidationIntervalHours;
   } catch {
     return true;
   }
@@ -128,7 +115,7 @@ function mergeDuplicates(db: DatabaseSync): number {
         if (superseded.has(memories[j].id)) continue;
 
         const similarity = contentSimilarity(memories[i].content, memories[j].content);
-        if (similarity >= MERGE_SIMILARITY_THRESHOLD) {
+        if (similarity >= getConfig().memory.mergeSimilarityThreshold) {
           // Keep i (higher importance due to ORDER BY), supersede j
           db.prepare(`
             UPDATE memories SET valid_until = datetime('now'), superseded_by = ?
@@ -166,7 +153,7 @@ function decayStaleMemories(db: DatabaseSync): number {
       AND type NOT IN ('preference', 'commitment')
       AND (last_accessed_at IS NOT NULL AND julianday('now') - julianday(last_accessed_at) > ?)
       AND importance > 1
-  `).run(DECAY_THRESHOLD_DAYS_90);
+  `).run(getConfig().memory.decayThresholdDays90);
 
   // 30-day decay (lighter)
   const decay30 = db.prepare(`
@@ -177,7 +164,7 @@ function decayStaleMemories(db: DatabaseSync): number {
       AND (last_accessed_at IS NOT NULL AND julianday('now') - julianday(last_accessed_at) > ?)
       AND (last_accessed_at IS NULL OR julianday('now') - julianday(last_accessed_at) <= ?)
       AND importance > 1
-  `).run(DECAY_THRESHOLD_DAYS_30, DECAY_THRESHOLD_DAYS_90);
+  `).run(getConfig().memory.decayThresholdDays30, getConfig().memory.decayThresholdDays90);
 
   const total = Number(decay90.changes ?? 0) + Number(decay30.changes ?? 0);
 
@@ -199,7 +186,7 @@ function archiveMemories(db: DatabaseSync): number {
     WHERE valid_until IS NULL
       AND importance <= ?
       AND type NOT IN ('preference', 'commitment', 'reflection')
-  `).run(ARCHIVE_THRESHOLD);
+  `).run(getConfig().memory.archiveThreshold);
 
   const count = Number(result.changes ?? 0);
 
@@ -223,7 +210,7 @@ function archiveStaleWorkingContext(db: DatabaseSync): void {
       WHERE key LIKE 'wctx:%'
         AND status = 'active'
         AND julianday('now') - julianday(updated_at) > ?
-    `).all(WORKING_CONTEXT_ARCHIVE_DAYS) as unknown as Array<{ key: string; value: string; updated_at: string }>;
+    `).all(getConfig().memory.workingContextArchiveDays) as unknown as Array<{ key: string; value: string; updated_at: string }>;
 
     for (const entry of staleEntries) {
       // Extract a summary to LTM as a pointer

@@ -21,11 +21,13 @@ import { createHash } from 'node:crypto';
 import type Anthropic from '@anthropic-ai/sdk';
 import type { DatabaseSync } from 'node:sqlite';
 import { logger } from '../logger.js';
+import { getConfig } from '../config.js';
+import { getPrompts } from '../prompts.js';
 import { generateId } from '../db/index.js';
 import {
   extractContent,
   type ExtractedContent,
-  MAX_FILE_SIZE_BYTES,
+  getMaxFileSizeBytes,
 } from './file-extractor.js';
 import {
   insertMemory,
@@ -75,34 +77,8 @@ export interface DeepReadResult {
 
 // ── Summary generation prompt ──
 
-const SUMMARY_PROMPT = `You are analyzing a file to build knowledge about the owner's world. You will be given the file name, its folder path, and its content.
-
-Use ALL available evidence — file name, folder location, and content — to draw conclusions about what this file represents. The folder path is a strong signal (a file in "Clients/Acme" is likely about a client called Acme) but files can be misfiled, mislabeled, or in catch-all folders. Trust content over folder structure when they conflict.
-
-Return a JSON object with:
-- "summary": 2-3 sentences describing what this file is about, who/what it relates to, and any categorization you can infer (e.g., "Acme Corp is a client" if the evidence supports it). Write conclusions, not file descriptions — "Acme Corp is a client with an active proposal" is better than "This file contains a proposal document."
-- "entities": array of person names, company names, project names, and key topics
-
-Return ONLY valid JSON, no markdown.`;
-
-// ── Fact extraction from document content ──
-
-const DOC_EXTRACTION_PROMPT = `Extract structured facts from this document. Return a JSON array of objects.
-
-Each item has:
-- type: "fact", "decision", "strategy", "conclusion", or "commitment"
-- content: A clear statement with enough context to be useful without the original document
-- confidence: 0.8-1.0 (documents are generally reliable sources)
-- importance: 1-10
-- entities: Array of person names, company names, or key topics
-
-Rules:
-- Capture key facts, decisions, deadlines, and action items
-- Include the WHY behind decisions and strategies
-- For commitments, include who, what, and when
-- Skip boilerplate, formatting artifacts, and generic content
-- If nothing worth extracting, return []
-- Return ONLY valid JSON array, no markdown`;
+// Prompts loaded from config/prompts/ at startup
+// Edit those files to change extraction behavior — no code change needed.
 
 // ── Document CRUD ──
 
@@ -224,8 +200,8 @@ async function downloadFileBuffer(
     // Check file size before downloading
     const meta = await drive.files.get({ fileId, fields: 'size' });
     const size = Number(meta.data.size ?? 0);
-    if (size > MAX_FILE_SIZE_BYTES) {
-      logger.warn({ fileId, size, max: MAX_FILE_SIZE_BYTES }, 'File too large to download');
+    if (size > getMaxFileSizeBytes()) {
+      logger.warn({ fileId, size, max: getMaxFileSizeBytes() }, 'File too large to download');
       return null;
     }
 
@@ -572,9 +548,9 @@ export async function syncDrive(
   const seenIds = new Set<string>();
 
   // Process files in parallel batches for speed
-  const BATCH_SIZE = 10;
-  for (let batchStart = 0; batchStart < driveFiles.length; batchStart += BATCH_SIZE) {
-    const batch = driveFiles.slice(batchStart, batchStart + BATCH_SIZE);
+  const batchSize = getConfig().drive.syncBatchSize;
+  for (let batchStart = 0; batchStart < driveFiles.length; batchStart += batchSize) {
+    const batch = driveFiles.slice(batchStart, batchStart + batchSize);
 
     await Promise.all(batch.map(async (file) => {
     seenIds.add(file.id);
@@ -819,7 +795,7 @@ export async function deepReadFile(
     const response = await client.messages.create({
       model,
       max_tokens: 4096,
-      system: DOC_EXTRACTION_PROMPT,
+      system: getPrompts().docExtraction,
       messages: [{ role: 'user', content: messageContent }],
     });
 
@@ -1001,7 +977,7 @@ async function generateSummary(
     const response = await client.messages.create({
       model,
       max_tokens: 300,
-      system: SUMMARY_PROMPT,
+      system: getPrompts().summary,
       messages: [{ role: 'user', content: messageContent }],
     });
 

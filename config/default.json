@@ -12,7 +12,42 @@
     "fileSharesPerHour": 50
   },
   "sandboxRoots": [],
-  "slack": {},
+  "agent": {
+    "maxTurns": 30,
+    "timeoutMs": 600000
+  },
+  "context": {
+    "shortTermMessageLimit": 50,
+    "shortTermMsgCharLimit": 1000,
+    "shortTermTokenBudget": 2000,
+    "longTermTokenBudget": 1500,
+    "workingContextTokenBudget": 1000
+  },
+  "slack": {
+    "accumulationWindows": {
+      "snappy": 2000,
+      "patient": 4000,
+      "waitForMe": 15000
+    },
+    "hardCapMs": 30000,
+    "typingGraceMs": 4000,
+    "progressDelayMs": 20000,
+    "progressStaleIntervalMs": 60000
+  },
+  "memory": {
+    "consolidationIntervalHours": 24,
+    "workingContextArchiveDays": 14,
+    "decayThresholdDays30": 30,
+    "decayThresholdDays90": 90,
+    "archiveThreshold": 1,
+    "mergeSimilarityThreshold": 0.85,
+    "reflectionThreshold": 50
+  },
+  "drive": {
+    "syncBatchSize": 10,
+    "maxFileSizeBytes": 52428800,
+    "maxExtractedChars": 10000
+  },
   "google": {},
   "github": {}
 }
