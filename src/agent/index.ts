@@ -186,7 +186,12 @@ When the owner asks a general knowledge question ("who are our clients?", "what'
 - If a task has multiple steps, report meaningful milestones
 
 ## Formatting
-You are writing for Slack which supports standard Markdown. Use headings, bold, tables, code blocks, and lists normally.`;
+You are writing for Slack. Most Markdown works (bold, italic, headings, code blocks, lists, block quotes).
+- **Do NOT use Markdown tables** (| col | col |) — they render as raw pipe characters in Slack. Instead, use bulleted lists with bold labels:
+  *Name:* Alice
+  *Age:* 30
+  Or use indented key-value pairs for structured data.
+- Keep responses scannable — use headings, bullets, and bold labels rather than dense paragraphs.`;
 
 export interface Agent {
   /** Process an accumulated batch of messages from the owner */
