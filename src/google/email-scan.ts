@@ -27,6 +27,38 @@ import {
 } from '../memory/store.js';
 import { embedBatch } from '../memory/embeddings.js';
 
+// ── Noise filter ──
+
+/**
+ * Coarse pre-filter to skip obviously automated/notification emails.
+ * Not meant to be comprehensive — just catches the obvious noise
+ * (noreply senders, calendar invites, unsubscribe footers).
+ * Cross-source search uses Haiku relevance scoring for finer filtering.
+ */
+const AUTOMATED_PATTERNS = [
+  /noreply@/i,
+  /no-reply@/i,
+  /no_reply@/i,
+  /notifications?@/i,
+  /mailer-daemon@/i,
+  /do-not-reply@/i,
+  /donotreply@/i,
+  /\bunsubscribe\b/i,
+  /\bview in browser\b/i,
+  /\bemail preferences\b/i,
+  /^Google Calendar:/i,
+  /^Invitation:/i,
+  /^Accepted:/i,
+  /^Declined:/i,
+  /^Updated invitation:/i,
+  /^Canceled event:/i,
+];
+
+export function isLikelyAutomated(from: string, subject: string, snippet: string): boolean {
+  const combined = `${from}\n${subject}\n${snippet}`;
+  return AUTOMATED_PATTERNS.some(p => p.test(combined));
+}
+
 // ── Types ──
 
 export interface EmailScanOpts {
@@ -238,10 +270,16 @@ export async function scanEmail(
       const messages = thread.data.messages ?? [];
       const firstHeaders = messages[0]?.payload?.headers ?? [];
       const lastHeaders = messages[messages.length - 1]?.payload?.headers ?? [];
+      const firstFrom = firstHeaders.find((h: any) => h.name === 'From')?.value ?? '';
+      const subject = firstHeaders.find((h: any) => h.name === 'Subject')?.value ?? 'no subject';
+      const snippet = messages[0]?.snippet ?? '';
+
       return {
         threadId,
         messageCount: messages.length,
-        subject: firstHeaders.find((h: any) => h.name === 'Subject')?.value ?? 'no subject',
+        subject,
+        firstFrom,
+        snippet,
         lastFrom: lastHeaders.find((h: any) => h.name === 'From')?.value ?? '',
         lastDate: lastHeaders.find((h: any) => h.name === 'Date')?.value ?? '',
       };
@@ -252,11 +290,25 @@ export async function scanEmail(
 
   const validThreads = threadMeta.filter((t): t is NonNullable<typeof t> => t !== null);
 
+  // ── Step 2b: Coarse noise filter — skip obviously automated threads ──
+  let automatedSkipped = 0;
+  const humanThreads = validThreads.filter(t => {
+    if (isLikelyAutomated(t.firstFrom, t.subject, t.snippet)) {
+      automatedSkipped++;
+      return false;
+    }
+    return true;
+  });
+
+  if (automatedSkipped > 0) {
+    logger.info({ automatedSkipped, remaining: humanThreads.length }, 'Email scan: automated threads filtered');
+  }
+
   // ── Step 3: Delta check — which threads need extraction? ──
-  const threadsToExtract: typeof validThreads = [];
+  const threadsToExtract: typeof humanThreads = [];
   let threadsSkipped = 0;
 
-  for (const thread of validThreads) {
+  for (const thread of humanThreads) {
     const state = getThreadExtractionState(db, thread.threadId);
     if (state && state.messageCount >= thread.messageCount) {
       threadsSkipped++;
@@ -346,7 +398,7 @@ export async function scanEmail(
   }
 
   // ── Step 6: Build structured summary ──
-  const summary = buildScanSummary(db, validThreads, threadsToExtract.length, threadsSkipped, opts.ownerEmail);
+  const summary = buildScanSummary(db, humanThreads, threadsToExtract.length, threadsSkipped, automatedSkipped, opts.ownerEmail);
 
   logger.info(
     { threadsFound: allThreadIds.length, skipped: threadsSkipped, extracted: threadsToExtract.length, facts: totalFacts, people: totalPeople },
@@ -371,6 +423,7 @@ function buildScanSummary(
   threads: Array<{ threadId: string; subject: string; lastFrom: string; lastDate: string; messageCount: number }>,
   extracted: number,
   skipped: number,
+  automatedSkipped: number,
   ownerEmail: string,
 ): string {
   const ownerLower = ownerEmail.toLowerCase();
@@ -403,7 +456,7 @@ function buildScanSummary(
   ).all() as unknown as Array<{ content: string; source: string }>;
 
   const parts: string[] = [
-    `Email scan complete: ${threads.length} threads (${skipped} cached, ${extracted} newly extracted).`,
+    `Email scan complete: ${threads.length} threads (${skipped} cached, ${extracted} newly extracted${automatedSkipped > 0 ? `, ${automatedSkipped} automated/noise skipped` : ''}).`,
     '',
   ];
 

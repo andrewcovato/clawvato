@@ -137,31 +137,47 @@ export function findMemoriesByType(
 /**
  * Search memories using FTS5 keyword search.
  * Returns currently-valid memories ranked by FTS5 relevance.
+ * Supports optional filtering by type, source prefix, and minimum importance.
  */
 export function searchMemories(
   db: DatabaseSync,
   query: string,
-  opts?: { limit?: number; type?: MemoryType },
+  opts?: {
+    limit?: number;
+    type?: MemoryType;
+    sourcePrefix?: string;
+    minImportance?: number;
+  },
 ): Memory[] {
   const limit = opts?.limit ?? 10;
 
-  // FTS5 match — join back to memories for full row + filter valid
-  const sql = opts?.type
-    ? `SELECT m.* FROM memories m
-       JOIN memories_fts f ON m.rowid = f.rowid
-       WHERE memories_fts MATCH ? AND m.valid_until IS NULL AND m.type = ?
-       ORDER BY f.rank
-       LIMIT ?`
-    : `SELECT m.* FROM memories m
-       JOIN memories_fts f ON m.rowid = f.rowid
-       WHERE memories_fts MATCH ? AND m.valid_until IS NULL
-       ORDER BY f.rank
-       LIMIT ?`;
+  // Dynamic WHERE builder — all params use ? placeholders
+  const conditions: string[] = ['memories_fts MATCH ?', 'm.valid_until IS NULL'];
+  const params: Array<string | number> = [query];
+
+  if (opts?.type) {
+    conditions.push('m.type = ?');
+    params.push(opts.type);
+  }
+  if (opts?.sourcePrefix) {
+    conditions.push('m.source LIKE ?');
+    params.push(`${opts.sourcePrefix}:%`);
+  }
+  if (opts?.minImportance) {
+    conditions.push('m.importance >= ?');
+    params.push(opts.minImportance);
+  }
+
+  params.push(limit);
+
+  const sql = `SELECT m.* FROM memories m
+    JOIN memories_fts f ON m.rowid = f.rowid
+    WHERE ${conditions.join(' AND ')}
+    ORDER BY f.rank
+    LIMIT ?`;
 
   try {
-    const rows = opts?.type
-      ? db.prepare(sql).all(query, opts.type, limit)
-      : db.prepare(sql).all(query, limit);
+    const rows = db.prepare(sql).all(...params);
     return rows as unknown as Memory[];
   } catch {
     // FTS5 can throw on malformed queries — return empty

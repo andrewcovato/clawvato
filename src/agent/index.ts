@@ -27,7 +27,7 @@ import { scanEmail, getThreadExtractionState } from '../google/email-scan.js';
 import { retrieveContext } from '../memory/retriever.js';
 import { extractFacts, extractEmailFacts, storeExtractionResult } from '../memory/extractor.js';
 import { maybeReflect } from '../memory/reflection.js';
-import { searchMemories, findPersonByName } from '../memory/store.js';
+import { searchMemories, findPersonByName, type MemoryType } from '../memory/store.js';
 import { preToolUse, type ToolUseContext } from '../hooks/pre-tool-use.js';
 import { postToolUse, type ToolResult } from '../hooks/post-tool-use.js';
 import { evaluatePolicy } from '../training-wheels/policy-engine.js';
@@ -753,17 +753,30 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
     }
   });
 
-  // Memory search tool — Tier 3 deep search, agent calls explicitly
+  // Memory search tool — explicit search with filtering
   toolDefs.push({
     name: 'search_memory',
     description:
-      'Search your memory for past facts, decisions, preferences, or people. ' +
-      'Use when the current context doesn\'t have enough information.',
+      'Search your memory for past facts, decisions, preferences, commitments, or people. ' +
+      'Supports filtering by type, source, and importance. ' +
+      'Use after scanning sources (gmail_scan, fireflies_sync) to query extracted facts. ' +
+      'Also use for direct memory lookups when context doesn\'t have enough information.',
     input_schema: {
       type: 'object' as const,
       properties: {
         query: { type: 'string', description: 'What to search for' },
-        type: { type: 'string', enum: ['fact', 'preference', 'decision', 'observation', 'reflection'], description: 'Filter by memory type (optional)' },
+        type: {
+          type: 'string',
+          enum: ['fact', 'preference', 'decision', 'observation', 'reflection', 'strategy', 'conclusion', 'commitment'],
+          description: 'Filter by memory type (optional)',
+        },
+        source_filter: {
+          type: 'string',
+          enum: ['gmail', 'fireflies', 'drive', 'slack', 'scan'],
+          description: 'Filter by source (optional). "gmail" = email, "fireflies" = meetings, "drive" = documents, "slack" = conversations, "scan" = channel backfill.',
+        },
+        limit: { type: 'number', description: 'Max results (default 10, max 50). Use higher for broad queries.' },
+        min_importance: { type: 'number', description: 'Minimum importance 1-10 (default 1). Use 5+ to filter noise, 7+ for critical items only.' },
       },
       required: ['query'],
     },
@@ -771,11 +784,16 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
   toolHandlers.set('search_memory', async (args) => {
     const query = args.query as string;
     const type = args.type as string | undefined;
+    const sourceFilter = args.source_filter as string | undefined;
+    const limit = Math.min((args.limit as number) ?? 10, 50);
+    const minImportance = args.min_importance as number | undefined;
     const db = getDb();
 
     const results = searchMemories(db, query, {
-      limit: 10,
-      type: type as 'fact' | 'preference' | 'decision' | 'observation' | 'reflection' | undefined,
+      limit,
+      type: type as MemoryType | undefined,
+      sourcePrefix: sourceFilter,
+      minImportance,
     });
 
     if (results.length === 0) {
@@ -794,7 +812,8 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
 
     const lines = results.map(m => {
       const conf = m.confidence >= 0.9 ? '' : ` [${Math.round(m.confidence * 100)}%]`;
-      return `- [${m.type}] ${m.content}${conf}`;
+      const src = m.source.split(':')[0];
+      return `- [${m.type}|${src}|imp:${m.importance}] ${m.content}${conf}`;
     });
 
     return { content: `Found ${results.length} memories:\n${lines.join('\n')}` };
