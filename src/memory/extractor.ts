@@ -117,6 +117,71 @@ export async function extractFacts(
 }
 
 /**
+ * Extract facts from email threads using the email-specific prompt.
+ * Higher max_tokens and content cap since email threads are longer
+ * and the email prompt tracks commitments, direction, and resolution status.
+ */
+export async function extractEmailFacts(
+  client: Anthropic,
+  model: string,
+  emailContent: string,
+  source: string,
+): Promise<ExtractionResult> {
+  try {
+    const response = await client.messages.create({
+      model,
+      max_tokens: 2000,
+      system: getPrompts().emailExtraction,
+      messages: [{ role: 'user', content: emailContent }],
+    });
+
+    const text = response.content
+      .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+      .map(b => b.text)
+      .join('');
+
+    // Parse JSON — handle potential markdown wrapping
+    const jsonStr = text.replace(/^```json?\s*/i, '').replace(/\s*```$/, '').trim();
+    const parsed = JSON.parse(jsonStr);
+
+    const facts: ExtractedFact[] = (parsed.facts ?? [])
+      .filter((f: Record<string, unknown>) =>
+        f.content && typeof f.content === 'string' &&
+        f.type && ['fact', 'preference', 'decision', 'observation', 'strategy', 'conclusion', 'commitment'].includes(f.type as string)
+      )
+      .map((f: Record<string, unknown>) => ({
+        type: f.type as MemoryType,
+        content: String(f.content).slice(0, 800),
+        confidence: Math.max(0, Math.min(1, Number(f.confidence) || 0.5)),
+        importance: Math.max(1, Math.min(10, Math.round(Number(f.importance) || 5))),
+        entities: Array.isArray(f.entities) ? f.entities.map(String) : [],
+      }));
+
+    const people: ExtractedPerson[] = (parsed.people ?? [])
+      .filter((p: Record<string, unknown>) => p.name && typeof p.name === 'string')
+      .map((p: Record<string, unknown>) => ({
+        name: String(p.name),
+        email: p.email ? String(p.email) : undefined,
+        role: p.role ? String(p.role) : undefined,
+        organization: p.organization ? String(p.organization) : undefined,
+        relationship: ['colleague', 'client', 'vendor', 'friend'].includes(p.relationship as string)
+          ? p.relationship as ExtractedPerson['relationship']
+          : undefined,
+      }));
+
+    logger.info(
+      { factsExtracted: facts.length, peopleExtracted: people.length, source },
+      'Email facts extracted',
+    );
+
+    return { facts, people };
+  } catch (error) {
+    logger.error({ error, source }, 'Email fact extraction failed');
+    return { facts: [], people: [] };
+  }
+}
+
+/**
  * Store extracted facts and people into the database.
  * Handles deduplication — if a near-duplicate exists, supersedes the old one
  * if the new fact has higher confidence.

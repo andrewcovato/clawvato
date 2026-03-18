@@ -558,7 +558,7 @@ export async function syncDrive(
     const batchContent = await Promise.all(batch.map(async (file) => {
       const parentId = file.parents?.[0];
       const folderPath = parentId ? (folderPathMap.get(parentId) ?? '/') : '/';
-      const extracted = await getFileContent(drive, file.id, file.mimeType, 2000);
+      const extracted = await getFileContent(drive, file.id, file.mimeType, 4000);
       return { file, folderPath, extracted };
     }));
 
@@ -862,7 +862,7 @@ export async function deepReadFile(
       const fact = rawFact as Record<string, unknown>;
       if (!fact.content || !fact.type) continue;
 
-      const factContent = String(fact.content).slice(0, 500);
+      const factContent = String(fact.content).slice(0, 800);
       const factType = fact.type as MemoryType;
       const confidence = Math.max(0, Math.min(1, Number(fact.confidence) || 0.85));
       const importance = Math.max(1, Math.min(10, Math.round(Number(fact.importance) || 5)));
@@ -1056,7 +1056,7 @@ function buildSummaryMessageContent(
 
   switch (extracted.kind) {
     case 'text':
-      return [{ type: 'text', text: `${preamble}\n\n${extracted.text.slice(0, 2000)}` }];
+      return [{ type: 'text', text: `${preamble}\n\n${extracted.text.slice(0, 4000)}` }];
 
     case 'document':
       return [

@@ -24,7 +24,7 @@ import { getGoogleAuth } from '../google/auth.js';
 import { createGoogleTools } from '../google/tools.js';
 import { syncDrive, deepReadFile, listDocuments, findDocumentByName } from '../google/drive-sync.js';
 import { retrieveContext } from '../memory/retriever.js';
-import { extractFacts, storeExtractionResult } from '../memory/extractor.js';
+import { extractFacts, extractEmailFacts, storeExtractionResult } from '../memory/extractor.js';
 import { maybeReflect } from '../memory/reflection.js';
 import { searchMemories, findPersonByName } from '../memory/store.js';
 import { preToolUse, type ToolUseContext } from '../hooks/pre-tool-use.js';
@@ -323,6 +323,7 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
     }
 
     // Override gmail_read to extract facts into memory in the background
+    // Uses the email-specific extraction prompt for richer commitment/action-item tracking
     const originalGmailRead = toolHandlers.get('google_gmail_read')!;
     toolHandlers.set('google_gmail_read', async (args) => {
       const result = await originalGmailRead(args);
@@ -330,16 +331,17 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
       // Fire-and-forget: extract facts from the thread into memory
       if (!result.isError && result.content.length > 100) {
         const db = getDb();
+        const sourceKey = `gmail:read:${Date.now()}`;
         (async () => {
           try {
-            const emailResult = await extractFacts(
+            const emailResult = await extractEmailFacts(
               anthropicClient,
               config.models.classifier,
               result.content,
-              `gmail:read:${Date.now()}`,
+              sourceKey,
             );
             if (emailResult.facts.length > 0 || emailResult.people.length > 0) {
-              const stored = await storeExtractionResult(db, emailResult, `gmail:read:${Date.now()}`);
+              const stored = await storeExtractionResult(db, emailResult, sourceKey);
               logger.info({ facts: stored.memoriesStored, people: stored.peopleStored }, 'Background email extraction complete');
             }
           } catch (error) {
@@ -488,7 +490,7 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
         properties: {
           search: { type: 'string', description: 'Optional: filter by file name' },
           folder_path: { type: 'string', description: 'Optional: filter by folder path (e.g., "/Clients/Coles"). Shows all files under this path, including subfolders.' },
-          limit: { type: 'number', description: 'Max results (default 20)' },
+          limit: { type: 'number', description: 'Max results (default 50, max 200). Use high values when listing entire folders.' },
         },
         required: [],
       },
@@ -497,7 +499,7 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
       const db = getDb();
       const search = args.search as string | undefined;
       const folderPath = args.folder_path as string | undefined;
-      const limit = Math.min((args.limit as number) ?? 20, 50);
+      const limit = Math.min((args.limit as number) ?? 50, 200);
 
       // Folder path filter — list everything under a specific path
       if (folderPath) {
@@ -580,7 +582,7 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
             daysBack: (args.days_back as number) ?? config.fireflies.defaultDaysBack,
             maxTranscripts: Math.min(
               (args.max_transcripts as number) ?? config.fireflies.maxTranscriptsPerSync,
-              50,
+              100,
             ),
           },
         );
@@ -598,7 +600,7 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
     // Override deep read handler to inject DB and Anthropic client + return transcript
     toolHandlers.set('fireflies_read_transcript', async (args) => {
       const id = args.transcript_id as string;
-      const maxSentences = Math.min((args.max_sentences as number) ?? 500, 1000);
+      const maxSentences = Math.min((args.max_sentences as number) ?? 1000, 2000);
       const db = getDb();
 
       try {

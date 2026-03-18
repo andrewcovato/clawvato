@@ -204,28 +204,47 @@ export class FirefliesClient {
   }
 
   /**
-   * Search transcripts by keyword in title and participant names.
-   * Fireflies API doesn't have server-side search, so we fetch recent
-   * transcripts and filter client-side.
+   * Search transcripts by keyword in title, participant names, and speaker names.
+   * Fireflies API doesn't have server-side search, so we fetch transcripts
+   * in pages and filter client-side until we have enough matches.
    */
   async searchTranscripts(
     query: string,
     opts?: { limit?: number; fromDate?: string; toDate?: string },
   ): Promise<TranscriptMeta[]> {
-    const all = await this.listTranscripts({
-      limit: 50,
-      fromDate: opts?.fromDate,
-      toDate: opts?.toDate,
-    });
-
+    const targetLimit = opts?.limit ?? 20;
     const q = query.toLowerCase();
-    const filtered = all.filter(t =>
-      t.title.toLowerCase().includes(q) ||
-      t.participants.some(p => p.toLowerCase().includes(q)) ||
-      t.speakers.some(s => s.name.toLowerCase().includes(q))
-    );
+    const filtered: TranscriptMeta[] = [];
+    let skip = 0;
+    const pageSize = 50;
+    const maxPages = 5; // Safety cap: don't fetch more than 250 transcripts
 
-    return filtered.slice(0, opts?.limit ?? 10);
+    for (let page = 0; page < maxPages && filtered.length < targetLimit; page++) {
+      const batch = await this.listTranscripts({
+        limit: pageSize,
+        skip,
+        fromDate: opts?.fromDate,
+        toDate: opts?.toDate,
+      });
+
+      if (batch.length === 0) break;
+
+      for (const t of batch) {
+        if (
+          t.title.toLowerCase().includes(q) ||
+          t.participants.some(p => p.toLowerCase().includes(q)) ||
+          t.speakers.some(s => s.name.toLowerCase().includes(q))
+        ) {
+          filtered.push(t);
+          if (filtered.length >= targetLimit) break;
+        }
+      }
+
+      skip += pageSize;
+      if (batch.length < pageSize) break; // No more pages
+    }
+
+    return filtered;
   }
 }
 

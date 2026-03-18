@@ -240,7 +240,7 @@ async function extractMeetingSummary(
     const fact = rawFact as Record<string, unknown>;
     if (!fact.content || !fact.type) continue;
 
-    const factContent = String(fact.content).slice(0, 500);
+    const factContent = String(fact.content).slice(0, 800);
     const factType = fact.type as string;
     const confidence = Math.max(0, Math.min(1, Number(fact.confidence) || 0.75));
     const importance = Math.max(1, Math.min(10, Math.round(Number(fact.importance) || 5)));
@@ -417,7 +417,7 @@ Return ONLY valid JSON, no markdown.`,
     const fact = rawFact as Record<string, unknown>;
     if (!fact.content || !fact.type) continue;
 
-    const factContent = String(fact.content).slice(0, 500);
+    const factContent = String(fact.content).slice(0, 800);
     const factType = fact.type as string;
     const confidence = Math.max(0, Math.min(1, Number(fact.confidence) || 0.75));
     const importance = Math.max(1, Math.min(10, Math.round(Number(fact.importance) || 5)));

@@ -38,21 +38,22 @@ export function createFirefliesTools(client: FirefliesClient): FirefliesToolDef[
         name: 'fireflies_search_meetings',
         description:
           'Search meeting transcripts by keyword, participant name, or date range. ' +
-          'Returns title, date, duration, participants, and transcript ID for each match.',
+          'Returns title, date, duration, participants, and transcript ID for each match. ' +
+          'For comprehensive sweeps, set max_results high and days_back to cover the full range.',
         input_schema: {
           type: 'object' as const,
           properties: {
-            query: { type: 'string', description: 'Search keyword (meeting title or participant name)' },
-            days_back: { type: 'number', description: 'Search meetings from the last N days (default 30)' },
-            max_results: { type: 'number', description: 'Max results to return (default 10)' },
+            query: { type: 'string', description: 'Search keyword (meeting title or participant name). Use broad terms for comprehensive sweeps.' },
+            days_back: { type: 'number', description: 'Search meetings from the last N days (default 60)' },
+            max_results: { type: 'number', description: 'Max results to return (default 20, max 50)' },
           },
           required: ['query'],
         },
       },
       handler: async (args) => {
         const query = args.query as string;
-        const daysBack = (args.days_back as number) ?? 30;
-        const maxResults = Math.min((args.max_results as number) ?? 10, 20);
+        const daysBack = (args.days_back as number) ?? 60;
+        const maxResults = Math.min((args.max_results as number) ?? 20, 50);
 
         try {
           const fromDate = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000).toISOString();
@@ -148,7 +149,7 @@ export function createFirefliesTools(client: FirefliesClient): FirefliesToolDef[
           type: 'object' as const,
           properties: {
             transcript_id: { type: 'string', description: 'Fireflies transcript ID' },
-            max_sentences: { type: 'number', description: 'Max sentences to return (default 500)' },
+            max_sentences: { type: 'number', description: 'Max sentences to return (default 1000, max 2000)' },
           },
           required: ['transcript_id'],
         },
@@ -202,12 +203,13 @@ export function createFirefliesTools(client: FirefliesClient): FirefliesToolDef[
         description:
           'Sync recent meetings from Fireflies into long-term memory. ' +
           'Fetches meeting summaries and action items, storing them as memories for future retrieval. ' +
-          'Use when asked to "sync meetings", "catch up on meetings", or "what meetings did I have".',
+          'Use when asked to "sync meetings", "catch up on meetings", or "what meetings did I have". ' +
+          'For comprehensive historical sweeps, increase days_back and max_transcripts.',
         input_schema: {
           type: 'object' as const,
           properties: {
-            days_back: { type: 'number', description: 'Sync meetings from the last N days (default 7)' },
-            max_transcripts: { type: 'number', description: 'Max meetings to sync (default 20)' },
+            days_back: { type: 'number', description: 'Sync meetings from the last N days (default from config). Use higher values for comprehensive sweeps.' },
+            max_transcripts: { type: 'number', description: 'Max meetings to sync (default 20, max 100)' },
           },
           required: [],
         },

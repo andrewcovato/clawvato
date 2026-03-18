@@ -48,6 +48,12 @@
     { "id": "QUAL-003", "severity": "medium", "title": "Consolidation O(n²) merge — no LIMIT" },
     { "id": "DEEPREAD-001", "severity": "low", "title": "Optimize deep reading — skip if unchanged" },
     { "id": "DRIVE-002", "severity": "low", "title": "Drive folder scope allow-list" },
+    { "id": "DRIVE-003", "severity": "medium", "title": "Live read_content caps Google Docs at 10K chars vs 50K for docx — inconsistent maxChars defaults" },
+    { "id": "DRIVE-004", "severity": "medium", "title": "Sync maxFiles default 200, ceiling 500 — large shared drives have blind spots" },
+    { "id": "DRIVE-005", "severity": "low", "title": "Folder name resolution pageSize:1 — silently picks first match for ambiguous names" },
+    { "id": "FF-001", "severity": "medium", "title": "Fireflies search only matches title/participants, not transcript content" },
+    { "id": "FF-002", "severity": "medium", "title": "Background deep read result not in-context for current-turn answer" },
+    { "id": "FF-003", "severity": "low", "title": "Participant display truncated to 5 in search results" },
     { "id": "OBSIDIAN-001", "severity": "low", "title": "Obsidian integration for memory visibility" },
     { "id": "WEBHOOK-001", "severity": "low", "title": "Gmail Pub/Sub webhooks for proactive memory" },
     { "id": "WEBHOOK-002", "severity": "low", "title": "Fireflies webhooks for new meeting auto-sync" }

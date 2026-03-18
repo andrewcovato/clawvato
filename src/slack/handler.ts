@@ -481,9 +481,15 @@ export class SlackHandler {
   }
 
   /**
-   * Acknowledge an interrupt message with 👍.
+   * Acknowledge an interrupt message with 👍 and remove the 👀 that was
+   * added when the message first arrived (before it was routed to the interrupt buffer).
    */
   async ackInterrupt(channel: string, messageTs: string): Promise<void> {
+    try {
+      await this.reactions.remove(channel, messageTs, 'eyes');
+    } catch {
+      // May not exist — non-critical
+    }
     try {
       await this.reactions.add(channel, messageTs, 'thumbsup');
     } catch {

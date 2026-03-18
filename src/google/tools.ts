@@ -39,6 +39,54 @@ export interface GoogleTool {
 }
 
 /**
+ * Recursively extract text/plain body from a Gmail message payload.
+ * Handles nested multipart structures (multipart/mixed → multipart/alternative → text/plain).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function extractTextFromPayload(payload: any): string {
+  if (!payload) return '';
+
+  // Direct body (simple messages)
+  if (payload.body?.data) {
+    const decoded = Buffer.from(payload.body.data, 'base64').toString('utf-8');
+    if (payload.mimeType === 'text/plain' || !payload.parts) {
+      return decoded;
+    }
+  }
+
+  // Recurse into parts
+  if (payload.parts && Array.isArray(payload.parts)) {
+    // Prefer text/plain over text/html
+    for (const part of payload.parts) {
+      if (part.mimeType === 'text/plain' && part.body?.data) {
+        return Buffer.from(part.body.data, 'base64').toString('utf-8');
+      }
+    }
+    // Recurse into multipart containers
+    for (const part of payload.parts) {
+      if (part.mimeType?.startsWith('multipart/') || part.parts) {
+        const found = extractTextFromPayload(part);
+        if (found) return found;
+      }
+    }
+    // Last resort: try text/html and strip tags
+    for (const part of payload.parts) {
+      if (part.mimeType === 'text/html' && part.body?.data) {
+        const html = Buffer.from(part.body.data, 'base64').toString('utf-8');
+        return html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      }
+    }
+    // Recurse into any nested part that might have text
+    for (const part of payload.parts) {
+      const found = extractTextFromPayload(part);
+      if (found) return found;
+    }
+  }
+
+  return '';
+}
+
+/**
  * Create Google Workspace tools backed by an authenticated OAuth2 client.
  */
 export function createGoogleTools(
@@ -351,38 +399,56 @@ export function createGoogleTools(
       definition: {
         name: 'google_gmail_search',
         description:
-          'Search Gmail for emails matching a query. Uses Gmail search syntax (from:, to:, subject:, has:attachment, etc.).',
+          'Search Gmail for emails matching a query. Uses Gmail search syntax (from:, to:, subject:, after:, before:, has:attachment, label:, is:, etc.). ' +
+          'Returns up to max_results emails (default 20, max 50). For comprehensive sweeps, use multiple searches with different queries or date ranges.',
         input_schema: {
           type: 'object' as const,
           properties: {
-            query: { type: 'string', description: 'Gmail search query (e.g. "from:sarah subject:budget")' },
-            max_results: { type: 'number', description: 'Max emails to return (default 10, max 20)' },
+            query: { type: 'string', description: 'Gmail search query (e.g. "from:sarah subject:budget after:2026/02/15")' },
+            max_results: { type: 'number', description: 'Max emails to return (default 20, max 50)' },
           },
           required: ['query'],
         },
       },
       handler: async (args) => {
         const query = args.query as string;
-        const maxResults = Math.min((args.max_results as number) ?? 10, 20);
+        const maxResults = Math.min((args.max_results as number) ?? 20, 50);
 
         try {
-          const result = await gmail.users.messages.list({
-            userId: 'me',
-            q: query,
-            maxResults,
-          });
+          // Paginate through results to hit maxResults
+          const allMessageIds: Array<{ id: string; threadId?: string }> = [];
+          let pageToken: string | undefined;
 
-          const messageIds = result.data.messages ?? [];
-          if (messageIds.length === 0) {
+          while (allMessageIds.length < maxResults) {
+            const result = await gmail.users.messages.list({
+              userId: 'me',
+              q: query,
+              maxResults: Math.min(maxResults - allMessageIds.length, 50),
+              ...(pageToken ? { pageToken } : {}),
+            });
+
+            const messages = result.data.messages ?? [];
+            if (messages.length === 0) break;
+
+            for (const msg of messages) {
+              if (allMessageIds.length >= maxResults) break;
+              allMessageIds.push({ id: msg.id!, threadId: msg.threadId ?? undefined });
+            }
+
+            pageToken = result.data.nextPageToken ?? undefined;
+            if (!pageToken) break;
+          }
+
+          if (allMessageIds.length === 0) {
             return { content: `No emails found for "${query}".` };
           }
 
           // Fetch headers for each message in parallel
           const details = await Promise.all(
-            messageIds.slice(0, maxResults).map(msg =>
+            allMessageIds.map(msg =>
               gmail.users.messages.get({
                 userId: 'me',
-                id: msg.id!,
+                id: msg.id,
                 format: 'metadata',
                 metadataHeaders: ['From', 'To', 'Subject', 'Date'],
               })
@@ -396,11 +462,14 @@ export function createGoogleTools(
             const date = headers.find(h => h.name === 'Date')?.value ?? '';
             const snippet = detail.data.snippet ?? '';
 
-            return `- **${subject}** | From: ${from} | ${date} | ID: ${messageIds[i].id}\n  ${snippet.slice(0, 150)}`;
+            return `- **${subject}** | From: ${from} | ${date} | ID: ${allMessageIds[i].id}\n  ${snippet.slice(0, 300)}`;
           });
 
+          const totalEstimate = details.length;
+          const moreAvailable = pageToken ? ` (more results available — refine query or increase max_results)` : '';
+
           return {
-            content: `Found ${result.data.resultSizeEstimate ?? messageIds.length} emails for "${query}":\n\n${summaries.join('\n')}`,
+            content: `Found ${totalEstimate} emails for "${query}"${moreAvailable}:\n\n${summaries.join('\n')}`,
           };
         } catch (error) {
           const msg = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
@@ -416,7 +485,8 @@ export function createGoogleTools(
         description:
           'Read one or more emails with their full threads (all replies). ' +
           'Accepts a single message ID or an array of IDs — fetches all threads in parallel. ' +
-          'Use to check multiple conversations at once (e.g., scanning for outstanding items).',
+          'Use to check multiple conversations at once (e.g., scanning for outstanding items). ' +
+          'For comprehensive sweeps, read ALL threads from search results — don\'t rely on snippets.',
         input_schema: {
           type: 'object' as const,
           properties: {
@@ -424,7 +494,7 @@ export function createGoogleTools(
             message_ids: {
               type: 'array',
               items: { type: 'string' },
-              description: 'Multiple Gmail message IDs to read in parallel (max 10)',
+              description: 'Multiple Gmail message IDs to read in parallel (max 15)',
             },
           },
           required: [],
@@ -433,7 +503,7 @@ export function createGoogleTools(
       handler: async (args) => {
         // Accept single ID or array
         const ids: string[] = args.message_ids
-          ? (args.message_ids as string[]).slice(0, 10)
+          ? (args.message_ids as string[]).slice(0, 15)
           : args.message_id
             ? [args.message_id as string]
             : [];
@@ -487,22 +557,14 @@ export function createGoogleTools(
               const subject = headers.find(h => h.name === 'Subject')?.value ?? '';
               const date = headers.find(h => h.name === 'Date')?.value ?? '';
 
-              let body = '';
-              const payload = message.payload;
-              if (payload?.body?.data) {
-                body = Buffer.from(payload.body.data, 'base64').toString('utf-8');
-              } else if (payload?.parts) {
-                const textPart = payload.parts.find(p => p.mimeType === 'text/plain');
-                if (textPart?.body?.data) {
-                  body = Buffer.from(textPart.body.data, 'base64').toString('utf-8');
-                }
-              }
+              const body = extractTextFromPayload(message.payload);
 
+              const truncated = body.length > 4000;
               parts.push(
                 `--- Message (${date}) ---\n` +
                 `From: ${from}\nTo: ${to}\n` +
                 (subject ? `Subject: ${subject}\n` : '') +
-                `\n[EXTERNAL CONTENT]\n${body.slice(0, 2000)}\n[/EXTERNAL CONTENT]`
+                `\n[EXTERNAL CONTENT]\n${body.slice(0, 4000)}${truncated ? '\n[...truncated]' : ''}\n[/EXTERNAL CONTENT]`
               );
             }
 
@@ -874,21 +936,24 @@ export function createGoogleTools(
       definition: {
         name: 'google_drive_search',
         description:
-          'Search Google Drive for files and folders. Returns names, types, owners, and last modified dates.',
+          'Search Google Drive for files and folders by name and content. Returns names, types, owners, and last modified dates. ' +
+          'Searches both file names and document content by default. For comprehensive sweeps, set max_results high.',
         input_schema: {
           type: 'object' as const,
           properties: {
-            query: { type: 'string', description: 'Search query (file name or content)' },
-            max_results: { type: 'number', description: 'Max results (default 10, max 30)' },
+            query: { type: 'string', description: 'Search query — searches both file names and content by default' },
+            max_results: { type: 'number', description: 'Max results (default 20, max 50). Use high values for comprehensive sweeps.' },
             type: { type: 'string', enum: ['document', 'spreadsheet', 'presentation', 'folder', 'any'], description: 'Filter by file type (default: any)' },
+            search_content: { type: 'boolean', description: 'If true, search only file content (fullText). Default: searches both name and content.' },
           },
           required: ['query'],
         },
       },
       handler: async (args) => {
         const query = args.query as string;
-        const maxResults = Math.min((args.max_results as number) ?? 10, 30);
+        const maxResults = Math.min((args.max_results as number) ?? 20, 50);
         const fileType = args.type as string | undefined;
+        const searchContent = (args.search_content as boolean) ?? false;
 
         try {
           const mimeFilter: Record<string, string> = {
@@ -898,25 +963,51 @@ export function createGoogleTools(
             folder: "mimeType = 'application/vnd.google-apps.folder'",
           };
 
-          // Sanitize: only allow alphanumeric, spaces, dots, dashes, underscores
-          const safeQuery = query.replace(/[^a-zA-Z0-9\s.\-_]/g, '');
-          let q = `name contains '${safeQuery}'`;
+          // Sanitize: only allow alphanumeric, spaces, dots, dashes, underscores, apostrophes
+          const safeQuery = query.replace(/[^a-zA-Z0-9\s.\-_']/g, '');
+          // Search both name and content for thoroughness
+          let q = searchContent
+            ? `fullText contains '${safeQuery}'`
+            : `(name contains '${safeQuery}' or fullText contains '${safeQuery}')`;
           if (fileType && mimeFilter[fileType]) {
             q += ` and ${mimeFilter[fileType]}`;
           }
           q += " and trashed = false";
 
-          const result = await drive.files.list({
-            q,
-            pageSize: maxResults,
-            fields: 'files(id, name, mimeType, modifiedTime, owners, parents, webViewLink)',
-            orderBy: 'modifiedTime desc',
-          });
+          // Paginate through results
+          const allFiles: Array<{
+            id: string; name: string; mimeType: string;
+            modifiedTime?: string; owners?: Array<{ displayName: string }>;
+            parents?: string[]; webViewLink?: string;
+          }> = [];
+          let pageToken: string | undefined;
 
-          const files = result.data.files ?? [];
-          if (files.length === 0) {
+          while (allFiles.length < maxResults) {
+            const result = await drive.files.list({
+              q,
+              pageSize: Math.min(maxResults - allFiles.length, 100),
+              fields: 'nextPageToken, files(id, name, mimeType, modifiedTime, owners, parents, webViewLink)',
+              orderBy: 'modifiedTime desc',
+              ...(pageToken ? { pageToken } : {}),
+            });
+
+            const files = result.data.files ?? [];
+            if (files.length === 0) break;
+
+            for (const f of files) {
+              if (allFiles.length >= maxResults) break;
+              allFiles.push(f as typeof allFiles[0]);
+            }
+
+            pageToken = result.data.nextPageToken ?? undefined;
+            if (!pageToken) break;
+          }
+
+          if (allFiles.length === 0) {
             return { content: `No files found for "${query}".` };
           }
+
+          const files = allFiles;
 
           // Resolve parent folder names for context
           const parentIds = new Set<string>();
@@ -940,7 +1031,8 @@ export function createGoogleTools(
             return `- ${f.name} (${type}) | Modified: ${modified} | Owner: ${owner}${folderLabel} | ID: ${f.id}`;
           });
 
-          return { content: `Found ${files.length} files:\n${lines.join('\n')}` };
+          const moreAvailable = pageToken ? ' (more results available — increase max_results or refine query)' : '';
+          return { content: `Found ${files.length} files${moreAvailable}:\n${lines.join('\n')}` };
         } catch (error) {
           const msg = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
           return { content: `Drive error: ${msg}`, isError: true };
