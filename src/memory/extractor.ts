@@ -176,7 +176,7 @@ export async function extractEmailFacts(
 
     return { facts, people };
   } catch (error) {
-    logger.error({ error, source }, 'Email fact extraction failed');
+    logger.error({ error: error instanceof Error ? error.message : String(error), source }, 'Email fact extraction failed');
     return { facts: [], people: [] };
   }
 }
