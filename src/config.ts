@@ -220,6 +220,9 @@ export function loadConfig(overrides?: Partial<ClawvatoConfig>): ClawvatoConfig 
   if (process.env.LOG_LEVEL) envConfig.logLevel = process.env.LOG_LEVEL;
   if (process.env.DATA_DIR) envConfig.dataDir = process.env.DATA_DIR;
   if (process.env.TRUST_LEVEL) envConfig.trustLevel = Number(process.env.TRUST_LEVEL);
+  if (process.env.GOOGLE_AGENT_EMAIL) {
+    envConfig.google = { ...(envConfig.google as Record<string, unknown> ?? {}), agentEmail: process.env.GOOGLE_AGENT_EMAIL };
+  }
 
   // Merge: defaults < file < env < overrides
   const merged = { ...defaults, ...fileConfig, ...envConfig, ...overrides };
