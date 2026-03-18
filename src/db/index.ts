@@ -97,9 +97,10 @@ export function initDb(): DatabaseSync {
       "SELECT 1 FROM agent_state WHERE key = 'drive_reset_v5'"
     ).get();
     if (!needsReset) {
-      logger.info('One-time reset: clearing documents and drive memories for re-sync (v5 — reliable folder paths)');
+      logger.info('One-time reset: full memory clean slate (v5 — rebuild with better prompts)');
       db.exec("DELETE FROM documents");
-      db.exec("UPDATE memories SET valid_until = datetime('now') WHERE source LIKE 'drive:%'");
+      db.exec("UPDATE memories SET valid_until = datetime('now')");
+      db.exec("DELETE FROM agent_state WHERE key LIKE 'wctx:%'");
       db.prepare(
         "INSERT OR REPLACE INTO agent_state (key, value, status) VALUES ('drive_reset_v5', ?, 'active')"
       ).run(new Date().toISOString());
