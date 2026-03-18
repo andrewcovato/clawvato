@@ -832,12 +832,19 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
           const toolUseBlocks = response.content
             .filter((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use');
 
+          const hasToolCalls = toolUseBlocks.length > 0;
+          const isLastTurn = !hasToolCalls || response.stop_reason === 'end_turn';
+
           if (textBlocks.length > 0) {
-            finalResponse = textBlocks.join('\n');
+            if (isLastTurn) {
+              // Final turn — this is the actual response to the user
+              finalResponse = textBlocks.join('\n');
+            }
+            // Mid-loop text (alongside tool calls) is planning/status — don't capture
+            // as the final response. It would be stale by the time we post.
           }
 
-          // If no tool calls, we're done
-          if (toolUseBlocks.length === 0 || response.stop_reason === 'end_turn') {
+          if (isLastTurn) {
             break;
           }
 
@@ -907,6 +914,30 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
           // Add assistant message + tool results to conversation
           messages.push({ role: 'assistant', content: response.content });
           messages.push({ role: 'user', content: toolResults });
+        }
+
+        // If we exhausted turns or were aborted without a final response,
+        // make one last call without tools to force Claude to synthesize an answer.
+        if (!finalResponse && !interruptState.type && !abortController.signal.aborted) {
+          logger.info('No final response after tool loop — forcing synthesis call');
+          try {
+            messages.push({ role: 'user', content: 'Please provide your final response to the user now. Summarize what you found and give your analysis.' });
+            const synthResponse = await anthropicClient.messages.create({
+              model: config.models.executor,
+              max_tokens: 4096,
+              system: SYSTEM_PROMPT,
+              messages,
+            });
+            const synthText = synthResponse.content
+              .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+              .map(b => b.text)
+              .join('\n');
+            if (synthText) {
+              finalResponse = synthText;
+            }
+          } catch (error) {
+            logger.warn({ error }, 'Synthesis call failed — no response to post');
+          }
         }
 
         // ── Handle interrupts ──
