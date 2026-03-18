@@ -53,6 +53,11 @@
     "maxTranscriptsPerSync": 20,
     "defaultDaysBack": 7
   },
+  "search": {
+    "relevanceThreshold": 3,
+    "maxOutputTokens": 8000,
+    "defaultMaxPerSource": 100
+  },
   "google": {},
   "github": {}
 }

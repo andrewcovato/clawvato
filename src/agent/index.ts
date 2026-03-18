@@ -24,6 +24,7 @@ import { getGoogleAuth } from '../google/auth.js';
 import { createGoogleTools } from '../google/tools.js';
 import { syncDrive, deepReadFile, listDocuments, findDocumentByName } from '../google/drive-sync.js';
 import { scanEmail, getThreadExtractionState } from '../google/email-scan.js';
+import { crossSourceSearch } from '../search/cross-source.js';
 import { retrieveContext } from '../memory/retriever.js';
 import { extractFacts, extractEmailFacts, storeExtractionResult } from '../memory/extractor.js';
 import { maybeReflect } from '../memory/reflection.js';
@@ -305,6 +306,9 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
   const apiKey = options.apiKey ?? await requireCredential('anthropic-api-key');
 
   const anthropicClient = new Anthropic({ apiKey });
+
+  // Mutable handler reference — set during processBatch, used by tools that need progress updates
+  let currentHandler: SlackHandler | null = null;
 
   // Build tool registry
   const slackTools = createSlackTools(options.botClient, options.userClient);
@@ -628,6 +632,8 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
   }
 
   // ── Fireflies meeting tools (conditional) ──
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let firefliesClientRef: any = undefined; // Hoisted for cross-source search access
   const firefliesApiKey = await getCredential('fireflies-api-key');
   if (firefliesApiKey) {
     const { FirefliesClient } = await import('../fireflies/api.js');
@@ -635,6 +641,7 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
     const { syncMeetings, deepReadMeeting } = await import('../fireflies/sync.js');
 
     const firefliesClient = new FirefliesClient(firefliesApiKey);
+    firefliesClientRef = firefliesClient;
     const firefliesTools = createFirefliesTools(firefliesClient);
 
     for (const tool of firefliesTools) {
@@ -714,6 +721,81 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
     logger.info({ toolCount: firefliesTools.length }, 'Fireflies tools loaded');
   } else {
     logger.info('Fireflies tools not loaded — API key not configured');
+  }
+
+  // ── Cross-Source Search ──
+  // Registered after all source-specific tools so we can capture which clients are available
+  {
+    const crossSourceGmail = googleAuth ? google.gmail({ version: 'v1', auth: googleAuth }) : undefined;
+    const crossSourceDrive = googleAuth ? google.drive({ version: 'v3', auth: googleAuth }) : undefined;
+    const crossSourceFireflies = firefliesClientRef ?? undefined;
+
+    toolDefs.push({
+      name: 'cross_source_search',
+      description:
+        'Search across email, meetings, Slack, Drive, and memory in one call. ' +
+        'Translates your query into source-specific searches, fans out in parallel, ' +
+        'scores results for relevance, and returns a merged summary. ' +
+        'Use for any question spanning multiple sources or needing broad synthesis. ' +
+        'Examples: "what\'s outstanding since mid-Feb?", "find where someone mentioned the budget", ' +
+        '"cross-reference email with meetings about Project X".',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          query: { type: 'string', description: 'Natural language query — what are you looking for?' },
+          sources: {
+            type: 'array',
+            items: { type: 'string', enum: ['gmail', 'fireflies', 'slack', 'drive', 'memory'] },
+            description: 'Which sources to search. Default: all available.',
+          },
+          date_after: { type: 'string', description: 'Search after this date (ISO format, e.g., "2026-02-15")' },
+          date_before: { type: 'string', description: 'Search before this date (ISO format)' },
+          max_per_source: { type: 'number', description: 'Max candidates per source (default 100, max 200)' },
+        },
+        required: ['query'],
+      },
+    });
+
+    toolHandlers.set('cross_source_search', async (args) => {
+      const db = getDb();
+      const ownerEmail = config.google?.agentEmail ?? '';
+
+      try {
+        const result = await crossSourceSearch(
+          {
+            db,
+            anthropicClient,
+            classifierModel: config.models.classifier,
+            ownerEmail,
+            gmail: crossSourceGmail,
+            drive: crossSourceDrive,
+            firefliesClient: crossSourceFireflies,
+            slackClient: options.botClient,
+            slackUserClient: options.userClient,
+            onProgress: currentHandler ? async (text: string) => {
+              try { await currentHandler!.updateProgress(text); } catch { /* non-critical */ }
+            } : undefined,
+          },
+          {
+            query: args.query as string,
+            sources: args.sources as string[] | undefined,
+            dateAfter: args.date_after as string | undefined,
+            dateBefore: args.date_before as string | undefined,
+            maxPerSource: args.max_per_source as number | undefined,
+          },
+          config.search,
+        );
+        return { content: result.summary };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return { content: `Cross-source search failed: ${msg}`, isError: true };
+      }
+    });
+
+    logger.info(
+      { sources: [crossSourceGmail ? 'gmail' : null, crossSourceDrive ? 'drive' : null, crossSourceFireflies ? 'fireflies' : null, 'slack', 'memory'].filter(Boolean) },
+      'Cross-source search tool loaded',
+    );
   }
 
   // Working context tool — scratch pad for operational details
@@ -924,6 +1006,7 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
 
   return {
     async processBatch(batch: AccumulatedBatch, handler: SlackHandler): Promise<void> {
+      currentHandler = handler; // Set handler ref for tools needing progress updates
       const message = batch.combinedText;
       const assistantAPI = handler.getAssistantAPI();
       const isAssistantMode = !!assistantAPI;

@@ -86,6 +86,8 @@ interface LoadedPrompts {
   interruptClassification: string;
   meetingExtraction: string;
   emailExtraction: string;
+  searchPlanning: string;
+  searchRelevance: string;
 }
 
 let cachedPrompts: LoadedPrompts | null = null;
@@ -110,6 +112,8 @@ export function loadPrompts(): LoadedPrompts {
     interruptClassification: 'interrupt-classification.md',
     meetingExtraction: 'meeting-extraction.md',
     emailExtraction: 'email-extraction.md',
+    searchPlanning: 'search-planning.md',
+    searchRelevance: 'search-relevance.md',
   };
 
   const loaded: Partial<LoadedPrompts> = {};

@@ -131,6 +131,16 @@ const ConfigSchema = z.object({
     maxTranscriptsPerSync: 20,
     defaultDaysBack: 7,
   })),
+
+  search: z.object({
+    relevanceThreshold: z.number().default(3),
+    maxOutputTokens: z.number().int().default(8000),
+    defaultMaxPerSource: z.number().int().default(100),
+  }).default(() => ({
+    relevanceThreshold: 3,
+    maxOutputTokens: 8000,
+    defaultMaxPerSource: 100,
+  })),
 });
 
 export type ClawvatoConfig = z.infer<typeof ConfigSchema>;
