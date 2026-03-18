@@ -2,7 +2,7 @@
   "project": {
     "name": "Clawvato",
     "description": "Always-on personal AI agent — your chief of staff",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "status": "active",
     "phase": "build",
     "startDate": "2026-03-06",
@@ -11,12 +11,13 @@
   "tracks": {
     "A": { "name": "Core Foundation", "status": "complete", "completedDate": "2026-03-06" },
     "B": { "name": "Slack MCP + Agent Core", "status": "complete", "completedDate": "2026-03-17" },
-    "C": { "name": "Google Workspace", "status": "complete", "completedDate": "2026-03-18", "notes": "19 tools. All file types readable (PDF, Office, images, HTML, CSV). Chunked extraction + Sonnet synthesis." },
-    "D": { "name": "Memory + Embeddings", "status": "complete", "completedDate": "2026-03-18", "notes": "High-resolution extraction: chunked + Sonnet synthesis. Externalized prompts. Configurable tunables." },
+    "C": { "name": "Google Workspace", "status": "complete", "completedDate": "2026-03-18", "notes": "20 tools. All file types. Gmail thread reading + batch parallel. Background extraction on read." },
+    "D": { "name": "Memory + Embeddings", "status": "complete", "completedDate": "2026-03-18", "notes": "High-resolution: chunked + Sonnet synthesis. Externalized prompts. Configurable tunables." },
     "E": { "name": "Workflow Engine + Scheduling", "status": "not_started", "dependsOn": ["B", "C"] },
-    "F": { "name": "Security + Training Wheels (undo)", "status": "partial", "notes": "Security hardened. Training wheels confirmation gate still MVP." },
+    "F": { "name": "Security + Training Wheels (undo)", "status": "partial", "notes": "Training wheels enforced (was bypassed). Trust level 1. Needs real confirmation UX." },
     "G": { "name": "GitHub + Filesystem + Web Research", "status": "not_started", "dependsOn": ["A"] },
-    "H": { "name": "Proactive Intelligence", "status": "not_started", "dependsOn": ["D", "E", "F"] }
+    "H": { "name": "Proactive Intelligence", "status": "not_started", "dependsOn": ["D", "E", "F"] },
+    "I": { "name": "Fireflies.ai", "status": "complete", "completedDate": "2026-03-18", "notes": "4 tools. Three-tier sync. Parallel batch fetch. Meeting extraction with Sonnet synthesis." }
   },
   "infrastructure": {
     "local": "macOS, npx tsx src/cli/index.ts start",
@@ -25,135 +26,49 @@
     "railwayService": "clawvato",
     "dataVolume": "/data (Railway persistent volume)",
     "deployMethod": "Dockerfile, railway up --detach",
-    "googleAuth": "gws CLI → OAuth export → Railway env vars"
+    "googleAuth": "gws CLI → OAuth export → Railway env vars",
+    "firefliesAuth": "API key → FIREFLIES_API_KEY env var"
   },
   "metrics": {
     "testFiles": 22,
     "testCount": 297,
     "testsPassing": 297,
-    "tools": { "slack": 7, "google": 19, "memory": 3, "total": 29 }
+    "tools": { "slack": 7, "google": 20, "fireflies": 4, "memory": 2, "total": 33 }
   },
   "knownIssues": [
-    {
-      "id": "TW-002",
-      "title": "Training wheels needs real confirmation UX — currently blocks with error",
-      "severity": "medium",
-      "description": "S1 fix makes non-approved tools return an error. Bot tells Claude 'requires confirmation' but there's no actual confirmation flow (Slack button, DM prompt, etc.). Need a real gate where the user can approve/deny.",
-      "affectedFile": "src/agent/index.ts",
-      "discoveredDate": "2026-03-18"
-    },
-    {
-      "id": "SEC-001",
-      "title": "FTS5 query injection via search_memory",
-      "severity": "medium",
-      "description": "Raw LLM-controlled query goes into FTS5 MATCH operator. Special syntax (OR, NOT, *, column filters) could retrieve unintended rows. Fix: wrap query in double-quotes for phrase search.",
-      "affectedFile": "src/memory/store.ts",
-      "discoveredDate": "2026-03-18"
-    },
-    {
-      "id": "SEC-002",
-      "title": "HTML extractor skipContent not nesting-aware",
-      "severity": "medium",
-      "description": "Nested <svg> or <script> tags reset the skip flag early, allowing injected text through. Fix: use depth counter instead of boolean.",
-      "affectedFile": "src/google/file-extractor.ts",
-      "discoveredDate": "2026-03-18"
-    },
-    {
-      "id": "SEC-003",
-      "title": "Google refresh token not covered by output sanitizer",
-      "severity": "medium",
-      "description": "Output sanitizer scans for ya29.* access tokens but not 1//... refresh tokens. Add pattern to SECRET_PATTERNS.",
-      "affectedFile": "src/security/output-sanitizer.ts",
-      "discoveredDate": "2026-03-18"
-    },
-    {
-      "id": "SEC-004",
-      "title": "Rate limiter resets on process restart",
-      "severity": "medium",
-      "description": "In-memory rate limit counters lost on Railway deploy/restart. Persist email/file-share timestamps to agent_state table.",
-      "affectedFile": "src/security/rate-limiter.ts",
-      "discoveredDate": "2026-03-18"
-    },
-    {
-      "id": "SEC-005",
-      "title": "Post-tool sanitizer only scans string outputs",
-      "severity": "medium",
-      "description": "Object outputs bypass secret scanning. Fix: normalize to string before scan.",
-      "affectedFile": "src/hooks/post-tool-use.ts",
-      "discoveredDate": "2026-03-18"
-    },
-    {
-      "id": "SEC-006",
-      "title": "scan_channel_history no trust tagging on messages",
-      "severity": "medium",
-      "description": "Non-owner messages extracted without [EXTERNAL] tags. Could inject facts into memory. Fix: tag by trust level before extraction.",
-      "affectedFile": "src/agent/index.ts",
-      "discoveredDate": "2026-03-18"
-    },
-    {
-      "id": "QUAL-001",
-      "title": "buildFolderPathMap calls deprecated getFilePath",
-      "severity": "medium",
-      "description": "The replacement function uses the function it was meant to replace for root folder. Remove and use simple root path assignment.",
-      "affectedFile": "src/google/drive-sync.ts",
-      "discoveredDate": "2026-03-18"
-    },
-    {
-      "id": "QUAL-002",
-      "title": "hasVectorSupport probe query per call — no caching",
-      "severity": "medium",
-      "description": "SELECT count(*) FROM memories_vec runs on every memory operation. Cache at module level.",
-      "affectedFile": "src/memory/store.ts",
-      "discoveredDate": "2026-03-18"
-    },
-    {
-      "id": "QUAL-003",
-      "title": "Consolidation O(n²) merge — no LIMIT on per-type fetch",
-      "severity": "medium",
-      "description": "mergeDuplicates fetches ALL memories per type with no limit. At scale, O(n²) comparisons block event loop. Add LIMIT 500 per type.",
-      "affectedFile": "src/memory/consolidation.ts",
-      "discoveredDate": "2026-03-18"
-    },
-    {
-      "id": "DEEPREAD-001",
-      "title": "Optimize deep reading — skip re-read if file unchanged",
-      "severity": "low",
-      "description": "When user says 're-read', bot deep-reads even if file hasn't changed and facts are already in memory. Add tool-level guard to check deep_read_at vs modified_time.",
-      "affectedFile": "src/agent/index.ts",
-      "discoveredDate": "2026-03-18"
-    },
-    {
-      "id": "DRIVE-002",
-      "title": "Drive folder scope — allow-list of folder IDs",
-      "severity": "low",
-      "description": "google_drive_search queries all of Drive. Add optional config-level scopedFolders allow-list to restrict search to specific folders.",
-      "discoveredDate": "2026-03-18"
-    },
-    {
-      "id": "OBSIDIAN-001",
-      "title": "Obsidian integration layer — human visibility for agent memory",
-      "severity": "low",
-      "description": "Export/sync memories as Markdown files in an Obsidian vault for browsing, graph visualization, and manual curation. Optionally bidirectional (edits in Obsidian sync back to DB). SQLite stays as runtime engine.",
-      "discoveredDate": "2026-03-18"
-    }
+    { "id": "TW-002", "severity": "medium", "title": "Real confirmation UX — currently blocks with error" },
+    { "id": "SEC-001", "severity": "medium", "title": "FTS5 query injection via search_memory" },
+    { "id": "SEC-002", "severity": "medium", "title": "HTML extractor skipContent not nesting-aware" },
+    { "id": "SEC-003", "severity": "medium", "title": "Google refresh token not in output sanitizer" },
+    { "id": "SEC-004", "severity": "medium", "title": "Rate limiter resets on restart" },
+    { "id": "SEC-005", "severity": "medium", "title": "Post-tool sanitizer only scans strings" },
+    { "id": "SEC-006", "severity": "medium", "title": "scan_channel_history no trust tagging" },
+    { "id": "QUAL-001", "severity": "medium", "title": "buildFolderPathMap calls deprecated getFilePath" },
+    { "id": "QUAL-002", "severity": "medium", "title": "hasVectorSupport probe per call — no cache" },
+    { "id": "QUAL-003", "severity": "medium", "title": "Consolidation O(n²) merge — no LIMIT" },
+    { "id": "DEEPREAD-001", "severity": "low", "title": "Optimize deep reading — skip if unchanged" },
+    { "id": "DRIVE-002", "severity": "low", "title": "Drive folder scope allow-list" },
+    { "id": "OBSIDIAN-001", "severity": "low", "title": "Obsidian integration for memory visibility" },
+    { "id": "WEBHOOK-001", "severity": "low", "title": "Gmail Pub/Sub webhooks for proactive memory" },
+    { "id": "WEBHOOK-002", "severity": "low", "title": "Fireflies webhooks for new meeting auto-sync" }
   ],
   "currentSprint": {
-    "id": "S2",
-    "name": "Integrations + Polish",
+    "id": "S3",
+    "name": "Workflows + Intelligence",
     "goals": [
       "Track E: Workflow Engine + Scheduling",
       "Track G: GitHub + Web Research",
-      "Training wheels confirmation gate (TW-001)",
-      "Cross-source intelligence",
-      "One-click deploy flow"
+      "Cross-source intelligence polish",
+      "TW-002: Real confirmation UX",
+      "Webhook infrastructure"
     ],
-    "progress": "Drive file types complete, UX polished, prompts/config externalized, memory quality upgraded"
+    "progress": "Not started — all S2 goals complete"
   },
   "lastSession": {
     "number": 12,
     "date": "2026-03-18",
-    "type": "feature + UX + refactor + bugfix",
-    "commits": 17
+    "type": "feature + integration + UX + security + refactor",
+    "commits": 28
   },
   "thingsNotToRedo": [
     "Don't split schema.sql on semicolons",
@@ -169,11 +84,15 @@
     "Self-healing compares expected vs actual memory content",
     "Folder path is evidence, not gospel — content wins over structure",
     "One-time migrations use agent_state guard keys",
-    "Mid-loop text is NOT the final response — only capture text from the final turn",
-    "Don't force premature answers (removed synthesis hack) — let the bot finish",
+    "Mid-loop text is NOT the final response — only capture from final turn",
+    "Don't force premature answers — let the bot finish (removed synthesis hack)",
     "drive_read_content must return file content to agent, not just 'facts extracted'",
     "Slack markdown block does NOT support tables — use bulleted key-value pairs",
-    "Document tasks require reading the actual file, not answering from memory"
+    "Document tasks require reading the actual file, not answering from memory",
+    "Email: always live search, NEVER sync (threads change too fast)",
+    "Policy engine regexes must use (?:^|_) to match prefixed tool names",
+    "Always parallelize API fetches, sequential DB writes",
+    "Gmail sync was built and reverted — wrong pattern for fast-changing data"
   ],
   "lastUpdated": "2026-03-18"
 }

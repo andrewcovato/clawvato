@@ -134,20 +134,30 @@ The bot listens to all messages in joined channels like a human would.
 | Tool | Action |
 |---|---|
 | `google_gmail_search` | Search with Gmail syntax (with IDs) |
-| `google_gmail_read` | Read full email content |
+| `google_gmail_read` | Read full email thread (all replies). Batch: accepts array of message_ids for parallel fetch. Background fact extraction. |
 | `google_gmail_draft` | Create draft (safe — doesn't send) |
 | `google_gmail_send_draft` | Send after owner confirmation |
 | `google_gmail_reply` | Reply/reply-all (creates draft first) |
 | `google_gmail_label` | Star, archive, mark read, label |
 
+**Email philosophy**: Always search and read live — never sync. Email threads evolve too fast for a sync pattern. Memories accumulate naturally as the bot reads threads (background extraction on every read).
+
 #### Google Drive (5 tools)
 | Tool | Action |
 |---|---|
-| `google_drive_search` | Find files by name/type |
+| `google_drive_search` | Find files by name/type (returns folder name + file ID) |
 | `google_drive_get_file` | Metadata, sharing, permissions |
 | `google_drive_sync` | Scan Drive/folder, index files, generate summaries |
-| `google_drive_read_content` | Deep read — export content, extract facts into memory |
-| `google_drive_list_known` | Browse indexed files with summaries |
+| `google_drive_read_content` | Read file content (returns text to agent) + background fact extraction |
+| `google_drive_list_known` | Browse indexed files by folder path or name |
+
+#### Fireflies.ai (4 tools)
+| Tool | Action |
+|---|---|
+| `fireflies_search_meetings` | Find meetings by keyword, date, participant |
+| `fireflies_get_summary` | Meeting overview, action items, participants (Tier 2) |
+| `fireflies_read_transcript` | Full transcript with speaker labels + timestamps (Tier 3). Background extraction. |
+| `fireflies_sync_meetings` | Sync recent meetings into memory (parallel batch fetch) |
 
 ### Drive Knowledge Sync
 
@@ -323,7 +333,7 @@ railway up --detach -m "deploy"
 ### Running Tests
 
 ```bash
-npm test          # 297 tests across 22 files, 29 tools
+npm test          # 297 tests across 22 files, 33 tools
 npm run build     # TypeScript compile
 npm run lint      # Type-check without emitting
 ```
@@ -335,7 +345,8 @@ src/
   agent/          # Agent orchestration, tool loop, context assembly
   cli/            # Commander.js CLI (setup, start, status)
   db/             # SQLite + sqlite-vec, schema
-  google/         # Google Workspace auth + 19 tools + file extractor
+  fireflies/      # Fireflies.ai — GraphQL client, 4 tools, meeting sync
+  google/         # Google Workspace auth + 20 tools + file extractor
   hooks/          # PreToolUse / PostToolUse security hooks
   memory/         # Extraction, retrieval, embeddings, reflection, consolidation
   mcp/slack/      # Slack tool definitions + handlers
@@ -383,6 +394,12 @@ Dockerfile        # Railway deployment (node:22-slim)
 | Return content to agent | drive_read_content returns file text, not just "facts extracted" — agent answers from source |
 | Document tasks require file reads | System prompt forbids answering document questions from memory alone |
 | 20s progress message delay | Quick responses (<20s) show only 🧠 reaction — no flashing status messages |
+| Fireflies native (no MCP) | Direct GraphQL client — same pattern as Google tools, memory integration |
+| Email: live search, no sync | Threads evolve too fast for sync. Memories accumulate from reads. |
+| Gmail thread reading | `gmail_read` fetches full thread (all replies), supports batch parallel |
+| Parallel everywhere | API fetches parallelized (5-10 concurrent), DB writes sequential |
+| Training wheels enforced | Policy engine actually blocks non-approved tools (was bypassed as MVP) |
+| Prefixed tool name matching | Policy regexes use `(?:^|_)` to match google_*, fireflies_* tool names |
 
 ## License
 
