@@ -86,6 +86,9 @@ export async function createSlackConnection(config: {
     async update(channel: string, ts: string, text: string) {
       await botClient.chat.update({ channel, ts, text });
     },
+    async delete(channel: string, ts: string) {
+      await botClient.chat.delete({ channel, ts });
+    },
   };
 
   // Create handler with real Slack APIs

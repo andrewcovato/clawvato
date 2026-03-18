@@ -10,9 +10,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { SlackHandler } from '../../src/slack/handler.js';
 import { loadConfig } from '../../src/config.js';
 
-// We can't instantiate a Bolt App without real tokens, so we test
-// the SlackHandler integration patterns that socket-mode.ts wires up.
-
 // Reset config before each test to avoid contamination from user's
 // ~/.clawvato/config.json (which may have ownerSlackUserId set after setup).
 // Set a default owner so tests that send messages as 'U001' are processed.
@@ -31,12 +28,13 @@ function createMockMessages() {
   return {
     post: vi.fn().mockResolvedValue({ ts: '1234.5678' }),
     update: vi.fn().mockResolvedValue(undefined),
+    delete: vi.fn().mockResolvedValue(undefined),
   };
 }
 
 describe('Socket Mode adapter patterns', () => {
   describe('Message handling', () => {
-    it('adds eyes reaction on message receipt (debug signal)', async () => {
+    it('adds eyes reaction on message receipt', async () => {
       const reactions = createMockReactions();
       const messages = createMockMessages();
       const handler = new SlackHandler(reactions, messages);
@@ -48,7 +46,6 @@ describe('Socket Mode adapter patterns', () => {
         ts: '1111.0000',
       });
 
-      // Debug: 👀 = message received
       expect(reactions.add).toHaveBeenCalledWith('C123', '1111.0000', 'eyes');
     });
   });
@@ -59,7 +56,6 @@ describe('Socket Mode adapter patterns', () => {
       const messages = createMockMessages();
       const handler = new SlackHandler(reactions, messages);
 
-      // Reload config with owner set (env stubs don't affect cached config)
       const { loadConfig } = await import('../../src/config.js');
       loadConfig({ ownerSlackUserId: 'U_OWNER' });
 
@@ -70,14 +66,12 @@ describe('Socket Mode adapter patterns', () => {
         ts: '1111.0000',
       });
 
-      // Should NOT have added reaction (message ignored)
       expect(reactions.add).not.toHaveBeenCalled();
 
-      // Reset
       loadConfig({ ownerSlackUserId: 'U001' });
     });
 
-    it('handler processes owner messages with debug reaction', async () => {
+    it('handler processes owner messages with eyes reaction', async () => {
       const reactions = createMockReactions();
       const messages = createMockMessages();
       const handler = new SlackHandler(reactions, messages);
@@ -92,22 +86,99 @@ describe('Socket Mode adapter patterns', () => {
         ts: '1111.0000',
       });
 
-      // Debug: 👀 = message received by owner
       expect(reactions.add).toHaveBeenCalledWith('C123', '1111.0000', 'eyes');
 
-      // Reset
       loadConfig({ ownerSlackUserId: 'U001' });
     });
   });
 
-  describe('Interrupt buffer (socket-mode integration)', () => {
+  describe('Reaction lifecycle', () => {
+    it('startProcessing removes eyes, adds brain, posts progress message', async () => {
+      const reactions = createMockReactions();
+      const messages = createMockMessages();
+      const handler = new SlackHandler(reactions, messages);
+
+      await handler.startProcessing('test task', 'C123', ['1111.0000', '2222.0000']);
+
+      // Should remove 👀 from both messages
+      expect(reactions.remove).toHaveBeenCalledWith('C123', '1111.0000', 'eyes');
+      expect(reactions.remove).toHaveBeenCalledWith('C123', '2222.0000', 'eyes');
+
+      // Should add 🧠 to the last message
+      expect(reactions.add).toHaveBeenCalledWith('C123', '2222.0000', 'brain');
+
+      // Should post a progress message
+      expect(messages.post).toHaveBeenCalledWith('C123', expect.stringContaining('Working on it'), undefined);
+
+      // Should have an active task
+      expect(handler.getActiveTask()).not.toBeNull();
+    });
+
+    it('updateProgress updates the progress message', async () => {
+      const reactions = createMockReactions();
+      const messages = createMockMessages();
+      const handler = new SlackHandler(reactions, messages);
+
+      await handler.startProcessing('test task', 'C123', ['1111.0000']);
+
+      await handler.updateProgress('Checking your calendar...');
+
+      expect(messages.update).toHaveBeenCalledWith('C123', '1234.5678', expect.stringContaining('Checking your calendar'));
+    });
+
+    it('updateProgress skips redundant updates', async () => {
+      const reactions = createMockReactions();
+      const messages = createMockMessages();
+      const handler = new SlackHandler(reactions, messages);
+
+      await handler.startProcessing('test task', 'C123', ['1111.0000']);
+
+      await handler.updateProgress('Checking your calendar...');
+      await handler.updateProgress('Checking your calendar...');
+
+      // Should only update once (same text)
+      expect(messages.update).toHaveBeenCalledTimes(1);
+    });
+
+    it('completeProcessing removes brain, deletes progress message', async () => {
+      const reactions = createMockReactions();
+      const messages = createMockMessages();
+      const handler = new SlackHandler(reactions, messages);
+
+      await handler.startProcessing('test task', 'C123', ['1111.0000']);
+
+      await handler.completeProcessing();
+
+      // Should remove 🧠 from the last message
+      expect(reactions.remove).toHaveBeenCalledWith('C123', '1111.0000', 'brain');
+
+      // Should delete the progress message
+      expect(messages.delete).toHaveBeenCalledWith('C123', '1234.5678');
+
+      // Active task should be cleared
+      expect(handler.getActiveTask()).toBeNull();
+    });
+
+    it('completeProcessing is safe to call when no task is active', async () => {
+      const reactions = createMockReactions();
+      const messages = createMockMessages();
+      const handler = new SlackHandler(reactions, messages);
+
+      // Should not throw
+      await handler.completeProcessing();
+
+      expect(reactions.remove).not.toHaveBeenCalled();
+      expect(messages.delete).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Interrupt buffer', () => {
     it('routes messages to interrupt buffer when task is active', async () => {
       const reactions = createMockReactions();
       const messages = createMockMessages();
       const handler = new SlackHandler(reactions, messages);
 
-      // Set active task
-      handler.setActiveTask('processing something', 'C123');
+      await handler.startProcessing('processing something', 'C123', ['0000.0000']);
 
       await handler.handleMessage({
         text: 'actually do this instead',
@@ -120,15 +191,13 @@ describe('Socket Mode adapter patterns', () => {
       expect(handler.getInterruptBuffer()[0].text).toBe('actually do this instead');
     });
 
-    it('drainInterrupt returns and removes first buffer item', () => {
+    it('drainInterrupt returns and removes first buffer item', async () => {
       const reactions = createMockReactions();
       const messages = createMockMessages();
       const handler = new SlackHandler(reactions, messages);
 
-      handler.setActiveTask('task', 'C123');
+      await handler.startProcessing('task', 'C123', ['0000.0000']);
 
-      // Manually push to buffer for testing
-      // In real code, handleMessage does this
       handler['interruptBuffer'].push(
         { text: 'first', ts: '1' },
         { text: 'second', ts: '2' },
@@ -147,15 +216,15 @@ describe('Socket Mode adapter patterns', () => {
       expect(handler.drainInterrupt()).toBeNull();
     });
 
-    it('clearActiveTask also clears interrupt buffer', () => {
+    it('completeProcessing also clears interrupt buffer', async () => {
       const reactions = createMockReactions();
       const messages = createMockMessages();
       const handler = new SlackHandler(reactions, messages);
 
-      handler.setActiveTask('task', 'C123');
+      await handler.startProcessing('task', 'C123', ['0000.0000']);
       handler['interruptBuffer'].push({ text: 'interrupt', ts: '1' });
 
-      handler.clearActiveTask();
+      await handler.completeProcessing();
 
       expect(handler.getActiveTask()).toBeNull();
       expect(handler.getInterruptBuffer()).toHaveLength(0);
@@ -179,7 +248,6 @@ describe('Socket Mode adapter patterns', () => {
       const messages = createMockMessages();
       const handler = new SlackHandler(reactions, messages);
 
-      // Should not throw
       await handler.ackInterrupt('C123', '1111.0000');
     });
   });
@@ -220,7 +288,6 @@ describe('Socket Mode adapter patterns', () => {
         ...assistantAPIs,
       });
 
-      // Should have called the batch handler
       expect(batchHandler).toHaveBeenCalledTimes(1);
       const batch = batchHandler.mock.calls[0][0];
       expect(batch.combinedText).toBe('hello from assistant');
@@ -243,7 +310,6 @@ describe('Socket Mode adapter patterns', () => {
         ...assistantAPIs,
       });
 
-      // Should have set status to "Thinking..."
       expect(assistantAPIs.setStatus).toHaveBeenCalledWith('Thinking...');
     });
 
@@ -267,14 +333,11 @@ describe('Socket Mode adapter patterns', () => {
         ...assistantAPIs,
       });
 
-      // Should NOT have called batch handler
       expect(batchHandler).not.toHaveBeenCalled();
-      // Should have sent rejection message via say()
       expect(assistantAPIs.say).toHaveBeenCalledWith(
         expect.stringContaining('only assist my owner'),
       );
 
-      // Reset
       loadConfig({ ownerSlackUserId: 'U001' });
     });
 
@@ -294,7 +357,6 @@ describe('Socket Mode adapter patterns', () => {
 
       let capturedAPI: unknown = null;
       handler.onBatch(async () => {
-        // Capture the assistant API during processing
         capturedAPI = handler.getAssistantAPI();
       });
 
@@ -306,9 +368,7 @@ describe('Socket Mode adapter patterns', () => {
         ...assistantAPIs,
       });
 
-      // API should have been available during processing
       expect(capturedAPI).not.toBeNull();
-      // But should be null after processing completes
       expect(handler.getAssistantAPI()).toBeNull();
     });
 
@@ -328,7 +388,6 @@ describe('Socket Mode adapter patterns', () => {
         ...assistantAPIs,
       });
 
-      // Should NOT have used reaction API (assistant uses setStatus instead)
       expect(reactions.add).not.toHaveBeenCalled();
     });
 
@@ -342,7 +401,6 @@ describe('Socket Mode adapter patterns', () => {
         throw new Error('processing failed');
       });
 
-      // Should not throw
       await handler.handleAssistantMessage({
         text: 'hello',
         channel: 'D123',
@@ -351,7 +409,6 @@ describe('Socket Mode adapter patterns', () => {
         ...assistantAPIs,
       });
 
-      // Should have sent error message via say()
       expect(assistantAPIs.say).toHaveBeenCalledWith(
         expect.stringContaining('error'),
       );

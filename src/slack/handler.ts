@@ -7,9 +7,13 @@
  * 3. Routes typing events to the EventQueue
  * 4. Routes mid-processing messages to the interrupt classifier
  *
- * Interaction model: The bot listens to all messages in joined channels,
- * like a human would. No reaction emojis for normal flow — only a delayed
- * status indicator (⏳) if processing takes longer than 60 seconds.
+ * Reaction lifecycle (production UX, not debug):
+ *   Message arrives              → 👀 (I see it, accumulating)
+ *   Accumulation window closes   → remove 👀, add 🧠, post status message
+ *   Tool-call boundaries         → update status message with real progress
+ *   Every 60s without update     → refresh status with elapsed time
+ *   Task complete                → remove 🧠, delete status message, post response
+ *   Cancel acknowledged          → remove 🧠, delete status message, ✅ on cancel
  */
 
 import { logger } from '../logger.js';
@@ -24,6 +28,7 @@ export interface SlackReactionAPI {
 export interface SlackMessageAPI {
   post(channel: string, text: string, threadTs?: string): Promise<{ ts: string }>;
   update(channel: string, ts: string, text: string): Promise<void>;
+  delete(channel: string, ts: string): Promise<void>;
 }
 
 /**
@@ -38,19 +43,23 @@ export interface AssistantThreadAPI {
 
 export type ProcessingState = 'idle' | 'accumulating' | 'processing';
 
-/** How long before showing a delayed status indicator */
-const SLOW_TASK_THRESHOLD_MS = 60_000;
-
-/** Message shown when a task exceeds the slow-task threshold */
-const SLOW_TASK_MESSAGE = '\u23f3 Still working on this...';
+/** How often to refresh progress when no tool-call update has occurred */
+const PROGRESS_STALE_INTERVAL_MS = 60_000;
 
 interface ActiveTask {
   description: string;
   channel: string;
   threadTs?: string;
-  ackMessageTs?: string; // Delayed ACK message (only created after SLOW_TASK_THRESHOLD_MS)
+  /** The 👀-reacted message timestamps (for cleanup) */
+  eyesMessageTs: string[];
+  /** Status/progress message posted when processing starts */
+  progressMessageTs?: string;
+  /** Last progress text (to avoid redundant updates) */
+  lastProgressText?: string;
   startedAt: number;
-  slowTimer?: ReturnType<typeof setTimeout>;
+  lastUpdatedAt: number;
+  /** Timer that fires when progress becomes stale (no tool-call update for 60s) */
+  staleTimer?: ReturnType<typeof setTimeout>;
 }
 
 /**
@@ -106,7 +115,7 @@ export class SlackHandler {
   }
 
   /**
-   * Get the reaction API (for debug/status reactions from the orchestrator).
+   * Get the reaction API (for status reactions from the orchestrator).
    */
   getReactions(): SlackReactionAPI {
     return this.reactions;
@@ -135,7 +144,7 @@ export class SlackHandler {
       return;
     }
 
-    // Debug reaction: 👀 = message received
+    // 👀 = I see your message (will be removed when processing starts)
     try {
       await this.reactions.add(event.channel, event.ts, 'eyes');
     } catch { /* non-critical */ }
@@ -280,45 +289,141 @@ export class SlackHandler {
   }
 
   /**
-   * Set the active task description (called by the agent loop when starting work).
-   * Starts a delayed timer — if the task takes longer than SLOW_TASK_THRESHOLD_MS,
-   * a status indicator is shown.
+   * Start processing a batch — transitions from accumulating to processing.
+   *
+   * Handles the full reaction lifecycle transition:
+   *   - Removes 👀 from all accumulated messages
+   *   - Adds 🧠 to the last message
+   *   - Posts a progress status message
+   *   - Starts the stale-progress timer
    */
-  setActiveTask(description: string, channel: string, threadTs?: string): void {
-    const slowTimer = setTimeout(() => {
-      void this.showSlowTaskIndicator();
-    }, SLOW_TASK_THRESHOLD_MS);
+  async startProcessing(
+    description: string,
+    channel: string,
+    messageTimestamps: string[],
+    threadTs?: string,
+  ): Promise<void> {
+    // Remove 👀 from all accumulated messages
+    for (const ts of messageTimestamps) {
+      try {
+        await this.reactions.remove(channel, ts, 'eyes');
+      } catch { /* may not exist */ }
+    }
+
+    // Add 🧠 to the last message
+    const lastTs = messageTimestamps[messageTimestamps.length - 1];
+    if (lastTs) {
+      try {
+        await this.reactions.add(channel, lastTs, 'brain');
+      } catch { /* non-critical */ }
+    }
+
+    // Post initial progress message
+    let progressMessageTs: string | undefined;
+    const initialProgress = `\u{1f9e0} Working on it...`;
+    try {
+      const result = await this.messages.post(channel, initialProgress, threadTs);
+      progressMessageTs = result.ts;
+    } catch {
+      // Non-critical — we can still process without a progress message
+    }
+
+    // Start the stale-progress timer
+    const now = Date.now();
+    const staleTimer = setTimeout(() => {
+      void this.refreshStaleProgress();
+    }, PROGRESS_STALE_INTERVAL_MS);
 
     this.activeTask = {
       description,
       channel,
       threadTs,
-      startedAt: Date.now(),
-      slowTimer,
+      eyesMessageTs: messageTimestamps,
+      progressMessageTs,
+      lastProgressText: initialProgress,
+      startedAt: now,
+      lastUpdatedAt: now,
+      staleTimer,
     };
   }
 
   /**
-   * Clear the active task (called when the agent finishes or cancels work).
+   * Update the progress message with what the agent is actually doing.
+   * Called at tool-call boundaries by the agent loop.
    */
-  clearActiveTask(): void {
-    logger.info(
-      { hadTask: !!this.activeTask, droppedInterrupts: this.interruptBuffer.length },
-      'Clearing active task',
-    );
-    if (this.activeTask?.slowTimer) {
-      clearTimeout(this.activeTask.slowTimer);
+  async updateProgress(text: string): Promise<void> {
+    if (!this.activeTask?.progressMessageTs) return;
+
+    const progressText = `\u{1f9e0} ${text}`;
+
+    // Skip redundant updates
+    if (progressText === this.activeTask.lastProgressText) return;
+
+    try {
+      await this.messages.update(
+        this.activeTask.channel,
+        this.activeTask.progressMessageTs,
+        progressText,
+      );
+      this.activeTask.lastProgressText = progressText;
+      this.activeTask.lastUpdatedAt = Date.now();
+
+      // Reset the stale timer
+      if (this.activeTask.staleTimer) {
+        clearTimeout(this.activeTask.staleTimer);
+      }
+      this.activeTask.staleTimer = setTimeout(() => {
+        void this.refreshStaleProgress();
+      }, PROGRESS_STALE_INTERVAL_MS);
+    } catch (error) {
+      logger.debug({ error }, 'Failed to update progress — non-critical');
     }
+  }
+
+  /**
+   * Complete processing — clean up reactions and progress message.
+   * Returns the progress message ts so the agent can decide whether to
+   * update it with the final response or delete it and post fresh.
+   */
+  async completeProcessing(): Promise<void> {
+    if (!this.activeTask) return;
+
+    const { channel, progressMessageTs, eyesMessageTs } = this.activeTask;
+
+    // Remove 🧠 from the last message
+    const lastTs = eyesMessageTs[eyesMessageTs.length - 1];
+    if (lastTs) {
+      try {
+        await this.reactions.remove(channel, lastTs, 'brain');
+      } catch { /* may not exist */ }
+    }
+
+    // Delete the progress message (the real response will be posted separately)
+    if (progressMessageTs) {
+      try {
+        await this.messages.delete(channel, progressMessageTs);
+      } catch { /* non-critical */ }
+    }
+
+    // Clear timers and state
+    if (this.activeTask.staleTimer) {
+      clearTimeout(this.activeTask.staleTimer);
+    }
+
+    logger.info(
+      { hadTask: true, droppedInterrupts: this.interruptBuffer.length },
+      'Processing complete',
+    );
+
     this.activeTask = null;
     this.interruptBuffer = [];
   }
 
   /**
-   * Get the ACK message timestamp (for updating with final response).
-   * Only set if the task took long enough to trigger the slow indicator.
+   * Get the progress message ts (for updating with final response on cancel/redirect).
    */
-  getAckTs(): string | undefined {
-    return this.activeTask?.ackMessageTs;
+  getProgressMessageTs(): string | undefined {
+    return this.activeTask?.progressMessageTs;
   }
 
   /**
@@ -349,30 +454,12 @@ export class SlackHandler {
   }
 
   /**
-   * Update the ACK message with a milestone update.
-   * Used for long-running tasks to show progress.
-   */
-  async updateMilestone(milestoneText: string): Promise<void> {
-    if (!this.activeTask?.ackMessageTs) return;
-
-    try {
-      await this.messages.update(
-        this.activeTask.channel,
-        this.activeTask.ackMessageTs,
-        milestoneText,
-      );
-    } catch (error) {
-      logger.debug({ error }, 'Failed to update milestone — non-critical');
-    }
-  }
-
-  /**
    * Shutdown — clear all queues and timers.
    */
   shutdown(): void {
     this.queue.clear();
-    if (this.activeTask?.slowTimer) {
-      clearTimeout(this.activeTask.slowTimer);
+    if (this.activeTask?.staleTimer) {
+      clearTimeout(this.activeTask.staleTimer);
     }
     this.activeTask = null;
     this.interruptBuffer = [];
@@ -380,31 +467,33 @@ export class SlackHandler {
   }
 
   /**
-   * Show a delayed status indicator for slow tasks.
-   * Only fires if the task is still running after SLOW_TASK_THRESHOLD_MS.
+   * Refresh progress message when no tool-call update has happened for 60s.
+   * Shows elapsed time so the user knows the bot is still alive.
    */
-  private async showSlowTaskIndicator(): Promise<void> {
-    if (!this.activeTask) return;
+  private async refreshStaleProgress(): Promise<void> {
+    if (!this.activeTask?.progressMessageTs) return;
 
-    logger.info(
-      { channel: this.activeTask.channel, elapsed: Date.now() - this.activeTask.startedAt },
-      'Task taking long — showing status indicator',
-    );
+    const elapsed = Math.round((Date.now() - this.activeTask.startedAt) / 1000);
+    const elapsedStr = elapsed >= 120
+      ? `${Math.round(elapsed / 60)}m`
+      : `${elapsed}s`;
 
-    // Post a status message and store the ts for milestone updates
+    const description = this.activeTask.description.slice(0, 80);
+    const text = `\u{1f9e0} Still working — ${description} (${elapsedStr})`;
+
     try {
-      const lastMsg = this.activeTask;
-      const ackResult = await this.messages.post(
-        lastMsg.channel,
-        SLOW_TASK_MESSAGE,
-        lastMsg.threadTs,
+      await this.messages.update(
+        this.activeTask.channel,
+        this.activeTask.progressMessageTs,
+        text,
       );
-      if (this.activeTask) {
-        this.activeTask.ackMessageTs = ackResult.ts;
-      }
-    } catch {
-      // Non-critical
-    }
+      this.activeTask.lastProgressText = text;
+    } catch { /* non-critical */ }
+
+    // Schedule next refresh
+    this.activeTask.staleTimer = setTimeout(() => {
+      void this.refreshStaleProgress();
+    }, PROGRESS_STALE_INTERVAL_MS);
   }
 
   private async processBatch(batch: AccumulatedBatch): Promise<void> {
@@ -413,7 +502,6 @@ export class SlackHandler {
       'Processing batch',
     );
 
-    // Call the registered handler — no reaction ceremony
     if (this.batchHandler) {
       try {
         await this.batchHandler(batch);

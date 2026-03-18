@@ -63,6 +63,56 @@ const LONG_TERM_TOKEN_BUDGET = 1500;
 /** Max tokens for working context scratch pad */
 const WORKING_CONTEXT_TOKEN_BUDGET = 1000;
 
+// ── Tool progress descriptions ──
+// Maps tool names to human-friendly progress descriptions for the Slack status message.
+
+const TOOL_DESCRIPTIONS: Record<string, string> = {
+  // Calendar
+  google_calendar_list_events: 'Checking your calendar...',
+  google_calendar_create_event: 'Creating a calendar event...',
+  google_calendar_delete_event: 'Deleting a calendar event...',
+  google_calendar_update_event: 'Updating a calendar event...',
+  google_calendar_find_free: 'Finding free time slots...',
+  google_calendar_rsvp: 'Responding to an invite...',
+  google_calendar_freebusy: 'Checking availability...',
+  google_calendar_get_event: 'Looking up event details...',
+  // Gmail
+  google_gmail_search: 'Searching your email...',
+  google_gmail_read: 'Reading an email...',
+  google_gmail_draft: 'Drafting an email...',
+  google_gmail_send_draft: 'Sending an email...',
+  google_gmail_reply: 'Replying to an email...',
+  google_gmail_label: 'Organizing email...',
+  // Drive
+  google_drive_search: 'Searching Drive...',
+  google_drive_get_file: 'Reading a file...',
+  google_drive_sync: 'Syncing Drive files...',
+  google_drive_read_content: 'Reading file content...',
+  google_drive_list_known: 'Listing known files...',
+  // Slack
+  slack_search_messages: 'Searching Slack messages...',
+  slack_post_message: 'Posting a message...',
+  slack_get_thread: 'Reading a thread...',
+  slack_get_user_info: 'Looking up a user...',
+  slack_get_channel_history: 'Reading channel history...',
+  // Memory
+  search_memory: 'Searching memory...',
+  update_working_context: 'Updating working context...',
+};
+
+/**
+ * Generate a human-friendly progress description for a tool call.
+ * Falls back to the tool name if no specific description exists.
+ */
+function describeToolCall(toolName: string, input: Record<string, unknown>): string {
+  const base = TOOL_DESCRIPTIONS[toolName];
+  if (base) return base;
+
+  // Generic fallback — convert tool_name to "Running tool name..."
+  const friendly = toolName.replace(/_/g, ' ').replace(/^google |^slack /, '');
+  return `Working on ${friendly}...`;
+}
+
 const SYSTEM_PROMPT = `You are Clawvato, a personal AI chief of staff running in Slack. You help your owner manage their work life — Slack messages, meetings, emails, documents, and tasks.
 
 ## How you see conversations
@@ -724,17 +774,19 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
       parts.push(`## New message (in #${channelLabel})\n${message}`);
       userPrompt = parts.join('\n\n---\n\n');
 
-      // Debug reaction: 🧠 = thinking about this
+      // Transition from accumulating → processing
+      // Handler owns the full reaction lifecycle: removes 👀, adds 🧠, posts progress message
       const lastMsg = batch.messages[batch.messages.length - 1];
       const isRealSlackMessage = !lastMsg.ts.startsWith('crawl-');
       if (isRealSlackMessage) {
-        try {
-          await handler.getReactions().add(lastMsg.channel, lastMsg.ts, 'brain');
-        } catch { /* non-critical */ }
+        const messageTimestamps = batch.messages.map(m => m.ts);
+        await handler.startProcessing(
+          message.slice(0, 100),
+          batch.channel,
+          messageTimestamps,
+          batch.threadTs,
+        );
       }
-
-      // Set active task for interrupt routing
-      handler.setActiveTask(message.slice(0, 100), batch.channel, batch.threadTs);
 
       if (isAssistantMode) {
         try {
@@ -821,6 +873,12 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
               continue;
             }
 
+            // Update progress with what we're about to do
+            if (isRealSlackMessage) {
+              const progressDesc = describeToolCall(toolUse.name, toolInput);
+              await handler.updateProgress(progressDesc);
+            }
+
             // Execute the tool
             logger.info({ tool: toolUse.name }, 'Executing tool');
             const startTime = Date.now();
@@ -853,15 +911,13 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
 
         // ── Handle interrupts ──
         const slackMessages = handler.getMessages();
-        const ackTs = handler.getAckTs();
 
         if (interruptState.type === 'cancel') {
           logger.info('Task cancelled by owner interrupt');
           if (isAssistantMode) {
             try { await assistantAPI.say('Cancelled.'); } catch { /* */ }
-          } else if (ackTs) {
-            try { await slackMessages.update(batch.channel, ackTs, 'Cancelled.'); } catch { /* */ }
           }
+          // completeProcessing handles cleanup (remove 🧠, delete progress msg)
           return;
         }
 
@@ -869,8 +925,6 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
           logger.info({ newMessage: interruptState.newMessage.slice(0, 80) }, 'Task redirected');
           if (isAssistantMode) {
             try { await assistantAPI.say('Redirecting...'); } catch { /* */ }
-          } else if (ackTs) {
-            try { await slackMessages.update(batch.channel, ackTs, 'Redirecting...'); } catch { /* */ }
           }
           handler.getQueue().enqueue({
             text: interruptState.newMessage,
@@ -904,8 +958,6 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
             try {
               if (isAssistantMode) {
                 await assistantAPI.say(cleanResponse);
-              } else if (ackTs) {
-                await slackMessages.update(batch.channel, ackTs, cleanResponse);
               } else {
                 await slackMessages.post(batch.channel, cleanResponse, batch.threadTs);
               }
@@ -925,22 +977,14 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
           if (isAssistantMode) {
             await assistantAPI.say(errorText);
           } else {
-            const slackMessages = handler.getMessages();
-            const ackTs = handler.getAckTs();
-            if (ackTs) {
-              await slackMessages.update(batch.channel, ackTs, errorText);
-            } else {
-              await slackMessages.post(batch.channel, errorText, batch.threadTs);
-            }
+            await handler.getMessages().post(batch.channel, errorText, batch.threadTs);
           }
         } catch { /* non-critical */ }
       } finally {
         clearTimeout(timeout);
-        handler.clearActiveTask();
+        // Handler cleans up: removes 🧠, deletes progress message, clears interrupt buffer
         if (isRealSlackMessage) {
-          try {
-            await handler.getReactions().remove(lastMsg.channel, lastMsg.ts, 'brain');
-          } catch { /* non-critical */ }
+          await handler.completeProcessing();
         }
 
         // ── Post-interaction memory extraction (fire-and-forget) ──
