@@ -847,7 +847,7 @@ export function createGoogleTools(
           const result = await drive.files.list({
             q,
             pageSize: maxResults,
-            fields: 'files(id, name, mimeType, modifiedTime, owners, webViewLink)',
+            fields: 'files(id, name, mimeType, modifiedTime, owners, parents, webViewLink)',
             orderBy: 'modifiedTime desc',
           });
 
@@ -856,11 +856,26 @@ export function createGoogleTools(
             return { content: `No files found for "${query}".` };
           }
 
+          // Resolve parent folder names for context
+          const parentIds = new Set<string>();
+          for (const f of files) {
+            if (f.parents?.[0]) parentIds.add(f.parents[0]);
+          }
+          const parentNames = new Map<string, string>();
+          for (const pid of parentIds) {
+            try {
+              const parent = await drive.files.get({ fileId: pid, fields: 'name' });
+              if (parent.data.name) parentNames.set(pid, parent.data.name);
+            } catch { /* non-critical */ }
+          }
+
           const lines = files.map(f => {
             const owner = f.owners?.[0]?.displayName ?? 'unknown';
             const modified = f.modifiedTime ? new Date(f.modifiedTime).toLocaleDateString() : '';
             const type = f.mimeType?.split('.').pop() ?? 'file';
-            return `- ${f.name} (${type}) | Modified: ${modified} | Owner: ${owner} | ${f.webViewLink ?? ''}`;
+            const folder = f.parents?.[0] ? (parentNames.get(f.parents[0]) ?? '') : '';
+            const folderLabel = folder ? ` | Folder: ${folder}` : '';
+            return `- ${f.name} (${type}) | Modified: ${modified} | Owner: ${owner}${folderLabel} | ID: ${f.id}`;
           });
 
           return { content: `Found ${files.length} files:\n${lines.join('\n')}` };
