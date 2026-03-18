@@ -18,6 +18,7 @@ import { getConfig } from '../config.js';
 import { requireCredential } from '../credentials.js';
 import { getDb } from '../db/index.js';
 import { createSlackTools, type SlackTool, type ToolHandlerResult } from '../mcp/slack/server.js';
+import { google } from 'googleapis';
 import { getGoogleAuth } from '../google/auth.js';
 import { createGoogleTools } from '../google/tools.js';
 import { syncDrive, deepReadFile, listDocuments, findDocumentByName } from '../google/drive-sync.js';
@@ -333,7 +334,8 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
       input_schema: {
         type: 'object' as const,
         properties: {
-          folder_id: { type: 'string', description: 'Optional: specific folder ID to scan (default: all files)' },
+          folder_id: { type: 'string', description: 'Optional: specific folder ID to scan' },
+          folder_name: { type: 'string', description: 'Optional: folder name to search for and scan (resolved to ID automatically)' },
           max_files: { type: 'number', description: 'Max files to scan (default 200, max 500)' },
         },
         required: [],
@@ -342,8 +344,27 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
     toolHandlers.set('google_drive_sync', async (args) => {
       const db = getDb();
       try {
+        let folderId = args.folder_id as string | undefined;
+
+        // Resolve folder name to ID if provided
+        if (!folderId && args.folder_name) {
+          const driveApi = google.drive({ version: 'v3', auth: googleAuth });
+          const folderName = String(args.folder_name).replace(/[^a-zA-Z0-9\s.\-_]/g, '');
+          const folderResult = await driveApi.files.list({
+            q: `name contains '${folderName}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+            pageSize: 1,
+            fields: 'files(id, name)',
+          });
+          const folder = folderResult.data.files?.[0];
+          if (!folder) {
+            return { content: `No folder found matching "${args.folder_name}". Try a different name or provide a folder ID.` };
+          }
+          folderId = folder.id!;
+          logger.info({ folderName: folder.name, folderId }, 'Resolved folder name to ID');
+        }
+
         const result = await syncDrive(googleAuth, db, anthropicClient, config.models.classifier, {
-          folderId: args.folder_id as string | undefined,
+          folderId,
           maxFiles: Math.min((args.max_files as number) ?? 200, 500),
         });
         return {
