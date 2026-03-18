@@ -208,6 +208,8 @@ The bot operates as a humble scientist — persistently skeptical of its own kno
 
 This was added after discovering the bot was "laundering memory assumptions as ground truth" — confidently presenting low-quality early extractions as authoritative facts. The epistemology section ensures the bot is honest about what it knows vs what it's guessing.
 
+**Working context philosophy**: The scratch pad stores human-meaningful state ("synced GBS folder, confirmed clients: Vail, Coles"), not implementation details (raw IDs, API responses). The agent can always look up IDs by name — storing them clutters context and they can go stale.
+
 ## Security Model
 
 **Single-principal authority**: Only the owner (identified by `OWNER_SLACK_USER_ID`) can instruct the bot. This is **required** — the bot will not start without it configured. If unset, startup fails hard.
