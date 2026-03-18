@@ -42,7 +42,8 @@ const NO_RESPONSE = '[NO_RESPONSE]';
 const MAX_TURNS = 15;
 
 /** Agent query timeout in milliseconds */
-const AGENT_TIMEOUT_MS = 120_000;
+/** Agent query timeout — 5 min to accommodate bulk operations like Drive sync */
+const AGENT_TIMEOUT_MS = 300_000;
 
 // ── Context limits (centralized for tuning) ──
 // See CLAUDE.md "Context Limits" section for documentation

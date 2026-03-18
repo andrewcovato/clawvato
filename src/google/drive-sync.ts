@@ -434,7 +434,12 @@ export async function syncDrive(
   let summariesGenerated = 0;
   const seenIds = new Set<string>();
 
-  for (const file of driveFiles) {
+  // Process files in parallel batches for speed
+  const BATCH_SIZE = 10;
+  for (let batchStart = 0; batchStart < driveFiles.length; batchStart += BATCH_SIZE) {
+    const batch = driveFiles.slice(batchStart, batchStart + BATCH_SIZE);
+
+    await Promise.all(batch.map(async (file) => {
     seenIds.add(file.id);
     const existing = existingDocs.get(file.id);
 
@@ -445,7 +450,6 @@ export async function syncDrive(
       const contentHash = content ? hashContent(content) : null;
 
       // Always generate a summary — content is a bonus, not a requirement.
-      // Haiku can infer "Acme Corp is a client" from folder path + file name alone.
       const { summary: genSummary, entities: genEntities } = await generateSummary(
         client, model, file.name, folderPath, content ?? '',
       );
@@ -526,7 +530,8 @@ export async function syncDrive(
         "UPDATE documents SET last_synced_at = ? WHERE source_type = 'gdrive' AND source_id = ?"
       ).run(now, file.id);
     }
-  }
+    })); // end Promise.all + batch.map
+  } // end batch loop
 
   // ── 3. Self-heal: ensure every file with a summary has a corresponding memory ──
   const toBackfill: Array<{ fileId: string; name: string; folderPath: string | null; summary: string; entities: string[]; modifiedTime: string; existingMemoryId?: string }> = [];
