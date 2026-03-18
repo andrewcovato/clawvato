@@ -813,6 +813,7 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
         ];
 
         let finalResponse = '';
+        let lastMidLoopText = '';
 
         for (let turn = 0; turn < MAX_TURNS; turn++) {
           if (abortController.signal.aborted) break;
@@ -836,12 +837,15 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
           const isLastTurn = !hasToolCalls || response.stop_reason === 'end_turn';
 
           if (textBlocks.length > 0) {
+            const joinedText = textBlocks.join('\n');
             if (isLastTurn) {
               // Final turn — this is the actual response to the user
-              finalResponse = textBlocks.join('\n');
+              finalResponse = joinedText;
+            } else {
+              // Mid-loop text — keep as fallback in case we exhaust MAX_TURNS
+              // without getting a clean final turn. Better than nothing.
+              lastMidLoopText = joinedText;
             }
-            // Mid-loop text (alongside tool calls) is planning/status — don't capture
-            // as the final response. It would be stale by the time we post.
           }
 
           if (isLastTurn) {
@@ -916,12 +920,12 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
           messages.push({ role: 'user', content: toolResults });
         }
 
-        // If we exhausted turns or were aborted without a final response,
+        // If we exhausted turns without a clean final response,
         // make one last call without tools to force Claude to synthesize an answer.
         if (!finalResponse && !interruptState.type && !abortController.signal.aborted) {
-          logger.info('No final response after tool loop — forcing synthesis call');
+          logger.info({ lastMidLoopText: lastMidLoopText.slice(0, 100) }, 'No final response after tool loop — forcing synthesis call');
           try {
-            messages.push({ role: 'user', content: 'Please provide your final response to the user now. Summarize what you found and give your analysis.' });
+            messages.push({ role: 'user', content: 'You have run out of tool calls. Based on everything you have gathered so far, please provide your complete, detailed response to the user now.' });
             const synthResponse = await anthropicClient.messages.create({
               model: config.models.executor,
               max_tokens: 4096,
@@ -936,7 +940,7 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
               finalResponse = synthText;
             }
           } catch (error) {
-            logger.warn({ error }, 'Synthesis call failed — no response to post');
+            logger.warn({ error }, 'Synthesis call failed');
           }
         }
 
