@@ -907,7 +907,8 @@ export async function deepReadFile(
     `).run(fileId);
 
   } catch (error) {
-    logger.error({ error, fileId }, 'Document fact extraction failed');
+    const errMsg = error instanceof Error ? error.message : String(error);
+    logger.error({ error: errMsg, fileId }, 'Document fact extraction failed');
   }
 
   logger.info({ fileId, name, factsExtracted, conflictsFound }, 'Deep read complete');
