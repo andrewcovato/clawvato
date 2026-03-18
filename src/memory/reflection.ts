@@ -141,8 +141,8 @@ function setLastReflectionTime(db: DatabaseSync): void {
   const now = new Date().toISOString();
   try {
     db.prepare(`
-      INSERT OR REPLACE INTO agent_state (key, value, updated_at)
-      VALUES (?, ?, ?)
+      INSERT OR REPLACE INTO agent_state (key, value, status, updated_at)
+      VALUES (?, ?, 'active', ?)
     `).run(LAST_REFLECTION_KEY, now, now);
   } catch (error) {
     logger.debug({ error }, 'Failed to record reflection time — non-critical');

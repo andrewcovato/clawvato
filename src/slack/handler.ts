@@ -84,15 +84,20 @@ export class SlackHandler {
   private interruptBuffer: Array<{ text: string; ts: string }> = [];
   /** Assistant thread API — non-null only during assistant panel message processing */
   private currentAssistantAPI: AssistantThreadAPI | null = null;
+  /** Serialization chain — prevents concurrent processBatch calls from corrupting shared state */
+  private processingChain: Promise<void> = Promise.resolve();
 
   constructor(reactions: SlackReactionAPI, messages: SlackMessageAPI) {
     this.reactions = reactions;
     this.messages = messages;
     this.queue = new EventQueue();
 
-    // When the queue emits a batch, process it
+    // When the queue emits a batch, serialize processing to avoid shared state corruption
+    // (activeTask, interruptBuffer, and currentAssistantAPI are single-slot shared state)
     this.queue.on('batch', (batch: AccumulatedBatch) => {
-      void this.processBatch(batch);
+      this.processingChain = this.processingChain
+        .then(() => this.processBatch(batch))
+        .catch(err => logger.error({ err }, 'Serialized processBatch failed'));
     });
   }
 

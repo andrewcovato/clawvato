@@ -256,7 +256,8 @@ function runPreToolChecks(toolName: string, toolInput: Record<string, unknown>, 
   const graduated = isGraduated(db, toolName);
   const policy = evaluatePolicy(toolName, graduated, config.trustLevel);
   if (!policy.autoApproved) {
-    logger.info({ toolName, reason: policy.reason }, 'Training wheels: tool requires confirmation (allowing for MVP)');
+    logger.info({ toolName, reason: policy.reason }, 'Training wheels: tool blocked — requires confirmation');
+    return false;
   }
 
   return true;
@@ -333,10 +334,15 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
         required: [],
       },
     });
+    const DRIVE_ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
+
     toolHandlers.set('google_drive_sync', async (args) => {
       const db = getDb();
       try {
         let folderId = args.folder_id as string | undefined;
+        if (folderId && !DRIVE_ID_PATTERN.test(folderId)) {
+          return { content: 'Invalid folder ID format.', isError: true };
+        }
 
         // Resolve folder name to ID if provided
         if (!folderId && args.folder_name) {
@@ -386,6 +392,9 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
     });
     toolHandlers.set('google_drive_read_content', async (args) => {
       const fileId = args.file_id as string;
+      if (!DRIVE_ID_PATTERN.test(fileId)) {
+        return { content: 'Invalid file ID format.', isError: true };
+      }
       const db = getDb();
       const driveApi = google.drive({ version: 'v3', auth: googleAuth });
 
@@ -612,7 +621,7 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
   });
   toolHandlers.set('scan_channel_history', async (args) => {
     const channel = args.channel as string;
-    const messageCount = Math.min((args.message_count as number) ?? 100, 500);
+    const messageCount = Math.min((args.message_count as number) ?? 100, 200);
     const db = getDb();
 
     try {
@@ -792,7 +801,7 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
 
       const abortController = new AbortController();
       const timeout = setTimeout(() => {
-        logger.warn('Agent query timed out after 120s — aborting');
+        logger.warn({ timeoutMs: config.agent.timeoutMs }, 'Agent query timed out — aborting');
         abortController.abort();
       }, config.agent.timeoutMs);
 

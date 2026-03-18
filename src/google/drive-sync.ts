@@ -547,20 +547,28 @@ export async function syncDrive(
   let summariesGenerated = 0;
   const seenIds = new Set<string>();
 
-  // Process files in parallel batches for speed
+  // Process files in batches — fetch content in parallel, but DB writes are sequential
+  // to avoid race conditions on shared document/memory rows (node:sqlite is sync per call
+  // but not transactional across calls without explicit BEGIN/COMMIT)
   const batchSize = getConfig().drive.syncBatchSize;
   for (let batchStart = 0; batchStart < driveFiles.length; batchStart += batchSize) {
     const batch = driveFiles.slice(batchStart, batchStart + batchSize);
 
-    await Promise.all(batch.map(async (file) => {
+    // Fetch content in parallel (Drive API calls)
+    const batchContent = await Promise.all(batch.map(async (file) => {
+      const parentId = file.parents?.[0];
+      const folderPath = parentId ? (folderPathMap.get(parentId) ?? '/') : '/';
+      const extracted = await getFileContent(drive, file.id, file.mimeType, 2000);
+      return { file, folderPath, extracted };
+    }));
+
+    // DB writes sequential (safe)
+    for (const { file, folderPath, extracted } of batchContent) {
     seenIds.add(file.id);
     const existing = existingDocs.get(file.id);
 
     if (!existing) {
-      // New file — resolve folder path from pre-built map
-      const parentId = file.parents?.[0];
-      const folderPath = parentId ? (folderPathMap.get(parentId) ?? '/') : '/';
-      const extracted = await getFileContent(drive, file.id, file.mimeType, 2000);
+      // New file — folderPath and extracted already fetched in parallel above
       const contentHash = extracted?.kind === 'text' ? hashContent(extracted.text) : null;
 
       // Always generate a summary — content is a bonus, not a requirement.
@@ -595,8 +603,7 @@ export async function syncDrive(
       newFiles++;
 
     } else if (existing.modified_time !== file.modifiedTime) {
-      // Modified file — check if content actually changed
-      const extracted = await getFileContent(drive, file.id, file.mimeType, 2000);
+      // Modified file — content already fetched in parallel above
       const contentHash = extracted?.kind === 'text' ? hashContent(extracted.text) : null;
 
       if (contentHash !== existing.content_hash) {
@@ -645,7 +652,7 @@ export async function syncDrive(
         "UPDATE documents SET last_synced_at = ? WHERE source_type = 'gdrive' AND source_id = ?"
       ).run(now, file.id);
     }
-    })); // end Promise.all + batch.map
+    } // end sequential DB writes
   } // end batch loop
 
   // ── 3. Self-heal: ensure every file with a summary has a corresponding memory ──
