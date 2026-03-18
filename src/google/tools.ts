@@ -413,7 +413,9 @@ export function createGoogleTools(
     {
       definition: {
         name: 'google_gmail_read',
-        description: 'Read the full content of a specific email by message ID.',
+        description:
+          'Read an email and its full thread (all replies). Returns every message in the conversation ' +
+          'so you can see replies, follow-ups, and whether action items were addressed.',
         input_schema: {
           type: 'object' as const,
           properties: {
@@ -426,32 +428,62 @@ export function createGoogleTools(
         const messageId = args.message_id as string;
 
         try {
-          const result = await gmail.users.messages.get({
+          // First get the message to find its thread ID
+          const msg = await gmail.users.messages.get({
             userId: 'me',
             id: messageId,
+            format: 'metadata',
+            metadataHeaders: ['Subject'],
+          });
+
+          const threadId = msg.data.threadId;
+          if (!threadId) {
+            return { content: 'Could not find thread for this message.', isError: true };
+          }
+
+          // Fetch the full thread (all messages in the conversation)
+          const thread = await gmail.users.threads.get({
+            userId: 'me',
+            id: threadId,
             format: 'full',
           });
 
-          const headers = result.data.payload?.headers ?? [];
-          const from = headers.find(h => h.name === 'From')?.value ?? 'unknown';
-          const to = headers.find(h => h.name === 'To')?.value ?? 'unknown';
-          const subject = headers.find(h => h.name === 'Subject')?.value ?? 'no subject';
-          const date = headers.find(h => h.name === 'Date')?.value ?? '';
+          const messages = thread.data.messages ?? [];
+          const parts: string[] = [];
 
-          // Extract body text
-          let body = '';
-          const payload = result.data.payload;
-          if (payload?.body?.data) {
-            body = Buffer.from(payload.body.data, 'base64').toString('utf-8');
-          } else if (payload?.parts) {
-            const textPart = payload.parts.find(p => p.mimeType === 'text/plain');
-            if (textPart?.body?.data) {
-              body = Buffer.from(textPart.body.data, 'base64').toString('utf-8');
+          for (const message of messages) {
+            const headers = message.payload?.headers ?? [];
+            const from = headers.find(h => h.name === 'From')?.value ?? 'unknown';
+            const to = headers.find(h => h.name === 'To')?.value ?? '';
+            const subject = headers.find(h => h.name === 'Subject')?.value ?? '';
+            const date = headers.find(h => h.name === 'Date')?.value ?? '';
+
+            // Extract body text
+            let body = '';
+            const payload = message.payload;
+            if (payload?.body?.data) {
+              body = Buffer.from(payload.body.data, 'base64').toString('utf-8');
+            } else if (payload?.parts) {
+              const textPart = payload.parts.find(p => p.mimeType === 'text/plain');
+              if (textPart?.body?.data) {
+                body = Buffer.from(textPart.body.data, 'base64').toString('utf-8');
+              }
             }
+
+            parts.push(
+              `--- Message (${date}) ---\n` +
+              `From: ${from}\nTo: ${to}\n` +
+              (subject ? `Subject: ${subject}\n` : '') +
+              `\n[EXTERNAL CONTENT]\n${body.slice(0, 2000)}\n[/EXTERNAL CONTENT]`
+            );
           }
 
+          const threadLabel = messages.length > 1
+            ? `Thread with ${messages.length} messages:`
+            : 'Single message (no replies):';
+
           return {
-            content: `From: ${from}\nTo: ${to}\nSubject: ${subject}\nDate: ${date}\n\n[EXTERNAL CONTENT]\n${body.slice(0, 3000)}\n[/EXTERNAL CONTENT]`,
+            content: `${threadLabel}\n\n${parts.join('\n\n')}`,
           };
         } catch (error) {
           const msg = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));

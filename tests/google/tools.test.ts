@@ -28,6 +28,9 @@ vi.mock('googleapis', () => {
         get: vi.fn(),
         modify: vi.fn(),
       },
+      threads: {
+        get: vi.fn(),
+      },
       drafts: {
         create: vi.fn(),
         send: vi.fn(),
@@ -220,20 +223,42 @@ describe('Google Workspace Tools', () => {
   });
 
   describe('google_gmail_read', () => {
-    it('returns full email content', async () => {
+    it('returns full thread content', async () => {
+      // First call gets the message metadata (to find threadId)
       mocks.gmail.users.messages.get.mockResolvedValue({
+        data: { threadId: 'thread_1' },
+      });
+
+      // Second call gets the full thread
+      mocks.gmail.users.threads.get.mockResolvedValue({
         data: {
-          payload: {
-            headers: [
-              { name: 'From', value: 'sarah@acme.com' },
-              { name: 'To', value: 'andrew@acme.com' },
-              { name: 'Subject', value: 'Meeting Notes' },
-              { name: 'Date', value: 'Mon, 17 Mar 2026' },
-            ],
-            body: {
-              data: Buffer.from('Here are the meeting notes from today.').toString('base64'),
+          messages: [
+            {
+              payload: {
+                headers: [
+                  { name: 'From', value: 'sarah@acme.com' },
+                  { name: 'To', value: 'andrew@acme.com' },
+                  { name: 'Subject', value: 'Meeting Notes' },
+                  { name: 'Date', value: 'Mon, 17 Mar 2026' },
+                ],
+                body: {
+                  data: Buffer.from('Here are the meeting notes from today.').toString('base64'),
+                },
+              },
             },
-          },
+            {
+              payload: {
+                headers: [
+                  { name: 'From', value: 'andrew@acme.com' },
+                  { name: 'To', value: 'sarah@acme.com' },
+                  { name: 'Date', value: 'Tue, 18 Mar 2026' },
+                ],
+                body: {
+                  data: Buffer.from('Thanks, I have reviewed these.').toString('base64'),
+                },
+              },
+            },
+          ],
         },
       });
 
@@ -243,6 +268,10 @@ describe('Google Workspace Tools', () => {
       expect(result.content).toContain('sarah@acme.com');
       expect(result.content).toContain('Meeting Notes');
       expect(result.content).toContain('meeting notes from today');
+      // Should include the reply
+      expect(result.content).toContain('andrew@acme.com');
+      expect(result.content).toContain('I have reviewed these');
+      expect(result.content).toContain('2 messages');
     });
   });
 
