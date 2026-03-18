@@ -23,6 +23,11 @@ import type { DatabaseSync } from 'node:sqlite';
 import { logger } from '../logger.js';
 import { generateId } from '../db/index.js';
 import {
+  extractContent,
+  type ExtractedContent,
+  MAX_FILE_SIZE_BYTES,
+} from './file-extractor.js';
+import {
   insertMemory,
   findDuplicates,
   supersedeMemory,
@@ -173,8 +178,9 @@ export function findDocumentByName(db: DatabaseSync, name: string): Document | n
   return row ? row as unknown as Document : null;
 }
 
-// ── Content export ──
+// ── Content retrieval ──
 
+/** Google-native MIME types that can be exported as text via the Drive API */
 const EXPORTABLE_MIMES: Record<string, string> = {
   'application/vnd.google-apps.document': 'text/plain',
   'application/vnd.google-apps.spreadsheet': 'text/csv',
@@ -182,14 +188,14 @@ const EXPORTABLE_MIMES: Record<string, string> = {
 };
 
 /**
- * Export a Google Doc/Sheet/Slides as text. Returns null if not exportable.
+ * Export a Google-native file (Docs/Sheets/Slides) as text.
  */
 async function exportFileContent(
   drive: ReturnType<typeof google.drive>,
   fileId: string,
   mimeType: string,
   maxChars: number = 10000,
-): Promise<string | null> {
+): Promise<ExtractedContent | null> {
   const exportMime = EXPORTABLE_MIMES[mimeType];
   if (!exportMime) return null;
 
@@ -200,11 +206,63 @@ async function exportFileContent(
     }, { responseType: 'text' });
 
     const content = typeof result.data === 'string' ? result.data : String(result.data);
-    return content.slice(0, maxChars);
+    return { kind: 'text', text: content.slice(0, maxChars) };
   } catch (error) {
     logger.debug({ error, fileId }, 'Failed to export file content');
     return null;
   }
+}
+
+/**
+ * Download a non-Google-native file (uploaded .docx, .pdf, .xlsx, etc.) as a Buffer.
+ */
+async function downloadFileBuffer(
+  drive: ReturnType<typeof google.drive>,
+  fileId: string,
+): Promise<Buffer | null> {
+  try {
+    // Check file size before downloading
+    const meta = await drive.files.get({ fileId, fields: 'size' });
+    const size = Number(meta.data.size ?? 0);
+    if (size > MAX_FILE_SIZE_BYTES) {
+      logger.warn({ fileId, size, max: MAX_FILE_SIZE_BYTES }, 'File too large to download');
+      return null;
+    }
+
+    const result = await drive.files.get(
+      { fileId, alt: 'media' },
+      { responseType: 'arraybuffer' },
+    );
+
+    return Buffer.from(result.data as ArrayBuffer);
+  } catch (error) {
+    logger.debug({ error, fileId }, 'Failed to download file');
+    return null;
+  }
+}
+
+/**
+ * Get content from any Drive file — Google-native or uploaded binary.
+ * Tries Google export first, then falls back to download + extraction.
+ */
+async function getFileContent(
+  drive: ReturnType<typeof google.drive>,
+  fileId: string,
+  mimeType: string,
+  maxChars: number = 10000,
+): Promise<ExtractedContent | null> {
+  // Google-native files → export via Drive API
+  const exported = await exportFileContent(drive, fileId, mimeType, maxChars);
+  if (exported) return exported;
+
+  // Google-native types that weren't exportable (e.g., Forms, Sites) → skip
+  if (mimeType.startsWith('application/vnd.google-apps.')) return null;
+
+  // Binary files → download and extract
+  const buffer = await downloadFileBuffer(drive, fileId);
+  if (!buffer) return null;
+
+  return await extractContent(buffer, mimeType);
 }
 
 function hashContent(content: string): string {
@@ -526,12 +584,12 @@ export async function syncDrive(
       // New file — resolve folder path from pre-built map
       const parentId = file.parents?.[0];
       const folderPath = parentId ? (folderPathMap.get(parentId) ?? '/') : '/';
-      const content = await exportFileContent(drive, file.id, file.mimeType, 2000);
-      const contentHash = content ? hashContent(content) : null;
+      const extracted = await getFileContent(drive, file.id, file.mimeType, 2000);
+      const contentHash = extracted?.kind === 'text' ? hashContent(extracted.text) : null;
 
       // Always generate a summary — content is a bonus, not a requirement.
       const { summary: genSummary, entities: genEntities } = await generateSummary(
-        client, model, file.name, folderPath, content ?? '',
+        client, model, file.name, folderPath, extracted,
       );
       const summary = genSummary;
       const fileEntities = genEntities;
@@ -562,13 +620,13 @@ export async function syncDrive(
 
     } else if (existing.modified_time !== file.modifiedTime) {
       // Modified file — check if content actually changed
-      const content = await exportFileContent(drive, file.id, file.mimeType, 2000);
-      const contentHash = content ? hashContent(content) : null;
+      const extracted = await getFileContent(drive, file.id, file.mimeType, 2000);
+      const contentHash = extracted?.kind === 'text' ? hashContent(extracted.text) : null;
 
       if (contentHash !== existing.content_hash) {
         // Content actually changed — re-summarize
         const { summary: genSummary, entities: genEntities } = await generateSummary(
-          client, model, file.name, existing.folder_path, content ?? '',
+          client, model, file.name, existing.folder_path, extracted,
         );
         const summary = genSummary;
         const fileEntities = JSON.stringify(genEntities);
@@ -736,13 +794,13 @@ export async function deepReadFile(
   const name = fileMeta.data.name ?? 'Unknown';
   const mimeType = fileMeta.data.mimeType ?? '';
 
-  // Export content
-  const content = await exportFileContent(drive, fileId, mimeType);
-  if (!content) {
+  // Get content — works for both Google-native and uploaded files
+  const extracted = await getFileContent(drive, fileId, mimeType);
+  if (!extracted) {
     return { factsExtracted: 0, conflictsFound: 0 };
   }
 
-  logger.info({ fileId, name, contentLength: content.length }, 'Deep reading file');
+  logger.info({ fileId, name, contentKind: extracted.kind }, 'Deep reading file');
 
   // Extract facts via Haiku
   const source = `drive:${fileId}:${fileMeta.data.modifiedTime ?? 'unknown'}`;
@@ -750,11 +808,19 @@ export async function deepReadFile(
   let conflictsFound = 0;
 
   try {
+    // Build message content based on extracted content type
+    const messageContent = buildSummaryMessageContent(name, null, extracted);
+    // Replace the preamble text with the extraction prompt context
+    const lastBlock = messageContent[messageContent.length - 1];
+    if (lastBlock.type === 'text') {
+      lastBlock.text = `Document: "${name}"\n\n${extracted.kind === 'text' ? extracted.text : 'Analyze the file above and extract structured facts.'}`;
+    }
+
     const response = await client.messages.create({
       model,
       max_tokens: 2000,
       system: DOC_EXTRACTION_PROMPT,
-      messages: [{ role: 'user', content: `Document: "${name}"\n\n${content}` }],
+      messages: [{ role: 'user', content: messageContent }],
     });
 
     const text = response.content
@@ -866,22 +932,63 @@ function flagStaleMemories(db: DatabaseSync, fileId: string, newModifiedTime: st
 }
 
 /**
+ * Build the Claude message content for a file, handling text, PDF, and image content.
+ */
+function buildSummaryMessageContent(
+  fileName: string,
+  folderPath: string | null,
+  extracted: ExtractedContent | null,
+): Anthropic.ContentBlockParam[] {
+  const pathContext = folderPath && folderPath !== '/' ? `Folder path: ${folderPath}\n` : '';
+  const preamble = `${pathContext}File name: "${fileName}"`;
+
+  if (!extracted) {
+    // No content available — summarize from metadata only
+    return [{ type: 'text', text: preamble }];
+  }
+
+  switch (extracted.kind) {
+    case 'text':
+      return [{ type: 'text', text: `${preamble}\n\n${extracted.text.slice(0, 2000)}` }];
+
+    case 'document':
+      return [
+        {
+          type: 'document',
+          source: { type: 'base64', media_type: extracted.mediaType, data: extracted.base64 },
+        },
+        { type: 'text', text: `${preamble}\n\nAnalyze the PDF above.` },
+      ];
+
+    case 'image':
+      return [
+        {
+          type: 'image',
+          source: { type: 'base64', media_type: extracted.mediaType, data: extracted.base64 },
+        },
+        { type: 'text', text: `${preamble}\n\nDescribe the image above.` },
+      ];
+  }
+}
+
+/**
  * Generate a Tier 2 summary + entity extraction for a file.
+ * Accepts any ExtractedContent — text, PDF document blocks, or image blocks.
  */
 async function generateSummary(
   client: Anthropic,
   model: string,
   fileName: string,
   folderPath: string | null,
-  content: string,
+  extracted: ExtractedContent | null,
 ): Promise<{ summary: string; entities: string[] }> {
   try {
-    const pathContext = folderPath && folderPath !== '/' ? `Folder path: ${folderPath}\n` : '';
+    const messageContent = buildSummaryMessageContent(fileName, folderPath, extracted);
     const response = await client.messages.create({
       model,
       max_tokens: 300,
       system: SUMMARY_PROMPT,
-      messages: [{ role: 'user', content: `${pathContext}File name: "${fileName}"\n\n${content.slice(0, 2000)}` }],
+      messages: [{ role: 'user', content: messageContent }],
     });
 
     const text = response.content
