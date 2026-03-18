@@ -35,10 +35,84 @@
   },
   "knownIssues": [
     {
-      "id": "TW-001",
-      "title": "Training wheels confirmation gate is MVP",
+      "id": "TW-002",
+      "title": "Training wheels needs real confirmation UX — currently blocks with error",
       "severity": "medium",
-      "affectedFile": "src/agent/index.ts"
+      "description": "S1 fix makes non-approved tools return an error. Bot tells Claude 'requires confirmation' but there's no actual confirmation flow (Slack button, DM prompt, etc.). Need a real gate where the user can approve/deny.",
+      "affectedFile": "src/agent/index.ts",
+      "discoveredDate": "2026-03-18"
+    },
+    {
+      "id": "SEC-001",
+      "title": "FTS5 query injection via search_memory",
+      "severity": "medium",
+      "description": "Raw LLM-controlled query goes into FTS5 MATCH operator. Special syntax (OR, NOT, *, column filters) could retrieve unintended rows. Fix: wrap query in double-quotes for phrase search.",
+      "affectedFile": "src/memory/store.ts",
+      "discoveredDate": "2026-03-18"
+    },
+    {
+      "id": "SEC-002",
+      "title": "HTML extractor skipContent not nesting-aware",
+      "severity": "medium",
+      "description": "Nested <svg> or <script> tags reset the skip flag early, allowing injected text through. Fix: use depth counter instead of boolean.",
+      "affectedFile": "src/google/file-extractor.ts",
+      "discoveredDate": "2026-03-18"
+    },
+    {
+      "id": "SEC-003",
+      "title": "Google refresh token not covered by output sanitizer",
+      "severity": "medium",
+      "description": "Output sanitizer scans for ya29.* access tokens but not 1//... refresh tokens. Add pattern to SECRET_PATTERNS.",
+      "affectedFile": "src/security/output-sanitizer.ts",
+      "discoveredDate": "2026-03-18"
+    },
+    {
+      "id": "SEC-004",
+      "title": "Rate limiter resets on process restart",
+      "severity": "medium",
+      "description": "In-memory rate limit counters lost on Railway deploy/restart. Persist email/file-share timestamps to agent_state table.",
+      "affectedFile": "src/security/rate-limiter.ts",
+      "discoveredDate": "2026-03-18"
+    },
+    {
+      "id": "SEC-005",
+      "title": "Post-tool sanitizer only scans string outputs",
+      "severity": "medium",
+      "description": "Object outputs bypass secret scanning. Fix: normalize to string before scan.",
+      "affectedFile": "src/hooks/post-tool-use.ts",
+      "discoveredDate": "2026-03-18"
+    },
+    {
+      "id": "SEC-006",
+      "title": "scan_channel_history no trust tagging on messages",
+      "severity": "medium",
+      "description": "Non-owner messages extracted without [EXTERNAL] tags. Could inject facts into memory. Fix: tag by trust level before extraction.",
+      "affectedFile": "src/agent/index.ts",
+      "discoveredDate": "2026-03-18"
+    },
+    {
+      "id": "QUAL-001",
+      "title": "buildFolderPathMap calls deprecated getFilePath",
+      "severity": "medium",
+      "description": "The replacement function uses the function it was meant to replace for root folder. Remove and use simple root path assignment.",
+      "affectedFile": "src/google/drive-sync.ts",
+      "discoveredDate": "2026-03-18"
+    },
+    {
+      "id": "QUAL-002",
+      "title": "hasVectorSupport probe query per call — no caching",
+      "severity": "medium",
+      "description": "SELECT count(*) FROM memories_vec runs on every memory operation. Cache at module level.",
+      "affectedFile": "src/memory/store.ts",
+      "discoveredDate": "2026-03-18"
+    },
+    {
+      "id": "QUAL-003",
+      "title": "Consolidation O(n²) merge — no LIMIT on per-type fetch",
+      "severity": "medium",
+      "description": "mergeDuplicates fetches ALL memories per type with no limit. At scale, O(n²) comparisons block event loop. Add LIMIT 500 per type.",
+      "affectedFile": "src/memory/consolidation.ts",
+      "discoveredDate": "2026-03-18"
     },
     {
       "id": "DEEPREAD-001",
@@ -79,7 +153,7 @@
     "number": 12,
     "date": "2026-03-18",
     "type": "feature + UX + refactor + bugfix",
-    "commits": 14
+    "commits": 17
   },
   "thingsNotToRedo": [
     "Don't split schema.sql on semicolons",
