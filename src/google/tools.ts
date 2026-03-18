@@ -396,32 +396,34 @@ export function createGoogleTools(
 
     // ── Gmail: Search ──
     // Searches by THREAD (not message) so each result is a unique conversation.
-    // This prevents long threads from consuming multiple result slots and ensures
-    // outbound-only emails (sent with no reply) are not crowded out.
+    // Lightweight: uses only threads.list (1 API call) — no per-thread metadata fetch.
+    // The agent gets thread IDs + snippets fast, then uses gmail_read on the ones it needs.
     {
       definition: {
         name: 'google_gmail_search',
         description:
           'Search Gmail for email threads matching a query. Uses Gmail search syntax (from:, to:, subject:, after:, before:, has:attachment, label:, is:, in:sent, etc.). ' +
-          'Each result is a unique conversation thread (not individual messages). ' +
-          'Returns up to max_results threads (default 25, max 75). For comprehensive sweeps, use multiple searches with different queries or date ranges. ' +
+          'Each result is a unique conversation thread. Very fast — returns thread IDs and snippets. ' +
+          'Returns up to max_results threads (default 50, max 150). ' +
+          'Use google_gmail_read with the returned Thread IDs to get full content. ' +
           'To find emails you sent, include "in:sent" or "from:me" in the query.',
         input_schema: {
           type: 'object' as const,
           properties: {
-            query: { type: 'string', description: 'Gmail search query (e.g. "from:sarah subject:budget after:2026/02/15", "in:sent after:2026/02/15")' },
-            max_results: { type: 'number', description: 'Max threads to return (default 25, max 75). Use high values for comprehensive sweeps.' },
+            query: { type: 'string', description: 'Gmail search query (e.g. "after:2026/02/15", "in:sent after:2026/02/15", "from:sarah")' },
+            max_results: { type: 'number', description: 'Max threads to return (default 50, max 150).' },
           },
           required: ['query'],
         },
       },
       handler: async (args) => {
         const query = args.query as string;
-        const maxResults = Math.min((args.max_results as number) ?? 25, 75);
+        const maxResults = Math.min((args.max_results as number) ?? 50, 150);
 
         try {
-          // Paginate through THREADS (not messages) — each result is a unique conversation
-          const allThreads: Array<{ id: string; snippet?: string }> = [];
+          // Paginate through THREADS — each result is a unique conversation
+          // Only uses threads.list (fast, 1 API call per page) — no per-thread metadata fetch
+          const allThreads: Array<{ id: string; snippet: string }> = [];
           let pageToken: string | undefined;
 
           while (allThreads.length < maxResults) {
@@ -437,7 +439,7 @@ export function createGoogleTools(
 
             for (const t of threads) {
               if (allThreads.length >= maxResults) break;
-              allThreads.push({ id: t.id!, snippet: t.snippet ?? undefined });
+              allThreads.push({ id: t.id!, snippet: t.snippet ?? '' });
             }
 
             pageToken = result.data.nextPageToken ?? undefined;
@@ -445,45 +447,17 @@ export function createGoogleTools(
           }
 
           if (allThreads.length === 0) {
-            return { content: `No emails found for "${query}".` };
+            return { content: `No email threads found for "${query}".` };
           }
 
-          // Fetch metadata for the first message of each thread in parallel
-          // (threads.list only gives snippet — we need From/Subject/Date)
-          const details = await Promise.all(
-            allThreads.map(t =>
-              gmail.users.threads.get({
-                userId: 'me',
-                id: t.id,
-                format: 'metadata',
-                metadataHeaders: ['From', 'To', 'Subject', 'Date'],
-              })
-            )
+          const summaries = allThreads.map((t, i) =>
+            `${i + 1}. ${t.snippet.slice(0, 200)} | Thread ID: ${t.id}`
           );
 
-          const summaries = details.map((detail, i) => {
-            const messages = detail.data.messages ?? [];
-            const msgCount = messages.length;
-            // Use first message for subject, last message for most recent date/sender
-            const firstMsg = messages[0];
-            const lastMsg = messages[messages.length - 1] ?? firstMsg;
-
-            const firstHeaders = firstMsg?.payload?.headers ?? [];
-            const lastHeaders = lastMsg?.payload?.headers ?? [];
-
-            const subject = firstHeaders.find(h => h.name === 'Subject')?.value ?? 'no subject';
-            const from = lastHeaders.find(h => h.name === 'From')?.value ?? 'unknown';
-            const date = lastHeaders.find(h => h.name === 'Date')?.value ?? '';
-            const snippet = detail.data.messages?.[messages.length - 1]?.snippet ?? allThreads[i].snippet ?? '';
-            const threadLabel = msgCount > 1 ? ` (${msgCount} messages)` : '';
-
-            return `- **${subject}**${threadLabel} | Last: ${from} | ${date} | Thread ID: ${allThreads[i].id}\n  ${snippet.slice(0, 300)}`;
-          });
-
-          const moreAvailable = pageToken ? ` (more results available — refine query or increase max_results)` : '';
+          const moreAvailable = pageToken ? `\n\n(More results available — increase max_results or narrow the date range)` : '';
 
           return {
-            content: `Found ${allThreads.length} threads for "${query}"${moreAvailable}:\n\n${summaries.join('\n')}`,
+            content: `Found ${allThreads.length} threads for "${query}":\n\n${summaries.join('\n')}${moreAvailable}\n\nUse google_gmail_read with thread_ids to read full threads. Batch up to 15 at a time.`,
           };
         } catch (error) {
           const msg = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));

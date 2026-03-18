@@ -171,54 +171,25 @@ describe('Google Workspace Tools', () => {
   });
 
   describe('google_gmail_search', () => {
-    it('returns email summaries', async () => {
-      // threads.list returns thread IDs
+    it('returns thread IDs and snippets', async () => {
+      // threads.list returns thread IDs + snippets (lightweight, no per-thread fetch)
       mocks.gmail.users.threads.list.mockResolvedValue({
         data: {
           threads: [
-            { id: 'thread_1', snippet: 'Please review the attached budget...' },
-            { id: 'thread_2', snippet: 'Updated the timeline as discussed...' },
+            { id: 'thread_1', snippet: 'Please review the attached budget for Q2' },
+            { id: 'thread_2', snippet: 'Updated the timeline as discussed in our meeting' },
           ],
         },
       });
 
-      // threads.get returns metadata for each thread
-      mocks.gmail.users.threads.get
-        .mockResolvedValueOnce({
-          data: {
-            messages: [{
-              payload: {
-                headers: [
-                  { name: 'From', value: 'sarah@acme.com' },
-                  { name: 'Subject', value: 'Q2 Budget Review' },
-                  { name: 'Date', value: 'Mon, 17 Mar 2026' },
-                ],
-              },
-              snippet: 'Please review the attached budget...',
-            }],
-          },
-        })
-        .mockResolvedValueOnce({
-          data: {
-            messages: [{
-              payload: {
-                headers: [
-                  { name: 'From', value: 'jake@acme.com' },
-                  { name: 'Subject', value: 'Re: Project Timeline' },
-                  { name: 'Date', value: 'Sun, 16 Mar 2026' },
-                ],
-              },
-              snippet: 'Updated the timeline as discussed...',
-            }],
-          },
-        });
-
       const tool = findTool('google_gmail_search');
       const result = await tool.handler({ query: 'budget' });
 
-      expect(result.content).toContain('Q2 Budget Review');
-      expect(result.content).toContain('sarah@acme.com');
-      expect(result.content).toContain('Project Timeline');
+      expect(result.content).toContain('thread_1');
+      expect(result.content).toContain('thread_2');
+      expect(result.content).toContain('review the attached budget');
+      expect(result.content).toContain('Updated the timeline');
+      expect(result.content).toContain('Found 2 threads');
     });
 
     it('handles no results', async () => {
@@ -227,7 +198,7 @@ describe('Google Workspace Tools', () => {
       const tool = findTool('google_gmail_search');
       const result = await tool.handler({ query: 'nonexistent' });
 
-      expect(result.content).toContain('No emails found');
+      expect(result.content).toContain('No email threads found');
     });
   });
 
