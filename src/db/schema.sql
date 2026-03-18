@@ -190,6 +190,7 @@ CREATE INDEX IF NOT EXISTS idx_documents_entities ON documents(entities);
 CREATE TABLE IF NOT EXISTS agent_state (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'sleeping')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

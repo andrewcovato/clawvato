@@ -488,7 +488,7 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
       }
       const value = args.value as string;
       db.prepare(
-        "INSERT OR REPLACE INTO agent_state (key, value, updated_at) VALUES (?, ?, datetime('now'))"
+        "INSERT OR REPLACE INTO agent_state (key, value, status, updated_at) VALUES (?, ?, 'active', datetime('now'))"
       ).run(key, value);
       return { content: `Working context updated: ${args.key} = ${value}` };
     } catch (error) {
@@ -684,7 +684,7 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
       let workingContext = '';
       try {
         const rows = db.prepare(
-          "SELECT key, value FROM agent_state WHERE key LIKE 'wctx:%' ORDER BY updated_at DESC LIMIT 20"
+          "SELECT key, value FROM agent_state WHERE key LIKE 'wctx:%' AND status = 'active' ORDER BY updated_at DESC LIMIT 20"
         ).all() as unknown as Array<{ key: string; value: string }>;
         if (rows.length > 0) {
           const lines: string[] = [];

@@ -250,7 +250,25 @@ export async function retrieveContext(
     }
   }
 
-  // ── 5. Recent decisions (always useful as background) ──
+  // ── 5. Wake sleeping working context if relevant ──
+  if (keywords.length > 0) {
+    try {
+      const sleepingQuery = keywords.slice(0, 3).map(k => `%${k}%`);
+      for (const pattern of sleepingQuery) {
+        const sleeping = db.prepare(
+          "SELECT key, value FROM agent_state WHERE key LIKE 'wctx:%' AND status = 'sleeping' AND value LIKE ? LIMIT 3"
+        ).all(pattern) as unknown as Array<{ key: string; value: string }>;
+
+        for (const entry of sleeping) {
+          // Wake it — set status back to active
+          db.prepare("UPDATE agent_state SET status = 'active', updated_at = datetime('now') WHERE key = ?").run(entry.key);
+          logger.info({ key: entry.key }, 'Woke sleeping working context — matched query');
+        }
+      }
+    } catch { /* agent_state may not exist */ }
+  }
+
+  // ── 6. Recent decisions (always useful as background) ──
   if (tokensUsed < budget) {
     const decisions = findMemoriesByType(db, 'decision', { validOnly: true, limit: 3 });
     for (const dec of decisions) {

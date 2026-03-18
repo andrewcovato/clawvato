@@ -52,10 +52,11 @@ export function initDb(): DatabaseSync {
     db.exec(schema);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes('no such column: entities')) {
+    if (msg.includes('no such column: status') || msg.includes('no such column: entities')) {
       // Migration: add entities column to existing documents table
-      logger.info('Migrating documents table — adding entities column...');
-      db.exec(`ALTER TABLE documents ADD COLUMN entities TEXT DEFAULT '[]'`);
+      logger.info('Migrating schema — adding missing columns...');
+      try { db.exec(`ALTER TABLE documents ADD COLUMN entities TEXT DEFAULT '[]'`); } catch { /* may already exist */ }
+      try { db.exec(`ALTER TABLE agent_state ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`); } catch { /* may already exist */ }
       // Retry schema (for the index)
       try { db.exec(schema); } catch { /* tables exist, fine */ }
       logger.info('Documents table migrated');
