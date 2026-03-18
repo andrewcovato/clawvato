@@ -52,7 +52,7 @@ export function initDb(): DatabaseSync {
     db.exec(schema);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes('no such column: entities') && msg.includes('documents')) {
+    if (msg.includes('no such column: entities')) {
       // Migration: add entities column to existing documents table
       logger.info('Migrating documents table — adding entities column...');
       db.exec(`ALTER TABLE documents ADD COLUMN entities TEXT DEFAULT '[]'`);
