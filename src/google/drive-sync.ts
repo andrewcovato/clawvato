@@ -324,6 +324,8 @@ function storeFileSummaryAsMemory(
     ORDER BY created_at DESC LIMIT 1
   `).get(existingPattern) as { id: string } | undefined;
 
+  logger.info({ fileId, content: content.slice(0, 200), entities: allEntities }, 'Storing file summary as memory');
+
   const newId = insertMemory(db, {
     type: 'fact',
     content,

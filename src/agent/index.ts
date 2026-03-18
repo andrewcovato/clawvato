@@ -375,8 +375,7 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
         return {
           content: `Drive sync complete: ${result.filesScanned} files scanned. ` +
             `${result.newFiles} new, ${result.updatedFiles} updated, ${result.removedFiles} removed. ` +
-            `${result.summariesGenerated} summaries generated.` +
-            (result.memoriesBackfilled > 0 ? ` ${result.memoriesBackfilled} file memories backfilled.` : ''),
+            `${result.summariesGenerated} summaries generated, ${result.summariesGenerated + result.memoriesBackfilled} memories created/updated.`,
         };
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
