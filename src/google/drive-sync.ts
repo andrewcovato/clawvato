@@ -210,6 +210,43 @@ async function getFilePath(
   }
 }
 
+/**
+ * Recursively collect all subfolder IDs under a given folder.
+ */
+async function getAllSubfolderIds(
+  drive: ReturnType<typeof google.drive>,
+  rootFolderId: string,
+): Promise<string[]> {
+  const allIds: string[] = [rootFolderId];
+  const queue = [rootFolderId];
+
+  while (queue.length > 0) {
+    const parentId = queue.shift()!;
+    try {
+      let pageToken: string | undefined;
+      do {
+        const result = await drive.files.list({
+          q: `'${parentId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+          pageSize: 100,
+          pageToken,
+          fields: 'nextPageToken, files(id)',
+        });
+        for (const f of result.data.files ?? []) {
+          if (f.id) {
+            allIds.push(f.id);
+            queue.push(f.id);
+          }
+        }
+        pageToken = result.data.nextPageToken ?? undefined;
+      } while (pageToken);
+    } catch (error) {
+      logger.debug({ error, parentId }, 'Failed to list subfolders');
+    }
+  }
+
+  return allIds;
+}
+
 // ── Sync engine ──
 
 /**
@@ -235,11 +272,23 @@ export async function syncDrive(
     owners: Array<{ displayName: string }>; parents?: string[];
   }> = [];
 
+  // If a folder is specified, recursively find all subfolder IDs
+  let folderIds: string[] | null = null;
+  if (opts?.folderId) {
+    folderIds = await getAllSubfolderIds(drive, opts.folderId);
+    logger.info({ rootFolder: opts.folderId, totalFolders: folderIds.length }, 'Resolved folder tree');
+  }
+
   let pageToken: string | undefined;
-  while (driveFiles.length < maxFiles) {
+  // If we have folder IDs, query each folder; otherwise query all of Drive
+  const folderQueue = folderIds ? [...folderIds] : [null];
+  let currentFolderIdx = 0;
+
+  while (driveFiles.length < maxFiles && currentFolderIdx < folderQueue.length) {
+    const currentFolder = folderQueue[currentFolderIdx];
     let q = "trashed = false and mimeType != 'application/vnd.google-apps.folder'";
-    if (opts?.folderId) {
-      q += ` and '${opts.folderId}' in parents`;
+    if (currentFolder) {
+      q += ` and '${currentFolder}' in parents`;
     }
 
     const result = await drive.files.list({
@@ -262,7 +311,11 @@ export async function syncDrive(
     }
 
     pageToken = result.data.nextPageToken ?? undefined;
-    if (!pageToken) break;
+    if (!pageToken) {
+      // Move to next folder in the queue
+      currentFolderIdx++;
+      pageToken = undefined;
+    }
   }
 
   logger.info({ filesFound: driveFiles.length }, 'Drive files listed');
