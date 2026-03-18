@@ -17,10 +17,13 @@ import type { DatabaseSync } from 'node:sqlite';
 import { logger } from '../logger.js';
 import { generateId } from '../db/index.js';
 import { contentSimilarity } from './extractor.js';
-import { deleteEmbedding } from './store.js';
+import { deleteEmbedding, insertMemory } from './store.js';
 
 /** Hours between consolidation runs */
 const CONSOLIDATION_INTERVAL_HOURS = 24;
+
+/** Working context: promote to LTM after this many days without update */
+const WORKING_CONTEXT_ARCHIVE_DAYS = 14;
 
 /** Memories not accessed in this many days get importance decayed */
 const DECAY_THRESHOLD_DAYS_30 = 30;
@@ -80,6 +83,9 @@ export function consolidate(db: DatabaseSync): ConsolidationResult {
 
   // ── 3. Archive very low importance ──
   archived = archiveMemories(db);
+
+  // ── 4. Working context cleanup ──
+  archiveStaleWorkingContext(db);
 
   const memoriesProcessed = merged + decayed + archived;
 
@@ -202,4 +208,39 @@ function archiveMemories(db: DatabaseSync): number {
   }
 
   return count;
+}
+
+/**
+ * Archive stale working context entries.
+ * - Not updated in 14 days → promote to LTM as a fact, then delete from working context
+ * - Entries < 14 days old stay (lower priority via ORDER BY updated_at DESC + token budget)
+ */
+function archiveStaleWorkingContext(db: DatabaseSync): void {
+  try {
+    const staleEntries = db.prepare(`
+      SELECT key, value, updated_at FROM agent_state
+      WHERE key LIKE 'wctx:%'
+        AND julianday('now') - julianday(updated_at) > ?
+    `).all(WORKING_CONTEXT_ARCHIVE_DAYS) as unknown as Array<{ key: string; value: string; updated_at: string }>;
+
+    for (const entry of staleEntries) {
+      // Promote to long-term memory
+      insertMemory(db, {
+        type: 'fact',
+        content: `[Archived working context] ${entry.value}`,
+        source: `working_context:${entry.key}`,
+        importance: 4,
+        confidence: 0.7,
+      });
+
+      // Remove from working context
+      db.prepare("DELETE FROM agent_state WHERE key = ?").run(entry.key);
+    }
+
+    if (staleEntries.length > 0) {
+      logger.info({ archived: staleEntries.length }, 'Archived stale working context → promoted to LTM');
+    }
+  } catch {
+    // agent_state may not exist — non-critical
+  }
 }

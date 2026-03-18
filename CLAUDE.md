@@ -156,17 +156,53 @@ export const logger = new Proxy({} as pino.Logger, {
 ### Context Limits (tunable constants in `src/agent/index.ts`)
 These control how much context the agent sees on each interaction. Centralized for easy tuning.
 
+**Agent loop** (`src/agent/index.ts`):
 | Constant | Value | Purpose |
 |---|---|---|
-| `SHORT_TERM_MESSAGE_LIMIT` | 50 | Max Slack messages to fetch for conversation context |
-| `SHORT_TERM_MSG_CHAR_LIMIT` | 1000 | Max chars per message (truncates long messages) |
-| `SHORT_TERM_TOKEN_BUDGET` | 2000 | Token cap for Slack context (drops oldest when exceeded) |
+| `AGENT_TIMEOUT_MS` | 300,000 | Max time per interaction (5 min, accommodates bulk sync) |
+| `MAX_TURNS` | 15 | Max tool-call turns per interaction |
+| `SHORT_TERM_MESSAGE_LIMIT` | 50 | Slack messages to fetch per interaction |
+| `SHORT_TERM_MSG_CHAR_LIMIT` | 1000 | Max chars per Slack message |
+| `SHORT_TERM_TOKEN_BUDGET` | 2000 | Token cap for Slack conversation context |
 | `LONG_TERM_TOKEN_BUDGET` | 1500 | Token cap for DB memory retrieval |
-| `MAX_TURNS` | 20 | Max tool-call turns per agent interaction |
-| `DEFAULT_TOKEN_BUDGET` | 1500 | Default in retriever (overridden by `LONG_TERM_TOKEN_BUDGET` from agent) |
+| `WORKING_CONTEXT_TOKEN_BUDGET` | 1000 | Token cap for working context scratch pad |
 
-**Short-term memory** = Slack message history (last 50 messages, token-budgeted). Newest messages get priority.
-**Long-term memory** = SQLite DB (extracted facts, strategies, people). Retrieved via hybrid FTS5 + vector search.
+**Memory retriever** (`src/memory/retriever.ts`):
+| Constant | Value | Purpose |
+|---|---|---|
+| `DEFAULT_TOKEN_BUDGET` | 1500 | Default retrieval budget (overridden by agent) |
+
+**Memory consolidation** (`src/memory/consolidation.ts`):
+| Constant | Value | Purpose |
+|---|---|---|
+| `CONSOLIDATION_INTERVAL_HOURS` | 24 | Hours between consolidation runs |
+| `MERGE_SIMILARITY_THRESHOLD` | 0.85 | Content similarity for merging duplicates |
+| `DECAY_THRESHOLD_DAYS_30` | 30 | Days before 10% importance decay |
+| `DECAY_THRESHOLD_DAYS_90` | 90 | Days before 30% importance decay |
+| `ARCHIVE_THRESHOLD` | 1 | Importance at or below → archived |
+| `WORKING_CONTEXT_ARCHIVE_DAYS` | 14 | Days before working context promotes to LTM |
+
+**Reflection** (`src/memory/reflection.ts`):
+| Constant | Value | Purpose |
+|---|---|---|
+| `REFLECTION_THRESHOLD` | 50 | Cumulative importance to trigger reflection |
+
+**Embeddings** (`src/memory/embeddings.ts`):
+| Constant | Value | Purpose |
+|---|---|---|
+| `EMBEDDING_DIM` | 384 | all-MiniLM-L6-v2 dimensions |
+
+**Slack** (`src/slack/event-queue.ts`, `src/slack/handler.ts`, `src/cli/start.ts`):
+| Constant | Value | Purpose |
+|---|---|---|
+| Accumulation window | 4s | Debounce before processing messages |
+| `SLOW_TASK_THRESHOLD_MS` | 60,000 | When to show ⏳ status indicator |
+| Startup crawl skip | 5 min | Skip crawl if offline less than this |
+
+**Three memory tiers:**
+- **Working context** = Active operational details (scratch pad in `agent_state`, 1000 token budget, auto-archives to LTM after 14 days)
+- **Short-term memory** = Slack message history (last 50 messages, 2000 token budget). Newest messages get priority.
+- **Long-term memory** = SQLite DB (extracted facts, strategies, people, file summaries). Retrieved via hybrid FTS5 + vector search (1500 token budget).
 
 ### Memory Types
 Stored in the `memories` table, extracted by Haiku after each interaction:
