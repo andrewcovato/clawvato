@@ -510,27 +510,73 @@ export async function syncDrive(
   }
 
   // ── 3. Self-heal: ensure every file with a summary has a corresponding memory ──
-  let memoriesBackfilled = 0;
+  const toBackfill: Array<{ fileId: string; name: string; folderPath: string | null; summary: string; entities: string[]; modifiedTime: string }> = [];
+
   for (const file of driveFiles) {
     const doc = getDocument(db, 'gdrive', file.id);
     if (!doc || !doc.summary) continue;
 
-    // Check if a memory exists for this file
     const memoryExists = db.prepare(
       "SELECT 1 FROM memories WHERE source LIKE ? AND valid_until IS NULL LIMIT 1"
     ).get(`drive:${file.id}:%`);
 
     if (!memoryExists) {
       const entities = doc.entities ? JSON.parse(doc.entities) as string[] : [];
-      storeFileSummaryAsMemory(
-        db, file.id, doc.name, doc.folder_path, doc.summary,
-        entities, doc.modified_time ?? now,
-      );
-      memoriesBackfilled++;
+      toBackfill.push({
+        fileId: file.id,
+        name: doc.name,
+        folderPath: doc.folder_path,
+        summary: doc.summary,
+        entities,
+        modifiedTime: doc.modified_time ?? now,
+      });
     }
   }
 
-  if (memoriesBackfilled > 0) {
+  let memoriesBackfilled = 0;
+  if (toBackfill.length > 0) {
+    logger.info({ count: toBackfill.length }, 'Backfilling missing file memories');
+
+    // Store all memories first (fast, DB only)
+    const newMemoryIds: { id: string; content: string }[] = [];
+    for (const item of toBackfill) {
+      const source = `drive:${item.fileId}:${item.modifiedTime}`;
+      const pathLabel = item.folderPath && item.folderPath !== '/' ? ` (in ${item.folderPath})` : '';
+      const content = `File "${item.name}"${pathLabel}: ${item.summary}`;
+
+      // Add folder parts as entities
+      const entities = [...item.entities];
+      if (item.folderPath && item.folderPath !== '/') {
+        for (const part of item.folderPath.split('/').filter(Boolean)) {
+          if (!entities.includes(part)) entities.push(part);
+        }
+      }
+
+      const newId = insertMemory(db, {
+        type: 'fact',
+        content,
+        source,
+        importance: 5,
+        confidence: 0.85,
+        entities,
+      });
+      newMemoryIds.push({ id: newId, content });
+      memoriesBackfilled++;
+    }
+
+    // Batch embed all at once (one call instead of N)
+    if (newMemoryIds.length > 0 && hasVectorSupport(db)) {
+      try {
+        const embeddings = await embedBatch(newMemoryIds.map(m => m.content));
+        for (let i = 0; i < newMemoryIds.length; i++) {
+          insertEmbedding(db, newMemoryIds[i].id, embeddings[i]);
+        }
+        logger.info({ count: newMemoryIds.length }, 'Batch embedded backfilled memories');
+      } catch (error) {
+        logger.debug({ error }, 'Batch embedding failed — memories stored without vectors');
+      }
+    }
+
     logger.info({ memoriesBackfilled }, 'Backfilled missing file memories');
   }
 
