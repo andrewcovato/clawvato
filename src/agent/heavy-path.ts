@@ -1,12 +1,11 @@
 /**
  * Heavy Path — Claude Code SDK integration for complex, multi-source tasks.
  *
- * Uses `claude --print` subprocess for reasoning-heavy work:
- * - Cross-source queries (email + meetings + drive + memory)
- * - Multi-step analysis and synthesis
- * - Document deep reads and complex reasoning
+ * Uses `claude --print` subprocess with stream-json output for real-time
+ * progress updates. Parses tool calls as they happen and posts milestone
+ * updates to Slack.
  *
- * Free on Max plan. ~10-60s per interaction.
+ * Free on Max plan. ~1-5 min per interaction (Opus, multi-source).
  *
  * The SDK gets access to:
  * - Memory via MCP server (the only MCP server needed)
@@ -15,6 +14,7 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
+import { createInterface } from 'node:readline';
 import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -46,7 +46,6 @@ export interface HeavyPathResult {
 
 /**
  * Build the MCP config file for the SDK subprocess.
- * Returns path to a temp file containing the config JSON.
  */
 function buildMcpConfig(dataDir: string): { configPath: string; cleanup: () => void } {
   const tmpDir = mkdtempSync(join(tmpdir(), 'clawvato-mcp-'));
@@ -73,7 +72,6 @@ function buildMcpConfig(dataDir: string): { configPath: string; cleanup: () => v
 
 /**
  * Build the system prompt addendum for the SDK.
- * Gives the SDK context about available tools and the owner's preferences.
  */
 function buildSdkSystemPrompt(opts: HeavyPathOptions): string {
   const parts: string[] = [];
@@ -110,11 +108,43 @@ function buildSdkSystemPrompt(opts: HeavyPathOptions): string {
   return parts.join('\n');
 }
 
+// ── Progress descriptions for tool calls ──
+
+/**
+ * Parse a stream-json tool_use event into a human-friendly progress message.
+ */
+function describeToolUse(toolName: string, input: string): string | null {
+  // Bash commands — parse the actual command being run
+  if (toolName === 'Bash') {
+    if (input.includes('gws gmail')) return 'Searching Gmail...';
+    if (input.includes('gws calendar')) return 'Checking calendar...';
+    if (input.includes('gws drive')) return 'Searching Drive...';
+    if (input.includes('fireflies.ts search')) return 'Searching meeting transcripts...';
+    if (input.includes('fireflies.ts summary')) return 'Reading meeting summary...';
+    if (input.includes('fireflies.ts transcript')) return 'Reading meeting transcript...';
+    if (input.includes('fireflies.ts list')) return 'Listing recent meetings...';
+    return null; // don't report generic bash commands
+  }
+
+  // MCP memory tools
+  if (toolName.includes('search_memory')) return 'Searching memory...';
+  if (toolName.includes('store_fact')) return 'Saving to memory...';
+  if (toolName.includes('retrieve_context')) return 'Loading memory context...';
+  if (toolName.includes('list_people')) return 'Looking up known contacts...';
+  if (toolName.includes('list_commitments')) return 'Checking commitments...';
+
+  // File tools
+  if (toolName === 'Read') return 'Reading file...';
+  if (toolName === 'Grep') return 'Searching files...';
+
+  return null;
+}
+
 /**
  * Execute a heavy-path query via the Claude Code SDK.
  *
- * Spawns `claude --print` as a subprocess with MCP config and system prompt.
- * Streams output and provides progress updates to Slack.
+ * Uses stream-json output to parse events in real-time and post
+ * progress updates to Slack as tool calls happen.
  */
 export async function executeHeavyPath(
   userPrompt: string,
@@ -131,12 +161,12 @@ export async function executeHeavyPath(
 
     const args = [
       '--print',
-      '--output-format', 'text',
+      '--output-format', 'stream-json',
       '--model', 'claude-opus-4-6',
       '--mcp-config', configPath,
       '--append-system-prompt', sdkSystemPrompt,
-      '--max-turns', '25',
-      // Pre-approve bash commands the SDK needs — gws (Google), fireflies CLI, and general read tools
+      '--max-turns', '50',
+      // Pre-approve bash commands the SDK needs
       '--allowedTools',
       'Bash(gws:*)', 'Bash(npx:*)', 'Bash(cat:*)', 'Bash(ls:*)',
       'Read', 'Glob', 'Grep',
@@ -145,13 +175,13 @@ export async function executeHeavyPath(
       'mcp__memory__list_people', 'mcp__memory__list_commitments',
     ];
 
-    logger.info({ promptLength: userPrompt.length, args: args.join(' ') }, 'Starting heavy path SDK call');
+    logger.info({ promptLength: userPrompt.length }, 'Starting heavy path SDK call');
 
     if (handler) {
-      await handler.updateProgress('Thinking deeply about this...');
+      await handler.updateProgress('Starting deep analysis...');
     }
 
-    const result = await spawnClaude(args, userPrompt, {
+    const result = await spawnClaudeStreaming(args, userPrompt, {
       timeoutMs: config.agent.timeoutMs,
       onProgress: handler ? async (text: string) => {
         try { await handler.updateProgress(text); } catch { /* non-critical */ }
@@ -160,20 +190,20 @@ export async function executeHeavyPath(
 
     const durationMs = Date.now() - startTime;
 
-    if (result.exitCode !== 0) {
-      logger.error({ exitCode: result.exitCode, stderr: result.stderr.slice(0, 500) }, 'SDK call failed');
+    if (!result.success) {
+      logger.error({ exitCode: result.exitCode, error: result.error?.slice(0, 500) }, 'SDK call failed');
       return {
         response: '',
         success: false,
-        error: result.stderr || `SDK exited with code ${result.exitCode}`,
+        error: result.error || `SDK exited with code ${result.exitCode}`,
         durationMs,
       };
     }
 
-    logger.info({ durationMs, responseLength: result.stdout.length }, 'Heavy path complete');
+    logger.info({ durationMs, responseLength: result.response.length, toolCalls: result.toolCallCount }, 'Heavy path complete');
 
     return {
-      response: result.stdout.trim(),
+      response: result.response,
       success: true,
       durationMs,
     };
@@ -182,30 +212,35 @@ export async function executeHeavyPath(
   }
 }
 
-interface SpawnResult {
-  stdout: string;
-  stderr: string;
+interface StreamResult {
+  response: string;
+  success: boolean;
+  error?: string;
   exitCode: number;
+  toolCallCount: number;
 }
 
 /**
- * Spawn the Claude CLI and capture output.
+ * Spawn Claude CLI with stream-json output and parse events in real-time.
+ *
+ * stream-json emits one JSON object per line:
+ *   {"type":"assistant","message":{"role":"assistant","content":[...]}}
+ *   {"type":"result","result":"...","duration_ms":123}
  */
-function spawnClaude(
+function spawnClaudeStreaming(
   args: string[],
   stdinInput: string,
   opts: {
     timeoutMs: number;
     onProgress?: (text: string) => Promise<void>;
   },
-): Promise<SpawnResult> {
+): Promise<StreamResult> {
   return new Promise((resolve, reject) => {
-    // Strip ANTHROPIC_API_KEY so Claude CLI uses Max plan OAuth instead of API billing
+    // Strip ANTHROPIC_API_KEY so Claude CLI uses Max plan OAuth
     const { ANTHROPIC_API_KEY: _, ...cleanEnv } = process.env;
 
     const hasOAuth = !!cleanEnv.CLAUDE_CODE_OAUTH_TOKEN;
-    const oauthPrefix = cleanEnv.CLAUDE_CODE_OAUTH_TOKEN?.slice(0, 15) ?? '(none)';
-    logger.info({ hasOAuth, oauthPrefix, HOME: cleanEnv.HOME ?? '(unset)', cwd: process.cwd() }, 'Spawning claude CLI');
+    logger.info({ hasOAuth, HOME: cleanEnv.HOME ?? '(unset)' }, 'Spawning claude CLI (stream-json)');
 
     const proc: ChildProcess = spawn('claude', args, {
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -213,31 +248,68 @@ function spawnClaude(
       cwd: process.cwd(),
     });
 
-    // Log spawn success/failure
     proc.on('spawn', () => {
       logger.info({ pid: proc.pid }, 'Claude CLI process spawned');
     });
 
-    // Detect early exit (e.g., auth failure, crash)
-    proc.on('exit', (code, signal) => {
-      logger.info({ pid: proc.pid, code, signal, stdoutLen: stdout.length, stderrLen: stderr.length }, 'Claude CLI process exited');
-    });
-
-    let stdout = '';
     let stderr = '';
-    let progressUpdateSent = false;
+    let finalResponse = '';
+    let toolCallCount = 0;
+    let lastProgressUpdate = '';
 
-    proc.stdout?.on('data', (chunk: Buffer) => {
-      const text = chunk.toString();
-      stdout += text;
-      logger.debug({ stdoutChunk: text.slice(0, 200) }, 'SDK stdout');
+    // Parse stdout line by line as stream-json events
+    const rl = createInterface({ input: proc.stdout!, terminal: false });
 
-      // Send progress update after first substantial output
-      if (!progressUpdateSent && stdout.length > 100 && opts.onProgress) {
-        progressUpdateSent = true;
-        void opts.onProgress('Analyzing and synthesizing...');
+    rl.on('line', (line: string) => {
+      if (!line.trim()) return;
+
+      try {
+        const event = JSON.parse(line);
+        handleStreamEvent(event);
+      } catch {
+        // Not JSON — might be raw text output, accumulate it
+        finalResponse += line + '\n';
       }
     });
+
+    function handleStreamEvent(event: Record<string, unknown>): void {
+      const type = event.type as string;
+
+      if (type === 'assistant') {
+        // Assistant message with content blocks
+        const message = event.message as Record<string, unknown> | undefined;
+        const content = message?.content as Array<Record<string, unknown>> | undefined;
+        if (!content) return;
+
+        for (const block of content) {
+          if (block.type === 'text') {
+            // Accumulate text for final response
+            finalResponse += (block.text as string) ?? '';
+          } else if (block.type === 'tool_use') {
+            // Tool call — generate progress update
+            toolCallCount++;
+            const toolName = (block.name as string) ?? '';
+            const toolInput = typeof block.input === 'string'
+              ? block.input
+              : JSON.stringify(block.input ?? '');
+
+            const desc = describeToolUse(toolName, toolInput);
+            if (desc && desc !== lastProgressUpdate && opts.onProgress) {
+              lastProgressUpdate = desc;
+              void opts.onProgress(desc);
+            }
+
+            logger.debug({ tool: toolName, turn: toolCallCount }, 'SDK tool call');
+          }
+        }
+      } else if (type === 'result') {
+        // Final result — use this as the response if available
+        const resultText = event.result as string | undefined;
+        if (resultText) {
+          finalResponse = resultText;
+        }
+      }
+    }
 
     proc.stderr?.on('data', (chunk: Buffer) => {
       const text = chunk.toString();
@@ -245,24 +317,37 @@ function spawnClaude(
       logger.warn({ stderrChunk: text.slice(0, 500) }, 'SDK stderr');
     });
 
-    // Write the user prompt to stdin
+    proc.on('exit', (code, signal) => {
+      logger.info({ pid: proc.pid, code, signal, toolCalls: toolCallCount, responseLen: finalResponse.length }, 'Claude CLI process exited');
+    });
+
+    // Write prompt to stdin
     proc.stdin?.write(stdinInput);
     proc.stdin?.end();
 
-    // 5 min timeout for heavy path — Opus doing multi-source sweeps can take 3-5 min
-    const heavyTimeoutMs = opts.timeoutMs;
+    // Timeout
     const timeout = setTimeout(() => {
-      logger.error({ pid: proc.pid, stdout: stdout.slice(0, 200), stderr: stderr.slice(0, 500) }, 'SDK call timed out — killing process');
+      logger.error({ pid: proc.pid, toolCalls: toolCallCount, responseLen: finalResponse.length }, 'SDK call timed out');
       proc.kill('SIGTERM');
-      resolve({ stdout, stderr: stderr || 'Timed out with no output', exitCode: 124 });
-    }, heavyTimeoutMs);
+      resolve({
+        response: finalResponse || '',
+        success: finalResponse.length > 0,
+        error: finalResponse.length > 0 ? undefined : 'Timed out with no output',
+        exitCode: 124,
+        toolCallCount,
+      });
+    }, opts.timeoutMs);
 
     proc.on('close', (code) => {
       clearTimeout(timeout);
+
+      const success = (code === 0 || code === null) && finalResponse.length > 0;
       resolve({
-        stdout,
-        stderr,
+        response: finalResponse,
+        success,
+        error: success ? undefined : (stderr || `Exited with code ${code}`),
         exitCode: code ?? 1,
+        toolCallCount,
       });
     });
 
