@@ -47,6 +47,13 @@ Use the appropriate category for `type`:
 - `relationship` — who works with whom, org dynamics
 - Or suggest a new category if nothing fits. Rules: prefer existing categories; lowercase, singular, 1-2 words; genuinely different type of knowledge; broad enough for multiple facts
 
+**CRITICAL — Granularity rules:**
+- **Each finding must be ONE atomic fact.** If an email mentions a deadline, a decision, and a person's role — that's 3 separate findings, not one summary.
+- **Never consolidate multiple facts into a single entry.** No "Q1 Timeline" mega-entries. The system handles synthesis — your job is to capture every discrete piece of information.
+- A single email thread might produce 5-15 findings. A meeting transcript might produce 10-30. This is expected.
+- Bad: `"Q1 timeline covering Vail, DraftKings, George hire, MeasurementOS..."` (1 consolidated entry)
+- Good: `"Vail engagement kicked off Jan 15 with initial scope call"`, `"DraftKings proposal sent Feb 3 for $120K"`, `"George accepted CTO offer: $150K base, $50K bonus, 10% options"` (individual entries)
+
 For each finding:
 - Include enough context to be useful months later without the original source
 - Include the WHY, not just the what
@@ -54,7 +61,15 @@ For each finding:
 - Set `entities` to tag people, companies, projects, tools, and conceptual themes — anything that would help find this fact later
 - Set `importance` (1-10) and `confidence` (0-1)
 
-You may write to the findings file multiple times (append with `>>` or overwrite with full array). A background process will handle dedup, categorization, and storage after you finish. **Focus your tool calls on research, not storage.**
+**Write findings incrementally** — after researching each source, append immediately so findings are captured even if the task is cancelled:
+```bash
+cat << 'EOF' >> /tmp/clawvato-findings.json
+{"type":"fact","content":"...","source":"gmail:thread:abc","importance":7,"confidence":0.9,"entities":["Sarah","Acme"]}
+{"type":"decision","content":"...","source":"fireflies:meeting:xyz","importance":8,"confidence":0.85,"entities":["Q2","pricing"]}
+EOF
+```
+
+A background process handles dedup, categorization, and storage after you finish. **Focus your tool calls on research, not storage.**
 
 ## Response Guidelines
 
