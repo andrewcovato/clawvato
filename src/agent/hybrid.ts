@@ -165,13 +165,21 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
           // Set up abort controller so interrupts can kill the SDK subprocess
           const heavyAbort = new AbortController();
 
-          // Poll for interrupts while heavy path runs
+          // Poll for interrupts while heavy path runs — any message from owner kills the subprocess
           const interruptPoll = setInterval(async () => {
             const interrupt = handler.drainInterrupt();
             if (interrupt) {
-              logger.info({ text: interrupt.text.slice(0, 80) }, 'Interrupt during heavy path — aborting');
-              heavyAbort.abort();
-              try { await handler.ackInterrupt(batch.channel, interrupt.ts); } catch { /* */ }
+              const text = interrupt.text.toLowerCase().trim();
+              // Only abort on clear cancel signals
+              const isCancelIntent = /^(stop|cancel|nevermind|never mind|scratch that|abort|quit|nvm)/.test(text);
+              if (isCancelIntent) {
+                logger.info({ text: interrupt.text.slice(0, 80) }, 'Cancel interrupt during heavy path — aborting');
+                heavyAbort.abort();
+                try { await handler.ackInterrupt(batch.channel, interrupt.ts); } catch { /* */ }
+              } else {
+                // Non-cancel interrupt — log but don't abort (might be additive context)
+                logger.info({ text: interrupt.text.slice(0, 80) }, 'Non-cancel interrupt during heavy path — ignoring');
+              }
             }
           }, 2000);
 
@@ -190,7 +198,11 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
 
           clearInterval(interruptPoll);
 
-          if (result.success && result.response) {
+          if (heavyAbort.signal.aborted) {
+            // Owner cancelled — acknowledge and stop
+            finalResponse = 'Cancelled.';
+            logger.info({ durationMs: result.durationMs, toolCalls: result.durationMs }, 'Heavy path cancelled by owner');
+          } else if (result.success && result.response) {
             finalResponse = result.response;
           } else {
             // Heavy path failed — notify user and try fast path
