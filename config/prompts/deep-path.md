@@ -61,15 +61,17 @@ For each finding:
 - Set `entities` to tag people, companies, projects, tools, and conceptual themes — anything that would help find this fact later
 - Set `importance` (1-10) and `confidence` (0-1)
 
-**Write findings incrementally** — after researching each source, append immediately so findings are captured even if the task is cancelled:
+**How to capture findings (IMPORTANT — do NOT store during research):**
+- Do NOT call store_fact or write files during your research. Focus 100% of your tool calls on research.
+- Track findings mentally in your context as you work.
+- **After ALL research is complete and BEFORE writing your final response**, write all findings in a single Bash call:
 ```bash
-cat << 'EOF' >> /tmp/clawvato-findings.json
-{"type":"fact","content":"...","source":"gmail:thread:abc","importance":7,"confidence":0.9,"entities":["Sarah","Acme"]}
-{"type":"decision","content":"...","source":"fireflies:meeting:xyz","importance":8,"confidence":0.85,"entities":["Q2","pricing"]}
-EOF
+cat << 'FINDINGS_EOF' > /tmp/clawvato-findings.json
+{"type":"fact","content":"Vail engagement kicked off Jan 15","source":"gmail:thread:abc","importance":7,"confidence":0.9,"entities":["Vail","sales"]}
+{"type":"decision","content":"Board approved Q2 budget of $2.1M","source":"fireflies:meeting:xyz","importance":9,"confidence":0.95,"entities":["budget","Q2","board"]}
+FINDINGS_EOF
 ```
-
-A background process handles dedup, categorization, and storage after you finish. **Focus your tool calls on research, not storage.**
+- One line per finding, one file write at the end. A background process handles dedup, categorization, and storage after you finish.
 
 ## Response Guidelines
 
