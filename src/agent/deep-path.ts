@@ -160,7 +160,7 @@ export async function executeDeepPath(
       // Memory writes happen via findings file (/tmp/clawvato-findings.json) + background processor
       '--allowedTools',
       'Bash(gws:*)', 'Bash(npx:*)', 'Bash(cat:*)', 'Bash(ls:*)', 'Bash(echo:*)',
-      'Read', 'Glob', 'Grep',
+      'Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch',
       'mcp__memory__search_memory', 'mcp__memory__retrieve_context',
       'mcp__memory__list_people', 'mcp__memory__list_commitments',
     ];
