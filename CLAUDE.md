@@ -134,6 +134,10 @@ Memory tools (`update_working_context`, `store_fact`, `mcp__memory__*`) are clas
 
 Graduation: 10+ approvals with <5% rejection rate and zero rejections in last 5.
 
+## Engineering Philosophy
+- **Always take the pain now — build for durability.** No short-term hacks or workarounds. If something needs doing, do it right the first time.
+- Don't create band-aids that will need to be replaced later. If a feature is missing, build it properly in the right layer.
+
 ## Bug Fixing Protocol
 - **Do NOT jump straight to coding a fix** when the owner mentions a bug or unexpected behavior.
 - First, investigate and produce a light plan: consider whether the symptom points to a deeper, more generic root cause rather than the surface-level issue described.

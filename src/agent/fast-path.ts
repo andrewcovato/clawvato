@@ -243,13 +243,16 @@ export async function executeFastPath(
         logger.info({ tool: toolUse.name }, 'Fast path: executing tool');
         const result = await toolHandler(toolInput);
 
-        // Post-tool audit
+        // Post-tool audit (on text content)
         const sanitized = runFastPathPostToolChecks(opts.db, toolUse.name, toolInput, result.content, !!result.isError);
 
+        // Use rich content blocks for multimodal results (PDFs, images), else text
         toolResults.push({
           type: 'tool_result',
           tool_use_id: toolUse.id,
-          content: sanitized,
+          // contentBlocks may include document blocks (PDFs) which the API accepts
+          // but the SDK types don't fully cover — cast to satisfy TypeScript
+          content: (result.contentBlocks ?? sanitized) as Anthropic.ToolResultBlockParam['content'],
           is_error: result.isError,
         });
       }

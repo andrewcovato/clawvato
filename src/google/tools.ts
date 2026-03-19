@@ -18,6 +18,7 @@
 import { google } from 'googleapis';
 import type Anthropic from '@anthropic-ai/sdk';
 import type { ToolHandlerResult } from '../mcp/slack/server.js';
+import { getFileContent } from './drive-sync.js';
 import { logger } from '../logger.js';
 import { scanForSecrets } from '../security/output-sanitizer.js';
 
@@ -1062,17 +1063,21 @@ export function createGoogleTools(
     {
       definition: {
         name: 'google_drive_get_file',
-        description: 'Get metadata and sharing info for a specific Drive file by ID.',
+        description:
+          'Get a Drive file — metadata and content. Reads PDFs, Google Docs, Sheets, Slides, Word, Excel, ' +
+          'PowerPoint, images, text files, and more. Returns file content directly.',
         input_schema: {
           type: 'object' as const,
           properties: {
             file_id: { type: 'string', description: 'Google Drive file ID' },
+            metadata_only: { type: 'boolean', description: 'If true, return only metadata without reading content (default false)' },
           },
           required: ['file_id'],
         },
       },
       handler: async (args) => {
         const fileId = args.file_id as string;
+        const metadataOnly = args.metadata_only as boolean | undefined;
 
         try {
           const result = await drive.files.get({
@@ -1084,7 +1089,7 @@ export function createGoogleTools(
           const owner = f.owners?.[0]?.displayName ?? 'unknown';
           const perms = (f.permissions ?? []).map(p => `${p.emailAddress ?? p.type} (${p.role})`).join(', ');
 
-          const lines = [
+          const metaLines = [
             `Name: ${f.name}`,
             `Type: ${f.mimeType}`,
             `Owner: ${owner}`,
@@ -1095,7 +1100,46 @@ export function createGoogleTools(
             perms ? `Sharing: ${perms}` : 'Sharing: private',
           ].filter(Boolean);
 
-          return { content: lines.join('\n') };
+          const metadata = metaLines.join('\n');
+
+          if (metadataOnly) {
+            return { content: metadata };
+          }
+
+          // Read file content using the file extractor
+          const extracted = await getFileContent(drive, fileId, f.mimeType ?? '');
+
+          if (!extracted) {
+            return { content: `${metadata}\n\n[Content could not be extracted — unsupported format or file too large]` };
+          }
+
+          if (extracted.kind === 'text') {
+            return { content: `${metadata}\n\n--- Content ---\n\n${extracted.text}` };
+          }
+
+          if (extracted.kind === 'document') {
+            // PDF — return as Claude-native document block + metadata as text
+            return {
+              content: metadata,
+              contentBlocks: [
+                { type: 'document' as const, source: { type: 'base64' as const, media_type: extracted.mediaType, data: extracted.base64 } },
+                { type: 'text' as const, text: `File metadata:\n${metadata}\n\nAnalyze the document above.` },
+              ],
+            };
+          }
+
+          if (extracted.kind === 'image') {
+            // Image — return as Claude-native image block + metadata
+            return {
+              content: metadata,
+              contentBlocks: [
+                { type: 'image' as const, source: { type: 'base64' as const, media_type: extracted.mediaType, data: extracted.base64 } },
+                { type: 'text' as const, text: `File metadata:\n${metadata}\n\nDescribe the image above.` },
+              ],
+            };
+          }
+
+          return { content: metadata };
         } catch (error) {
           const msg = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
           return { content: `Drive error: ${msg}`, isError: true };

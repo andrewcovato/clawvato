@@ -18,6 +18,8 @@ import type Anthropic from '@anthropic-ai/sdk';
 /** Result from a tool handler */
 export interface ToolHandlerResult {
   content: string;
+  /** Rich content blocks for multimodal results (PDFs, images). When set, used instead of content string in tool results. */
+  contentBlocks?: Array<Anthropic.TextBlockParam | Anthropic.ImageBlockParam | { type: 'document'; source: { type: 'base64'; media_type: string; data: string } }>;
   isError?: boolean;
 }
 
