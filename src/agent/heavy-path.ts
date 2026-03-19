@@ -132,6 +132,7 @@ export async function executeHeavyPath(
     const args = [
       '--print',
       '--output-format', 'text',
+      '--model', 'claude-opus-4-6',
       '--mcp-config', configPath,
       '--append-system-prompt', sdkSystemPrompt,
       '--max-turns', '25',
