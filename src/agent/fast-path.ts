@@ -33,8 +33,15 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
   update_working_context: 'Updating working context...',
   google_calendar_list_events: 'Checking your calendar...',
   google_calendar_get_event: 'Looking up event details...',
+  google_calendar_freebusy: 'Checking availability...',
   google_gmail_search: 'Searching email...',
+  google_gmail_read: 'Reading email thread...',
+  google_drive_search: 'Searching Drive...',
+  google_drive_get_file: 'Looking up file details...',
+  fireflies_search_meetings: 'Searching meetings...',
+  fireflies_get_summary: 'Reading meeting summary...',
   slack_get_channel_history: 'Reading channel history...',
+  slack_search_messages: 'Searching Slack...',
 };
 
 export interface FastPathOptions {

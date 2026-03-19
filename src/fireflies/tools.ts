@@ -214,7 +214,7 @@ export function createFirefliesTools(client: FirefliesClient): FirefliesToolDef[
           required: [],
         },
       },
-      // Handler placeholder — sync is invoked via heavy path CLI (tools/fireflies.ts)
+      // Handler placeholder — sync is invoked via deep path CLI (tools/fireflies.ts)
       handler: async () => {
         return { content: 'Fireflies sync handler not configured.', isError: true };
       },

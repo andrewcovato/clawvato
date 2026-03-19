@@ -23,7 +23,7 @@ COPY src/db/schema.sql ./dist/db/schema.sql
 # (npm prune --omit=dev removes tsx, so we keep it)
 RUN npm prune --omit=dev && npm install tsx
 
-# Install Claude Code CLI for heavy path + gws for Google Workspace access
+# Install Claude Code CLI for deep path + gws for Google Workspace access
 RUN npm install -g @anthropic-ai/claude-code @googleworkspace/cli || true
 
 # Data directory — mount a Railway volume here for persistence

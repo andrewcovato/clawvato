@@ -83,7 +83,7 @@ export async function startAgent(): Promise<void> {
 
   const slack = await createSlackConnection({ appToken, botToken, userToken });
 
-  // ── Create the Hybrid Agent (fast path + heavy path) ──
+  // ── Create the Hybrid Agent (fast path + deep path) ──
   const agent = await createHybridAgent({
     botClient: slack.botClient,
     userClient: slack.userClient,

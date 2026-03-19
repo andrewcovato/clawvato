@@ -1,7 +1,7 @@
 # CLAUDE.md — Clawvato Project Guide
 
 ## Project Overview
-Clawvato is an always-on personal AI agent deployed on Railway. It acts as a "chief of staff" — managing Slack, email, calendar, Drive, and meetings on behalf of its owner. Uses a **hybrid architecture**: Haiku routes each message to either a fast path (direct API, ~2s) or a heavy path (Claude Code SDK subprocess with Opus, ~1-5 min, free on Max plan).
+Clawvato is an always-on personal AI agent deployed on Railway. It acts as a "chief of staff" — managing Slack, email, calendar, Drive, and meetings on behalf of its owner. Uses a **hybrid architecture**: Haiku routes each message to either a fast path (direct API, ~2s) or a deep path (Claude Code SDK subprocess with Opus, ~1-5 min, free on Max plan).
 
 ## Quick Reference
 
@@ -29,7 +29,7 @@ Slack message arrives
     │   Model: Sonnet | 10 turns | 60s timeout | ~$0.01/call
     │   Tools: search_memory, update_working_context,
     │          calendar list/get, gmail_search, slack history/search
-    └── HEAVY: executeHeavyPath() — claude --print subprocess
+    └── HEAVY: executeDeepPath() — claude --print subprocess
         Model: Opus | 200 turns | 20min timeout | $0 on Max plan
         MCP: Memory server (stdio)
         CLI: gws (Google), tools/fireflies.ts (meetings)
@@ -41,10 +41,10 @@ Slack message arrives
 ```
 src/
   agent/           # Hybrid agent orchestration
-    hybrid.ts      # Main orchestrator — routes to fast/heavy path
+    hybrid.ts      # Main orchestrator — routes to fast/deep path
     router.ts      # Haiku complexity classifier (FAST vs HEAVY)
     fast-path.ts   # Direct API loop, limited tools, 60s timeout
-    heavy-path.ts  # Claude Code SDK subprocess, stream-json parsing
+    deep-path.ts  # Claude Code SDK subprocess, stream-json parsing
     context.ts     # Shared context assembly (memory + history + working ctx)
     index.ts       # OLD monolithic agent (preserved as fallback, not used)
   cli/             # Commander.js CLI
@@ -55,7 +55,7 @@ src/
     index.ts       # DB init, schema loading, migrations
     schema.sql     # Tables, triggers, FTS5 virtual table
   mcp/             # MCP servers
-    memory/        # Memory MCP server for SDK heavy path
+    memory/        # Memory MCP server for SDK deep path
       server.ts    # 6 tools: search, retrieve, store, working ctx, people, commitments
       stdio.ts     # stdio entrypoint (LOG_DESTINATION=stderr for clean protocol)
     slack/server.ts  # Slack tools (5 tools)
@@ -96,7 +96,7 @@ config/
   default.json     # All tunable defaults
   prompts/         # All prompt templates (*.md files)
     system.md      # Main Slack bot system prompt
-    heavy-path.md  # SDK heavy path system prompt
+    deep-path.md  # SDK deep path system prompt
     extraction.md  # Haiku fact extraction prompt
     router.md      # Haiku complexity classifier prompt
     fact-synthesis.md  # Fact dedup/enrichment (shared template with {{SOURCE_TYPE}})
@@ -106,7 +106,7 @@ config/
 ### Three-Model Architecture
 - **Haiku** (`claude-haiku-4-5-20251001`): Router + classifier + fact extraction (~$0.0002/call)
 - **Sonnet** (`claude-sonnet-4-6`): Fast path executor (~$0.01/call)
-- **Opus** (`claude-opus-4-6`): Heavy path via SDK ($0 on Max plan)
+- **Opus** (`claude-opus-4-6`): Deep path via SDK ($0 on Max plan)
 
 ### Database (node:sqlite)
 Uses Node.js built-in `node:sqlite` (DatabaseSync) — **not** better-sqlite3.
@@ -133,6 +133,12 @@ Only the owner (identified by `OWNER_SLACK_USER_ID`) can issue instructions. Eve
 Memory tools (`update_working_context`, `store_fact`, `mcp__memory__*`) are classified as reads (internal agent state, not external writes).
 
 Graduation: 10+ approvals with <5% rejection rate and zero rejections in last 5.
+
+## Bug Fixing Protocol
+- **Do NOT jump straight to coding a fix** when the owner mentions a bug or unexpected behavior.
+- First, investigate and produce a light plan: consider whether the symptom points to a deeper, more generic root cause rather than the surface-level issue described.
+- Present the diagnosis and proposed approach to the owner for confirmation before writing any code.
+- Don't make ad-hoc one-off prompt fixes — diagnose with logs first.
 
 ## Coding Conventions
 
@@ -183,8 +189,8 @@ Graduation: 10+ approvals with <5% rejection rate and zero rejections in last 5.
 3. `routeMessage()` — Haiku classifies FAST or HEAVY using full context
 4. Execute chosen path → post response → background extraction
 
-### Heavy Path Stream-JSON
-The heavy path spawns `claude --print --verbose --output-format stream-json` and parses events line by line:
+### Deep Path Stream-JSON
+The deep path spawns `claude --print --verbose --output-format stream-json` and parses events line by line:
 - `{"type":"assistant","message":{content:[{type:"tool_use",name:"Bash",...}]}}` → progress update
 - `{"type":"result","result":"..."}` → final response
 - Tool names mapped to descriptions: "Searching Gmail...", "Reading meeting transcript..."
@@ -220,12 +226,12 @@ Supports `LOG_DESTINATION=stderr` for MCP server mode.
 
 | Setting | Value | Purpose |
 |---|---|---|
-| `agent.timeoutMs` | 1,200,000 | Heavy path timeout (20 min) |
+| `agent.timeoutMs` | 1,200,000 | Deep path timeout (20 min) |
 | `agent.maxTurns` | 30 | Generic max turns |
 | `agent.fastPathMaxTurns` | 10 | Fast path tool-call turn limit |
 | `agent.fastPathTimeoutMs` | 60,000 | Fast path timeout (60s) |
 | `agent.fastPathMaxTokens` | 4,096 | Fast path response token limit |
-| `agent.heavyPathMaxTurns` | 200 | Heavy path turn limit |
+| `agent.deepPathMaxTurns` | 200 | Deep path turn limit |
 | `agent.classifierMaxTokens` | 100 | Router/classifier response limit |
 | `agent.interruptPollMs` | 2,000 | Interrupt polling interval |
 | `context.shortTermTokenBudget` | 8,000 | Slack conversation context |
@@ -247,7 +253,7 @@ Supports `LOG_DESTINATION=stderr` for MCP server mode.
 ### Memory Extraction
 After each interaction:
 - Owner's Slack message → Haiku extraction → store facts
-- Heavy path response → Haiku extraction → store synthesized facts
+- Deep path response → Haiku extraction → store synthesized facts
 - SDK can also call `store_fact` via MCP during execution
 
 ## Build Tracks
@@ -256,7 +262,7 @@ After each interaction:
 - **Track C** ✅: Google Workspace — 20 tools, OAuth, Drive sync, email extraction
 - **Track D** ✅: Memory + Embeddings — extraction, storage, retrieval, vector search
 - **Track I** ✅: Fireflies.ai — GraphQL client, sync, CLI wrapper
-- **Track J** ✅: SDK Pivot — Hybrid architecture (fast + heavy path, router, MCP server)
+- **Track J** ✅: SDK Pivot — Hybrid architecture (fast + deep path, router, MCP server)
 - **Track E** ⬜: Workflow Engine + Scheduling
 - **Track F** 🔶: Security + Training Wheels (undo system remaining)
 - **Track G** ⬜: GitHub + Filesystem + Web Research
@@ -274,15 +280,15 @@ After each interaction:
 2. Register in `createHybridAgent()` in `src/agent/hybrid.ts`
 3. Add to `READ_ACTIONS` in policy-engine.ts if it should auto-approve at trust level 1
 
-### Adding heavy-path access to a new service
+### Adding deep-path access to a new service
 1. Create CLI wrapper in `tools/` (like `tools/fireflies.ts`)
-2. Add usage examples to `config/prompts/heavy-path.md`
-3. Add `Bash(your-cli:*)` to `--allowedTools` in `heavy-path.ts`
+2. Add usage examples to `config/prompts/deep-path.md`
+3. Add `Bash(your-cli:*)` to `--allowedTools` in `deep-path.ts`
 
 ### Adding a memory MCP tool
 1. Add tool definition to `TOOLS` array in `src/mcp/memory/server.ts`
 2. Add handler function
-3. Add to `--allowedTools` in `heavy-path.ts` as `mcp__memory__tool_name`
+3. Add to `--allowedTools` in `deep-path.ts` as `mcp__memory__tool_name`
 
 ## Slack Interaction Principles
 
@@ -298,13 +304,13 @@ Task complete                → remove 🧠, delete progress, post response
 Cancel                       → remove 🧠, ✅ on cancel message
 ```
 
-### Heavy Path Progress
+### Deep Path Progress
 Stream-json events parsed in real-time → progress updates posted to Slack:
 - `Bash(gws gmail...)` → "Searching Gmail..."
 - `Bash(npx tsx tools/fireflies.ts...)` → "Searching meeting transcripts..."
 - `mcp__memory__store_fact` → "Saving to memory..."
 
-### Interrupt During Heavy Path
+### Interrupt During Deep Path
 Owner can cancel by sending "stop", "cancel", "abort", "nvm", etc. Polled every 2s. Kills SDK subprocess immediately.
 
 ## Deployment (Railway)
@@ -312,7 +318,7 @@ Owner can cancel by sending "stop", "cancel", "abort", "nvm", etc. Polled every 
 ### Environment Variables
 ```
 ANTHROPIC_API_KEY          — Fast path API access
-CLAUDE_CODE_OAUTH_TOKEN    — Heavy path Max plan auth (from `claude setup-token`)
+CLAUDE_CODE_OAUTH_TOKEN    — Deep path Max plan auth (from `claude setup-token`)
 GWS_CONFIG_B64             — gws CLI auth (from `cd ~/.config/gws && tar czf - --exclude=cache . | base64`)
 SLACK_BOT_TOKEN            — Slack bot token
 SLACK_APP_TOKEN            — Slack app-level token (Socket Mode)
@@ -347,7 +353,7 @@ railway variables set GWS_CONFIG_B64="$(cd ~/.config/gws && tar czf - --exclude=
 - Schema SQL uses triggers with `;` inside bodies — never split schema on semicolons
 - **MCP stdio server**: ALL logging must go to stderr, not stdout (corrupts JSON-RPC protocol)
 - **Docker `node:22-slim`**: Stripped of CA certificates — must `apt-get install ca-certificates` or gws/external HTTPS calls fail with TLS UnknownIssuer
-- **Heavy path strips `ANTHROPIC_API_KEY`** from subprocess env so Claude CLI uses Max plan OAuth instead of API billing
+- **Deep path strips `ANTHROPIC_API_KEY`** from subprocess env so Claude CLI uses Max plan OAuth instead of API billing
 - **One-time migrations are dangerous**: Guard keys in `agent_state` may not persist across schema recreations. The v5 reset migration was wiping all memories on every deploy — it was removed.
 - DB interfaces MUST use snake_case to match SQLite column names
 - `keytar` CJS→ESM interop: `imported.default ?? imported`

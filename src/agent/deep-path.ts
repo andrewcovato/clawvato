@@ -1,5 +1,5 @@
 /**
- * Heavy Path — Claude Code SDK integration for complex, multi-source tasks.
+ * Deep Path — Claude Code SDK integration for complex, multi-source tasks.
  *
  * Uses `claude --print` subprocess with stream-json output for real-time
  * progress updates. Parses tool calls as they happen and posts milestone
@@ -23,7 +23,7 @@ import { getPrompts } from '../prompts.js';
 import { logger } from '../logger.js';
 import type { SlackHandler } from '../slack/handler.js';
 
-export interface HeavyPathOptions {
+export interface DeepPathOptions {
   /** Data directory for the memory MCP server */
   dataDir: string;
   /** System prompt to append to SDK context */
@@ -34,7 +34,7 @@ export interface HeavyPathOptions {
   workingContext: string;
 }
 
-export interface HeavyPathResult {
+export interface DeepPathResult {
   /** The SDK's final text response */
   response: string;
   /** Whether the invocation succeeded */
@@ -73,14 +73,14 @@ function buildMcpConfig(dataDir: string): { configPath: string; cleanup: () => v
 
 /**
  * Build the system prompt addendum for the SDK.
- * Loads the base prompt from config/prompts/heavy-path.md and appends
+ * Loads the base prompt from config/prompts/deep-path.md and appends
  * dynamic context (memory, working context).
  */
-function buildSdkSystemPrompt(opts: HeavyPathOptions): string {
+function buildSdkSystemPrompt(opts: DeepPathOptions): string {
   const parts: string[] = [];
 
-  // Base prompt from external file — edit config/prompts/heavy-path.md to tune behavior
-  parts.push(getPrompts().heavyPath);
+  // Base prompt from external file — edit config/prompts/deep-path.md to tune behavior
+  parts.push(getPrompts().deepPath);
 
   if (opts.memoryContext) {
     parts.push(`\n## Memory Context\n${opts.memoryContext}`);
@@ -126,17 +126,17 @@ function describeToolUse(toolName: string, input: string): string | null {
 }
 
 /**
- * Execute a heavy-path query via the Claude Code SDK.
+ * Execute a deep-path query via the Claude Code SDK.
  *
  * Uses stream-json output to parse events in real-time and post
  * progress updates to Slack as tool calls happen.
  */
-export async function executeHeavyPath(
+export async function executeDeepPath(
   userPrompt: string,
-  opts: HeavyPathOptions,
+  opts: DeepPathOptions,
   handler?: SlackHandler,
   abortSignal?: AbortSignal,
-): Promise<HeavyPathResult> {
+): Promise<DeepPathResult> {
   const startTime = Date.now();
   const config = getConfig();
 
@@ -152,7 +152,7 @@ export async function executeHeavyPath(
       '--model', config.models.planner,
       '--mcp-config', configPath,
       '--append-system-prompt', sdkSystemPrompt,
-      '--max-turns', String(config.agent.heavyPathMaxTurns),
+      '--max-turns', String(config.agent.deepPathMaxTurns),
       // Pre-approve bash commands the SDK needs
       '--allowedTools',
       'Bash(gws:*)', 'Bash(npx:*)', 'Bash(cat:*)', 'Bash(ls:*)',
@@ -162,7 +162,7 @@ export async function executeHeavyPath(
       'mcp__memory__list_people', 'mcp__memory__list_commitments',
     ];
 
-    logger.info({ promptLength: userPrompt.length }, 'Starting heavy path SDK call');
+    logger.info({ promptLength: userPrompt.length }, 'Starting deep path SDK call');
 
     if (handler) {
       await handler.updateProgress('Starting deep analysis...');
@@ -188,7 +188,7 @@ export async function executeHeavyPath(
       };
     }
 
-    logger.info({ durationMs, responseLength: result.response.length, toolCalls: result.toolCallCount }, 'Heavy path complete');
+    logger.info({ durationMs, responseLength: result.response.length, toolCalls: result.toolCallCount }, 'Deep path complete');
 
     return {
       response: result.response,
@@ -244,7 +244,7 @@ function spawnClaudeStreaming(
     // Allow external abort (e.g., owner sends "cancel" in Slack)
     if (opts.abortSignal) {
       const onAbort = () => {
-        logger.info({ pid: proc.pid }, 'Heavy path aborted by signal');
+        logger.info({ pid: proc.pid }, 'Deep path aborted by signal');
         proc.kill('SIGTERM');
       };
       opts.abortSignal.addEventListener('abort', onAbort, { once: true });

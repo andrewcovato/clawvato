@@ -58,6 +58,7 @@ const READ_ACTIONS: RegExp[] = [
   /(?:^|_)view/i,
   /(?:^|_)sync/i,
   /(?:^|_)scan/i,
+  /(?:^|_)freebusy/i,
   // Internal agent state — not external writes, safe to auto-approve
   /^update_working_context$/i,
   /^store_fact$/i,

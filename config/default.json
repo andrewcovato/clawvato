@@ -15,10 +15,10 @@
   "agent": {
     "maxTurns": 30,
     "timeoutMs": 1200000,
-    "fastPathMaxTurns": 10,
-    "fastPathTimeoutMs": 60000,
+    "fastPathMaxTurns": 30,
+    "fastPathTimeoutMs": 300000,
     "fastPathMaxTokens": 4096,
-    "heavyPathMaxTurns": 200,
+    "deepPathMaxTurns": 200,
     "classifierMaxTokens": 100,
     "interruptPollMs": 2000
   },

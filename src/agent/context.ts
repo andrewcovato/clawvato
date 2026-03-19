@@ -1,5 +1,5 @@
 /**
- * Shared Context Assembly — used by both fast path and heavy path.
+ * Shared Context Assembly — used by both fast path and deep path.
  *
  * Builds the context that gets passed to the agent: memory retrieval,
  * working context, conversation history, and system prompt.

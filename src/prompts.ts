@@ -89,7 +89,7 @@ interface LoadedPrompts {
   reflection: string;
   interruptClassification: string;
   meetingExtraction: string;
-  heavyPath: string;
+  deepPath: string;
   router: string;
   factSynthesis: string;
 }
@@ -115,7 +115,7 @@ export function loadPrompts(): LoadedPrompts {
     reflection: 'reflection.md',
     interruptClassification: 'interrupt-classification.md',
     meetingExtraction: 'meeting-extraction.md',
-    heavyPath: 'heavy-path.md',
+    deepPath: 'deep-path.md',
     router: 'router.md',
     factSynthesis: 'fact-synthesis.md',
   };

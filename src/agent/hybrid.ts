@@ -1,10 +1,10 @@
 /**
- * Hybrid Agent — orchestrates fast path (API) and heavy path (SDK).
+ * Hybrid Agent — orchestrates fast path (API) and deep path (SDK).
  *
  * Replaces the old monolithic createAgent() with a two-path architecture:
- * - Haiku router classifies each message as fast or heavy
+ * - Haiku router classifies each message as fast or deep
  * - Fast path: direct API, limited tools, 10 turns, 60s timeout
- * - Heavy path: Claude Code SDK subprocess, MCP memory, gws CLI, Fireflies CLI
+ * - Deep path: Claude Code SDK subprocess, MCP memory, gws CLI, Fireflies CLI
  *
  * Both paths share:
  * - Memory retrieval + working context (via context.ts)
@@ -24,10 +24,12 @@ import { google } from 'googleapis';
 import { getGoogleAuth } from '../google/auth.js';
 import { createGoogleTools } from '../google/tools.js';
 import { createSlackTools, type SlackTool, type ToolHandlerResult } from '../mcp/slack/server.js';
+import { FirefliesClient } from '../fireflies/api.js';
+import { createFirefliesTools } from '../fireflies/tools.js';
 import { assembleContext, loadWorkingContext } from './context.js';
 import { routeMessage, type RouterResult } from './router.js';
 import { executeFastPath, createFastPathMemoryTools } from './fast-path.js';
-import { executeHeavyPath } from './heavy-path.js';
+import { executeDeepPath } from './deep-path.js';
 import { extractFacts, storeExtractionResult } from '../memory/extractor.js';
 import { maybeReflect } from '../memory/reflection.js';
 import { classifyInterrupt, generateClarificationMessage } from '../slack/interrupt-classifier.js';
@@ -46,7 +48,7 @@ export interface HybridAgentOptions {
 }
 
 /**
- * Create the hybrid agent with both fast and heavy paths.
+ * Create the hybrid agent with both fast and deep paths.
  */
 export async function createHybridAgent(options: HybridAgentOptions): Promise<HybridAgent> {
   const config = getConfig();
@@ -54,37 +56,47 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
   const anthropicClient = new Anthropic({ apiKey });
 
   // ── Build fast-path tool registry ──
-  // Only memory + single-source lookup tools
+  // Memory + read-only lookups across all sources
   const db = getDb();
   const fastPathTools = createFastPathMemoryTools(db);
 
-  // Add Slack channel history (single-source lookup)
+  // Slack tools — channel history + search
   const slackTools = createSlackTools(options.botClient, options.userClient);
   const channelHistoryTool = slackTools.find(t => t.definition.name === 'slack_get_channel_history');
-  if (channelHistoryTool) {
-    fastPathTools.push(channelHistoryTool);
-  }
+  if (channelHistoryTool) fastPathTools.push(channelHistoryTool);
+  const slackSearch = slackTools.find(t => t.definition.name === 'slack_search_messages');
+  if (slackSearch) fastPathTools.push(slackSearch);
 
-  // Add Google Calendar tools if available (single-source lookups)
+  // Google tools — read-only calendar, gmail, drive
   const googleAuth = await getGoogleAuth();
   if (googleAuth) {
     const googleTools = createGoogleTools(googleAuth, config.google?.agentEmail);
-    const calendarTools = googleTools.filter(t =>
-      t.definition.name === 'google_calendar_list_events' ||
-      t.definition.name === 'google_calendar_get_event'
+    const FAST_PATH_GOOGLE_TOOLS = [
+      'google_calendar_list_events',
+      'google_calendar_get_event',
+      'google_calendar_freebusy',
+      'google_gmail_search',
+      'google_gmail_read',
+      'google_drive_search',
+      'google_drive_get_file',
+    ];
+    const fastGoogleTools = googleTools.filter(t =>
+      FAST_PATH_GOOGLE_TOOLS.includes(t.definition.name)
     );
-    fastPathTools.push(...calendarTools);
-
-    // Add gmail_search (thread listing only — not reading)
-    const gmailSearch = googleTools.find(t => t.definition.name === 'google_gmail_search');
-    if (gmailSearch) fastPathTools.push(gmailSearch);
-
-    logger.info({ fastPathGoogleTools: calendarTools.length + (gmailSearch ? 1 : 0) }, 'Google tools loaded for fast path');
+    fastPathTools.push(...fastGoogleTools);
+    logger.info({ fastPathGoogleTools: fastGoogleTools.map(t => t.definition.name) }, 'Google tools loaded for fast path');
   }
 
-  // Add Slack search for fast path
-  const slackSearch = slackTools.find(t => t.definition.name === 'slack_search_messages');
-  if (slackSearch) fastPathTools.push(slackSearch);
+  // Fireflies tools — search + summary (lightweight, read-only)
+  const firefliesApiKey = process.env.FIREFLIES_API_KEY ?? await getCredential('fireflies-api-key').catch(() => undefined);
+  if (firefliesApiKey) {
+    const ffClient = new FirefliesClient(firefliesApiKey);
+    const ffTools = createFirefliesTools(ffClient);
+    const FAST_PATH_FF_TOOLS = ['fireflies_search_meetings', 'fireflies_get_summary'];
+    const fastFFTools = ffTools.filter(t => FAST_PATH_FF_TOOLS.includes(t.definition.name));
+    fastPathTools.push(...fastFFTools);
+    logger.info({ fastPathFirefliesTools: fastFFTools.map(t => t.definition.name) }, 'Fireflies tools loaded for fast path');
+  }
 
   // Resolve bot user ID
   let botUserId: string | undefined;
@@ -156,21 +168,21 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
         if (!isRealSlackMessage) {
           routing = { decision: 'fast', confidence: 100, reasoning: 'Startup crawl — fast path only' };
         } else {
-          // ── Route: fast or heavy? Router sees full context (same as both paths) ──
+          // ── Route: fast or deep? Router sees full context (same as both paths) ──
           routing = await routeMessage(anthropicClient, context.userPrompt);
         }
         logger.info({ decision: routing.decision, confidence: routing.confidence }, 'Routing decision');
 
-        if (routing.decision === 'heavy') {
-          // ── Heavy Path: Claude Code SDK ──
+        if (routing.decision === 'deep') {
+          // ── Deep Path: Claude Code SDK ──
           if (isRealSlackMessage) {
             await handler.updateProgress('Deep analysis in progress...');
           }
 
           // Set up abort controller so interrupts can kill the SDK subprocess
-          const heavyAbort = new AbortController();
+          const deepAbort = new AbortController();
 
-          // Poll for interrupts while heavy path runs — any message from owner kills the subprocess
+          // Poll for interrupts while deep path runs — any message from owner kills the subprocess
           const interruptPoll = setInterval(async () => {
             const interrupt = handler.drainInterrupt();
             if (interrupt) {
@@ -178,18 +190,18 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
               // Only abort on clear cancel signals
               const isCancelIntent = /^(stop|cancel|nevermind|never mind|scratch that|abort|quit|nvm)/.test(text);
               if (isCancelIntent) {
-                logger.info({ text: interrupt.text.slice(0, 80) }, 'Cancel interrupt during heavy path — aborting');
-                heavyAbort.abort();
+                logger.info({ text: interrupt.text.slice(0, 80) }, 'Cancel interrupt during deep path — aborting');
+                deepAbort.abort();
                 try { await handler.ackInterrupt(batch.channel, interrupt.ts); } catch { /* */ }
               } else {
                 // Non-cancel interrupt — log but don't abort (might be additive context)
-                logger.info({ text: interrupt.text.slice(0, 80) }, 'Non-cancel interrupt during heavy path — ignoring');
+                logger.info({ text: interrupt.text.slice(0, 80) }, 'Non-cancel interrupt during deep path — ignoring');
               }
             }
           }, config.agent.interruptPollMs);
 
           const workingContext = loadWorkingContext(db);
-          const result = await executeHeavyPath(
+          const result = await executeDeepPath(
             context.userPrompt,
             {
               dataDir: config.dataDir,
@@ -198,21 +210,21 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
               workingContext,
             },
             handler,
-            heavyAbort.signal,
+            deepAbort.signal,
           );
 
           clearInterval(interruptPoll);
 
-          if (heavyAbort.signal.aborted) {
+          if (deepAbort.signal.aborted) {
             // Owner cancelled — acknowledge and stop
             finalResponse = 'Cancelled.';
-            logger.info({ durationMs: result.durationMs, toolCalls: result.durationMs }, 'Heavy path cancelled by owner');
+            logger.info({ durationMs: result.durationMs, toolCalls: result.durationMs }, 'Deep path cancelled by owner');
           } else if (result.success && result.response) {
             finalResponse = result.response;
           } else {
-            // Heavy path failed — notify user and try fast path
+            // Deep path failed — notify user and try fast path
             const errorDetail = result.error?.slice(0, 200) ?? 'unknown error';
-            logger.warn({ error: errorDetail, durationMs: result.durationMs }, 'Heavy path failed');
+            logger.warn({ error: errorDetail, durationMs: result.durationMs }, 'Deep path failed');
 
             if (isRealSlackMessage) {
               await handler.updateProgress(`Deep analysis failed — trying simpler approach...`);
@@ -294,10 +306,10 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
             });
         }
 
-        // Extract facts from heavy path response — the SDK reads emails/meetings/files
+        // Extract facts from deep path response — the SDK reads emails/meetings/files
         // via CLI tools that bypass our extraction hooks, so we extract from its output.
         // This is actually better: the SDK already synthesized the content.
-        if (finalResponse && finalResponse.length > 50 && routing?.decision === 'heavy') {
+        if (finalResponse && finalResponse.length > 50 && routing?.decision === 'deep') {
           const responseSource = `sdk:${batch.channel}:${lastMsg.ts}`;
           extractFacts(anthropicClient, config.models.classifier, finalResponse, responseSource)
             .then(async result => {
@@ -305,13 +317,13 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
                 const stored = await storeExtractionResult(db, result, responseSource);
                 logger.info(
                   { facts: stored.memoriesStored, people: stored.peopleStored },
-                  'Heavy path response extraction complete',
+                  'Deep path response extraction complete',
                 );
                 await maybeReflect(db, anthropicClient, config.models.classifier);
               }
             })
             .catch(err => {
-              logger.debug({ error: err }, 'Heavy path response extraction failed');
+              logger.debug({ error: err }, 'Deep path response extraction failed');
             });
         }
 
