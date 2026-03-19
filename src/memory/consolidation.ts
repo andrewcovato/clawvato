@@ -19,6 +19,7 @@ import { getConfig } from '../config.js';
 import { generateId } from '../db/index.js';
 import { contentSimilarity } from './extractor.js';
 import { deleteEmbedding, insertMemory, findDuplicates, type Memory } from './store.js';
+import { backupToGoogleDrive } from './backup.js';
 
 // Memory consolidation tunables loaded from config (memory.*)
 
@@ -76,6 +77,11 @@ export function consolidate(db: DatabaseSync): ConsolidationResult {
 
   // ── 5. Category reorganization (weekly cadence) ──
   reorganizeCategories(db);
+
+  // ── 6. Backup to Google Drive (fire-and-forget) ──
+  backupToGoogleDrive().catch(err => {
+    logger.debug({ error: err }, 'Drive backup failed during consolidation — non-critical');
+  });
 
   const memoriesProcessed = merged + decayed + archived;
 
