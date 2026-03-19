@@ -14,7 +14,7 @@ import { getConfig } from '../config.js';
 import { getDb, closeDb } from '../db/index.js';
 import { hasCredential, requireCredential } from '../credentials.js';
 import { createSlackConnection } from '../slack/socket-mode.js';
-import { createAgent } from '../agent/index.js';
+import { createHybridAgent } from '../agent/hybrid.js';
 import { shouldConsolidate, consolidate } from '../memory/consolidation.js';
 import type { WebClient } from '@slack/web-api';
 
@@ -83,8 +83,8 @@ export async function startAgent(): Promise<void> {
 
   const slack = await createSlackConnection({ appToken, botToken, userToken });
 
-  // ── Create the Agent ──
-  const agent = await createAgent({
+  // ── Create the Hybrid Agent (fast path + heavy path) ──
+  const agent = await createHybridAgent({
     botClient: slack.botClient,
     userClient: slack.userClient,
   });

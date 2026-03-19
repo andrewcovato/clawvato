@@ -86,7 +86,9 @@ interface LoadedPrompts {
   interruptClassification: string;
   meetingExtraction: string;
   emailExtraction: string;
+  /** @deprecated Will be removed in SDK pivot cleanup */
   searchPlanning: string;
+  /** @deprecated Will be removed in SDK pivot cleanup */
   searchRelevance: string;
 }
 
