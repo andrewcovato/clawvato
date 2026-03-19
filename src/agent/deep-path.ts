@@ -153,12 +153,12 @@ export async function executeDeepPath(
       '--mcp-config', configPath,
       '--append-system-prompt', sdkSystemPrompt,
       '--max-turns', String(config.agent.deepPathMaxTurns),
-      // Pre-approve bash commands the SDK needs
+      // Pre-approve tools: bash for research + file writes, MCP for memory reads
+      // Memory writes happen via findings file (/tmp/clawvato-findings.json) + background processor
       '--allowedTools',
-      'Bash(gws:*)', 'Bash(npx:*)', 'Bash(cat:*)', 'Bash(ls:*)',
-      'Read', 'Glob', 'Grep',
+      'Bash(gws:*)', 'Bash(npx:*)', 'Bash(cat:*)', 'Bash(ls:*)', 'Bash(echo:*)',
+      'Read', 'Write', 'Glob', 'Grep',
       'mcp__memory__search_memory', 'mcp__memory__retrieve_context',
-      'mcp__memory__store_fact', 'mcp__memory__update_working_context',
       'mcp__memory__list_people', 'mcp__memory__list_commitments',
     ];
 

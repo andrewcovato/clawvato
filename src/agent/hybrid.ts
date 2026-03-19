@@ -15,6 +15,8 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import type { WebClient } from '@slack/web-api';
+import { readFileSync, existsSync, unlinkSync } from 'node:fs';
+import type { DatabaseSync } from 'node:sqlite';
 import { logger } from '../logger.js';
 import { getConfig } from '../config.js';
 import { requireCredential, getCredential } from '../credentials.js';
@@ -31,8 +33,11 @@ import { retrieveContext } from '../memory/retriever.js';
 import { routeMessage, type RouterResult } from './router.js';
 import { executeFastPath, createFastPathMemoryTools } from './fast-path.js';
 import { executeDeepPath } from './deep-path.js';
-import { extractFacts, storeExtractionResult } from '../memory/extractor.js';
+import { extractFacts, storeExtractionResult, type ExtractedFact } from '../memory/extractor.js';
 import { maybeReflect } from '../memory/reflection.js';
+import { findOrCreateCategory, insertMemory, findDuplicates, supersedeMemory, deleteEmbedding, hasVectorSupport, insertEmbedding } from '../memory/store.js';
+import { contentSimilarity } from '../memory/extractor.js';
+import { embedBatch } from '../memory/embeddings.js';
 import { classifyInterrupt, generateClarificationMessage } from '../slack/interrupt-classifier.js';
 import type { SlackHandler } from '../slack/handler.js';
 import type { AccumulatedBatch } from '../slack/event-queue.js';
@@ -46,6 +51,117 @@ export interface HybridAgentOptions {
   apiKey?: string;
   botClient: WebClient;
   userClient?: WebClient;
+}
+
+const FINDINGS_FILE = '/tmp/clawvato-findings.json';
+
+/**
+ * Process the findings file written by the deep path subprocess.
+ * Parses JSON, deduplicates, normalizes categories, and stores to DB.
+ * Runs as a background task after deep path completes.
+ */
+async function processDeepPathFindings(
+  db: DatabaseSync,
+  source: string,
+): Promise<{ stored: number; skipped: number; errors: number }> {
+  let stored = 0;
+  let skipped = 0;
+  let errors = 0;
+
+  if (!existsSync(FINDINGS_FILE)) {
+    logger.info('No findings file from deep path — skipping');
+    return { stored, skipped, errors };
+  }
+
+  try {
+    const raw = readFileSync(FINDINGS_FILE, 'utf-8');
+    // Clean up: handle markdown wrapping, multiple JSON arrays, JSONL
+    const cleaned = raw
+      .replace(/^```json?\s*/gim, '')
+      .replace(/\s*```$/gm, '')
+      .trim();
+
+    let findings: Array<Record<string, unknown>>;
+    try {
+      findings = JSON.parse(cleaned);
+    } catch {
+      // Try parsing as JSONL (one JSON object per line)
+      findings = cleaned
+        .split('\n')
+        .filter(line => line.trim().startsWith('{'))
+        .map(line => {
+          try { return JSON.parse(line); } catch { return null; }
+        })
+        .filter((f): f is Record<string, unknown> => f !== null);
+    }
+
+    if (!Array.isArray(findings) || findings.length === 0) {
+      logger.warn({ rawLength: raw.length }, 'Findings file empty or unparseable');
+      return { stored, skipped, errors };
+    }
+
+    logger.info({ findingsCount: findings.length }, 'Processing deep path findings');
+
+    const newMemoryIds: { id: string; content: string }[] = [];
+
+    for (const finding of findings) {
+      try {
+        const content = String(finding.content ?? '');
+        if (!content || content.length < 10) continue;
+
+        const type = findOrCreateCategory(db, String(finding.type ?? 'fact'));
+        const entities = Array.isArray(finding.entities) ? finding.entities.map(String) : [];
+        const importance = Math.max(1, Math.min(10, Math.round(Number(finding.importance) || 5)));
+        const confidence = Math.max(0, Math.min(1, Number(finding.confidence) || 0.7));
+        const factSource = finding.source ? `${source}:${finding.source}` : source;
+
+        // Dedup check
+        const duplicates = findDuplicates(db, content, type);
+        const closeMatch = duplicates.find(d => contentSimilarity(d.content, content) > 0.8);
+
+        if (closeMatch) {
+          if (confidence > closeMatch.confidence) {
+            // Higher confidence — supersede
+            const newId = insertMemory(db, { type, content, source: factSource, importance, confidence, entities });
+            supersedeMemory(db, closeMatch.id, newId);
+            deleteEmbedding(db, closeMatch.id);
+            newMemoryIds.push({ id: newId, content });
+            stored++;
+          } else {
+            skipped++;
+          }
+        } else {
+          const newId = insertMemory(db, { type, content, source: factSource, importance, confidence, entities });
+          newMemoryIds.push({ id: newId, content });
+          stored++;
+        }
+      } catch (err) {
+        errors++;
+        logger.debug({ error: err, finding: JSON.stringify(finding).slice(0, 200) }, 'Failed to process finding');
+      }
+    }
+
+    // Batch embed all new memories
+    if (newMemoryIds.length > 0 && hasVectorSupport(db)) {
+      try {
+        const texts = newMemoryIds.map(m => m.content);
+        const embeddings = await embedBatch(texts);
+        for (let i = 0; i < newMemoryIds.length; i++) {
+          insertEmbedding(db, newMemoryIds[i].id, embeddings[i]);
+        }
+        logger.debug({ count: newMemoryIds.length }, 'Findings embeddings stored');
+      } catch (err) {
+        logger.debug({ error: err }, 'Findings embedding failed — stored without vectors');
+      }
+    }
+  } catch (err) {
+    logger.warn({ error: err }, 'Failed to process findings file');
+  } finally {
+    // Clean up the findings file
+    try { unlinkSync(FINDINGS_FILE); } catch { /* */ }
+  }
+
+  return { stored, skipped, errors };
 }
 
 /**
@@ -464,18 +580,14 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
             });
         }
 
-        // Extract facts from deep path response — the SDK reads emails/meetings/files
-        // via CLI tools that bypass our extraction hooks, so we extract from its output.
-        // This is actually better: the SDK already synthesized the content.
-        if (finalResponse && finalResponse.length > 50 && routing?.decision === 'deep') {
-          const responseSource = `sdk:${batch.channel}:${lastMsg.ts}`;
-          extractFacts(anthropicClient, config.models.classifier, finalResponse, responseSource, db)
+        // Process findings file from deep path (Opus writes findings to /tmp/clawvato-findings.json)
+        if (routing?.decision === 'deep') {
+          processDeepPathFindings(db, `deep:${batch.channel}:${lastMsg.ts}`)
             .then(async result => {
-              if (result.facts.length > 0 || result.people.length > 0) {
-                const stored = await storeExtractionResult(db, result, responseSource);
+              if (result.stored > 0) {
                 logger.info(
-                  { facts: stored.memoriesStored, people: stored.peopleStored },
-                  'Deep path response extraction complete',
+                  { stored: result.stored, skipped: result.skipped, errors: result.errors },
+                  'Deep path findings processed into memory',
                 );
                 await maybeReflect(db, anthropicClient, config.models.classifier);
               }
