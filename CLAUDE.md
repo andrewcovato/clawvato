@@ -1,106 +1,136 @@
 # CLAUDE.md — Clawvato Project Guide
 
 ## Project Overview
-Clawvato is an always-on personal AI agent that runs locally on macOS. It acts as a "chief of staff" — managing Slack, email, calendar, Drive, and GitHub on behalf of its owner. Built on the Claude Agent SDK with MCP (Model Context Protocol) for tool integration.
+Clawvato is an always-on personal AI agent deployed on Railway. It acts as a "chief of staff" — managing Slack, email, calendar, Drive, and meetings on behalf of its owner. Uses a **hybrid architecture**: Haiku routes each message to either a fast path (direct API, ~2s) or a heavy path (Claude Code SDK subprocess with Opus, ~1-5 min, free on Max plan).
 
 ## Quick Reference
 
 ```bash
-npm install                            # Install dependencies (first time / after pulling)
+npm install                            # Install dependencies
 npm run build                          # TypeScript compile
-npm test                               # Run all tests (vitest) — 14 files, 176 tests
+npm test                               # Run all tests (vitest) — 24 files, 311 tests
 npm run lint                           # Type-check without emitting
 npx tsx src/cli/index.ts setup         # First-time interactive setup wizard
-npx tsx src/cli/index.ts start         # Start agent (Socket Mode, ~11s to connect)
+npx tsx src/cli/index.ts start         # Start agent (Socket Mode)
 npx tsx src/cli/index.ts status        # Check system status
 ```
 
 ## Architecture
 
+### Hybrid Agent — Two-Path Design
+
+```
+Slack message arrives
+  → EventQueue accumulates (4s debounce)
+  → createHybridAgent.processBatch()
+    → assembleContext() — memory + working ctx + conversation history
+    → routeMessage() — Haiku classifier: FAST or HEAVY?
+    ├── FAST: executeFastPath() — direct Anthropic API
+    │   Model: Sonnet | 10 turns | 60s timeout | ~$0.01/call
+    │   Tools: search_memory, update_working_context,
+    │          calendar list/get, gmail_search, slack history/search
+    └── HEAVY: executeHeavyPath() — claude --print subprocess
+        Model: Opus | 200 turns | 20min timeout | $0 on Max plan
+        MCP: Memory server (stdio)
+        CLI: gws (Google), tools/fireflies.ts (meetings)
+        Output: stream-json with real-time progress to Slack
+        Interrupt: owner can cancel mid-execution
+```
+
 ### Directory Structure
 ```
 src/
-  agent/         # Claude Agent SDK bootstrap + agent orchestration
-    index.ts     # Agent creation, Anthropic client setup, batch processing
-    hooks.ts     # PreToolUse/PostToolUse hook factories, interrupt bridge
-  cli/           # Commander.js CLI (setup, start, status, config, credentials, audit, trust-level)
-    index.ts     # Command registration
-    setup.ts     # Interactive setup wizard (credentials + connection test)
-    start.ts     # Agent startup orchestration
-    status.ts    # Status reporting
-  db/            # SQLite via node:sqlite (DatabaseSync) + FTS5 + schema.sql
-  hooks/         # PreToolUse / PostToolUse hooks (audit, security)
-    pre-tool-use.ts   # Sender verify, rate limit, path validate, training wheels
-    post-tool-use.ts  # Audit logging, output sanitization, secret scanning
-    audit-logger.ts   # Immutable action trail + graduation recording
-  security/      # sender-verify, output-sanitizer, path-validator, rate-limiter
-  slack/         # Slack event handling and interaction model
-    event-queue.ts       # Message accumulation with debounce + typing awareness
-    handler.ts           # Slack event routing, reaction lifecycle
+  agent/           # Hybrid agent orchestration
+    hybrid.ts      # Main orchestrator — routes to fast/heavy path
+    router.ts      # Haiku complexity classifier (FAST vs HEAVY)
+    fast-path.ts   # Direct API loop, limited tools, 60s timeout
+    heavy-path.ts  # Claude Code SDK subprocess, stream-json parsing
+    context.ts     # Shared context assembly (memory + history + working ctx)
+    index.ts       # OLD monolithic agent (preserved as fallback, not used)
+  cli/             # Commander.js CLI
+    start.ts       # Startup — creates hybrid agent, wires Slack handler
+    setup.ts       # Interactive setup wizard
+    status.ts      # Status reporting
+  db/              # SQLite via node:sqlite (DatabaseSync) + FTS5
+    index.ts       # DB init, schema loading, migrations
+    schema.sql     # Tables, triggers, FTS5 virtual table
+  mcp/             # MCP servers
+    memory/        # Memory MCP server for SDK heavy path
+      server.ts    # 6 tools: search, retrieve, store, working ctx, people, commitments
+      stdio.ts     # stdio entrypoint (LOG_DESTINATION=stderr for clean protocol)
+    slack/server.ts  # Slack tools (5 tools)
+  memory/          # Memory system (crown jewel)
+    store.ts       # CRUD for memories + people tables
+    retriever.ts   # Token-budgeted context retrieval (FTS5 + vector hybrid)
+    extractor.ts   # Haiku fact extraction from conversations
+    embeddings.ts  # all-MiniLM-L6-v2 vector embeddings
+    reflection.ts  # Synthesized insights from memory accumulation
+    consolidation.ts # Duplicate merge, decay, archival
+  security/        # sender-verify, output-sanitizer, path-validator, rate-limiter
+  slack/           # Slack event handling
+    handler.ts     # Event routing, reaction lifecycle, interrupt buffer
+    event-queue.ts # Message accumulation with debounce + typing awareness
     interrupt-classifier.ts  # Four-way interrupt classification (Haiku)
-    socket-mode.ts       # @slack/bolt Socket Mode adapter, WebClient creation
-  mcp/           # MCP server configurations
-    slack/server.ts      # In-process Slack MCP server (5 tools)
-  training-wheels/  # Trust level enforcement + pattern graduation
+    socket-mode.ts # @slack/bolt Socket Mode adapter
+  training-wheels/ # Trust level enforcement + pattern graduation
     policy-engine.ts  # Trust level policy evaluation
     graduation.ts     # Pattern tracking + graduation criteria
-  memory/        # Memory retrieval + consolidation (NOT YET IMPLEMENTED)
-  workflows/     # Durable workflow state machine (NOT YET IMPLEMENTED)
-  proactive/     # Proactive behaviors (NOT YET IMPLEMENTED)
-  config.ts      # Zod-validated config, file + env fallback
-  credentials.ts # macOS Keychain via keytar, env fallback
-  logger.ts      # Pino structured logging with lazy init proxy
-  index.ts       # Public API re-exports
-tests/
-  agent/         # Agent hooks tests
-  cli/           # Setup wizard tests
-  mcp/           # Slack MCP server tests
-  security/      # Output sanitizer, path validator, rate limiter, sender verify tests
-  slack/         # Event queue, interrupt classifier, socket mode tests
-  training-wheels/  # Policy engine, graduation tests
-  config.test.ts # Config loading/validation tests
-  db.test.ts     # Database schema, CRUD, FTS5 tests
+  google/          # Google Workspace tools + OAuth
+    tools.ts       # 20 tools (calendar, gmail, drive)
+    auth.ts        # OAuth2 setup
+    drive-sync.ts  # Drive file extraction + sync
+    email-scan.ts  # Email extraction pipeline (legacy, SDK replaces)
+  fireflies/       # Fireflies.ai meeting transcripts
+    api.ts         # GraphQL client
+    tools.ts       # 4 tool definitions
+    sync.ts        # Meeting sync + extraction
+  search/          # Cross-source search (legacy, SDK replaces)
+  hooks/           # PreToolUse / PostToolUse hooks
+  config.ts        # Zod-validated config
+  credentials.ts   # macOS Keychain via keytar, env fallback
+  logger.ts        # Pino logging (stderr mode for MCP)
+  prompts.ts       # Prompt loader from config/prompts/*.md
+tools/
+  fireflies.ts     # Fireflies CLI wrapper for SDK bash access
+scripts/
+  docker-entrypoint.sh  # Railway startup (auth persistence, gws config)
 config/
-  default.json   # Default configuration values
-  launchd.plist  # macOS process management
-docs/
-  BUILD_PLAN.md  # 8-track implementation plan
-  MEMORY_ARCHITECTURE.md  # Memory system design
-  RESEARCH_SYNTHESIS.md   # Research findings
-  SPEC_INTEGRATIONS.md    # Integration specs
-  SPEC_MEMORY_V2.md       # Memory v2 spec
+  default.json     # All tunable defaults
+  prompts/         # All prompt templates (*.md files)
+    system.md      # Main Slack bot system prompt
+    heavy-path.md  # SDK heavy path system prompt
+    extraction.md  # Haiku fact extraction prompt
+    + 8 more
 ```
 
 ### Three-Model Architecture
-- **Haiku** (`claude-haiku-4-5-20251001`): Classifier — intent classification, importance scoring, fact extraction
-- **Opus** (`claude-opus-4-6`): Planner — action planning, reflection, complex reasoning
-- **Sonnet** (`claude-sonnet-4-6`): Executor — tool calls, action execution
+- **Haiku** (`claude-haiku-4-5-20251001`): Router + classifier + fact extraction (~$0.0002/call)
+- **Sonnet** (`claude-sonnet-4-6`): Fast path executor (~$0.01/call)
+- **Opus** (`claude-opus-4-6`): Heavy path via SDK ($0 on Max plan)
 
 ### Database (node:sqlite)
-Uses Node.js built-in `node:sqlite` (DatabaseSync) — **not** better-sqlite3. This avoids native compilation dependencies.
+Uses Node.js built-in `node:sqlite` (DatabaseSync) — **not** better-sqlite3.
 
 Key patterns:
 - Return types from `.get()` / `.all()` are `Record<string, SQLOutputValue>` — always cast with `as unknown as YourType`
 - Schema loaded from `src/db/schema.sql` via single `db.exec()` call (do NOT split on `;` — breaks trigger bodies)
-- Tables: memories, people, actions, action_patterns, workflows, consolidation_runs, plugins, schema_version
+- Tables: memories, people, actions, action_patterns, documents, agent_state, schema_version
 - FTS5 virtual table `memories_fts` with auto-sync triggers
+- Optional: `memories_vec` (sqlite-vec, 384-dim vectors)
 
 ### Security Model — Single-Principal Authority
-Only the owner (identified by `OWNER_SLACK_USER_ID`) can issue instructions. Everything else is **untrusted data**, including:
-- Messages from other Slack users
-- Email content
-- Webpage content
-- File contents
+Only the owner (identified by `OWNER_SLACK_USER_ID`) can issue instructions. Everything else is **untrusted data**.
 
-Security hooks enforce this at runtime:
 - **PreToolUse**: sender verification, rate limiting, path validation
 - **PostToolUse**: audit logging, output secret scanning
 
 ### Training Wheels (Trust Levels 0-3)
 - **Level 0**: All actions require confirmation
-- **Level 1**: Read-only actions auto-approved
+- **Level 1** (current): Read-only + internal memory writes auto-approved
 - **Level 2**: Graduated patterns auto-approved
 - **Level 3**: Most actions auto-approved (destructive still confirmed)
+
+Memory tools (`update_working_context`, `store_fact`, `mcp__memory__*`) are classified as reads (internal agent state, not external writes).
 
 Graduation: 10+ approvals with <5% rejection rate and zero rejections in last 5.
 
@@ -109,10 +139,9 @@ Graduation: 10+ approvals with <5% rejection rate and zero rejections in last 5.
 ### Prompts
 - **All prompts MUST live in `config/prompts/*.md`** — never hardcode prompt text in TypeScript source files.
 - Prompts are loaded at startup via `src/prompts.ts` (`loadPrompts()` / `getPrompts()`).
-- Use `{{VARIABLE}}` placeholders for dynamic values (resolved at load time from `TEMPLATE_VARIABLES`).
-- Dynamic context (memory, working context, conversation history) is appended at runtime — the prompt file contains only the static instructions.
+- Use `{{VARIABLE}}` placeholders for dynamic values.
+- Dynamic context (memory, working context, conversation history) is appended at runtime.
 - To add a new prompt: create the `.md` file, add the key to `LoadedPrompts` interface and `files` map in `src/prompts.ts`.
-- This makes prompts tunable without code changes and keeps behavior visible in version control.
 
 ### TypeScript
 - ESM modules (`"type": "module"` in package.json)
@@ -135,12 +164,33 @@ Graduation: 10+ approvals with <5% rejection rate and zero rejections in last 5.
 - Test files: `tests/**/*.test.ts`
 - Use temp directories for DB/config tests (`mkdtempSync` + cleanup in `afterEach`)
 - Security tests are pure functions — no I/O needed
-- Run: `npm test` or `npx vitest run`
+- **24 test files, 311 tests, all passing**
 
 ## Important Patterns
 
+### Hybrid Agent Flow
+1. Slack message → EventQueue (4s debounce) → `hybrid.processBatch()`
+2. `assembleContext()` builds shared context (memory + conversation + working ctx)
+3. `routeMessage()` — Haiku classifies FAST or HEAVY using full context
+4. Execute chosen path → post response → background extraction
+
+### Heavy Path Stream-JSON
+The heavy path spawns `claude --print --verbose --output-format stream-json` and parses events line by line:
+- `{"type":"assistant","message":{content:[{type:"tool_use",name:"Bash",...}]}}` → progress update
+- `{"type":"result","result":"..."}` → final response
+- Tool names mapped to descriptions: "Searching Gmail...", "Reading meeting transcript..."
+
+### MCP Server stdio Protocol
+The Memory MCP server MUST NOT write to stdout (JSON-RPC channel). Set `LOG_DESTINATION=stderr` before any imports in `stdio.ts`. The logger checks this env var and redirects pino to fd 2.
+
+### Context Assembly (`context.ts`)
+Both paths share the same assembled context:
+- Working context from `agent_state` table (1000 token budget)
+- Long-term memory via `retrieveContext()` (1500 token budget)
+- Conversation history from Slack API (8000 token budget)
+- New message
+
 ### Lazy Logger Proxy
-The logger uses a Proxy to defer initialization until first use, avoiding circular dependency issues with config:
 ```typescript
 export const logger = new Proxy({} as pino.Logger, {
   get(_target, prop) {
@@ -149,224 +199,138 @@ export const logger = new Proxy({} as pino.Logger, {
   },
 });
 ```
+Supports `LOG_DESTINATION=stderr` for MCP server mode.
 
 ### Config Loading Order
-1. `config/default.json` (baked defaults in code)
-2. `~/.clawvato/config.json` (user overrides, created by `clawvato config set`)
-3. Environment variables (`ANTHROPIC_API_KEY`, `LOG_LEVEL`, etc.)
-4. CLI flags (passed to `loadConfig()`)
+1. `config/default.json` (baked defaults)
+2. `~/.clawvato/config.json` (user overrides)
+3. Environment variables
+4. CLI flags
 
-### Credential Resolution
-1. macOS Keychain via `keytar` (service: `clawvato`) — uses CJS→ESM interop (`imported.default ?? imported`)
-2. Environment variable fallback (e.g., `ANTHROPIC_API_KEY`)
-3. Throws if neither found (via `requireCredential()`)
+### Context Limits (all in `config/default.json`)
 
-### Context Limits (tunable constants in `src/agent/index.ts`)
-These control how much context the agent sees on each interaction. Centralized for easy tuning.
-
-**Agent loop** (`src/agent/index.ts`):
-| Constant | Value | Purpose |
+| Setting | Value | Purpose |
 |---|---|---|
-| `AGENT_TIMEOUT_MS` | 300,000 | Max time per interaction (5 min, accommodates bulk sync) |
-| `MAX_TURNS` | 15 | Max tool-call turns per interaction |
-| `SHORT_TERM_MESSAGE_LIMIT` | 50 | Slack messages to fetch per interaction |
-| `SHORT_TERM_MSG_CHAR_LIMIT` | 1000 | Max chars per Slack message |
-| `SHORT_TERM_TOKEN_BUDGET` | 2000 | Token cap for Slack conversation context |
-| `LONG_TERM_TOKEN_BUDGET` | 1500 | Token cap for DB memory retrieval |
-| `WORKING_CONTEXT_TOKEN_BUDGET` | 1000 | Token cap for working context scratch pad |
+| `agent.timeoutMs` | 1,200,000 | Heavy path timeout (20 min) |
+| `agent.maxTurns` | 30 | Fast path max tool-call turns |
+| `context.shortTermTokenBudget` | 8,000 | Slack conversation context |
+| `context.longTermTokenBudget` | 1,500 | Memory retrieval budget |
+| `context.workingContextTokenBudget` | 1,000 | Scratch pad budget |
+| `context.shortTermMessageLimit` | 50 | Max Slack messages fetched |
 
-**Memory retriever** (`src/memory/retriever.ts`):
-| Constant | Value | Purpose |
-|---|---|---|
-| `DEFAULT_TOKEN_BUDGET` | 1500 | Default retrieval budget (overridden by agent) |
+### Three Memory Tiers
+- **Working context** = Scratch pad in `agent_state` (1000 tokens, auto-archives after 14 days)
+- **Short-term** = Slack message history (last 50 messages, 8000 tokens)
+- **Long-term** = SQLite DB (extracted facts via hybrid FTS5 + vector search, 1500 tokens)
 
-**Memory consolidation** (`src/memory/consolidation.ts`):
-| Constant | Value | Purpose |
-|---|---|---|
-| `CONSOLIDATION_INTERVAL_HOURS` | 24 | Hours between consolidation runs |
-| `MERGE_SIMILARITY_THRESHOLD` | 0.85 | Content similarity for merging duplicates |
-| `DECAY_THRESHOLD_DAYS_30` | 30 | Days before 10% importance decay |
-| `DECAY_THRESHOLD_DAYS_90` | 90 | Days before 30% importance decay |
-| `ARCHIVE_THRESHOLD` | 1 | Importance at or below → archived |
-| `WORKING_CONTEXT_ARCHIVE_DAYS` | 14 | Days before working context promotes to LTM |
+### Memory Extraction
+After each interaction:
+- Owner's Slack message → Haiku extraction → store facts
+- Heavy path response → Haiku extraction → store synthesized facts
+- SDK can also call `store_fact` via MCP during execution
 
-**Reflection** (`src/memory/reflection.ts`):
-| Constant | Value | Purpose |
-|---|---|---|
-| `REFLECTION_THRESHOLD` | 50 | Cumulative importance to trigger reflection |
-
-**Embeddings** (`src/memory/embeddings.ts`):
-| Constant | Value | Purpose |
-|---|---|---|
-| `EMBEDDING_DIM` | 384 | all-MiniLM-L6-v2 dimensions |
-
-**Slack** (`src/slack/event-queue.ts`, `src/slack/handler.ts`, `src/cli/start.ts`):
-| Constant | Value | Purpose |
-|---|---|---|
-| Accumulation window | 4s | Debounce before processing messages |
-| `SLOW_TASK_THRESHOLD_MS` | 60,000 | When to show ⏳ status indicator |
-| Startup crawl skip | 5 min | Skip crawl if offline less than this |
-
-**Three memory tiers:**
-- **Working context** = Active operational details (scratch pad in `agent_state`, 1000 token budget, auto-archives to LTM after 14 days)
-- **Short-term memory** = Slack message history (last 50 messages, 2000 token budget). Newest messages get priority.
-- **Long-term memory** = SQLite DB (extracted facts, strategies, people, file summaries). Retrieved via hybrid FTS5 + vector search (1500 token budget).
-
-### Memory Types
-Stored in the `memories` table, extracted by Haiku after each interaction:
-- `fact` — things true about the world
-- `preference` — how the user likes things done
-- `decision` — choices made, with reasoning
-- `strategy` — plans, approaches, pivots with rationale
-- `conclusion` — insights, analyses, realizations
-- `commitment` — promises, deadlines, deliverables
-- `observation` — patterns noticed but not confirmed
-- `reflection` — synthesized insights from consolidation
-
-## Build Tracks (from BUILD_PLAN.md)
-- **Track A** ✅ Complete: Foundation — DB, config, security, CLI, hooks, tests
-- **Track B** ✅ Complete: Slack MCP + Agent Core — direct Anthropic API (no subprocess), event-queue, handler, interrupt-classifier, agent loop, policy-engine, graduation, socket-mode, setup wizard, Slack tools (5 + search_memory)
-  - Deployed on Railway (Growth By Science workspace), Socket Mode, persistent volume at /data
-- **Track C** ⬜ Not Started: Google Workspace MCP — Gmail, Drive, Calendar servers + OAuth2
-- **Track D** 🔶 In Progress: Memory + Embeddings — extraction ✅, storage ✅, retrieval ✅, vector search ✅, consolidation ⬜, importance scoring ⬜
-- **Track E** ⬜ Not Started: Workflow Engine + Scheduling — durable state machine, async workflows
-- **Track F** ⬜ Not Started (partially done in Track A): Security + Training Wheels — undo system remaining
-- **Track G** ⬜ Not Started: GitHub + Filesystem + Web Research — official MCP servers + plugin manager
-- **Track H** ⬜ Not Started: Proactive Intelligence — pattern detection, daily briefing, suggestions
-
-### Test Status
-- **14 test files, 176 tests, all passing** (as of 2026-03-07)
-- Full coverage across: agent hooks, CLI setup, config, DB, MCP slack server, security (4 modules), slack (3 modules), training wheels (2 modules)
+## Build Tracks
+- **Track A** ✅: Foundation — DB, config, security, CLI, hooks, tests
+- **Track B** ✅: Slack MCP + Agent Core — Socket Mode, event-queue, handler
+- **Track C** ✅: Google Workspace — 20 tools, OAuth, Drive sync, email extraction
+- **Track D** ✅: Memory + Embeddings — extraction, storage, retrieval, vector search
+- **Track I** ✅: Fireflies.ai — GraphQL client, sync, CLI wrapper
+- **Track J** ✅: SDK Pivot — Hybrid architecture (fast + heavy path, router, MCP server)
+- **Track E** ⬜: Workflow Engine + Scheduling
+- **Track F** 🔶: Security + Training Wheels (undo system remaining)
+- **Track G** ⬜: GitHub + Filesystem + Web Research
+- **Track H** ⬜: Proactive Intelligence
 
 ## Common Tasks
 
-### Adding a new security pattern
-Add regex to `SECRET_PATTERNS` in `src/security/output-sanitizer.ts`, add test in `tests/security/output-sanitizer.test.ts`.
+### Adding a new prompt
+1. Create `config/prompts/your-prompt.md`
+2. Add key to `LoadedPrompts` interface in `src/prompts.ts`
+3. Add filename to `files` map in `loadPrompts()`
 
-### Adding a new forbidden path
-Add regex to `FORBIDDEN_PATTERNS` in `src/security/path-validator.ts`, add test in `tests/security/path-validator.test.ts`.
+### Adding a fast-path tool
+1. Add tool definition + handler in `src/agent/fast-path.ts` or existing tool file
+2. Register in `createHybridAgent()` in `src/agent/hybrid.ts`
+3. Add to `READ_ACTIONS` in policy-engine.ts if it should auto-approve at trust level 1
 
-### Adding a new DB table
-1. Add CREATE TABLE to `src/db/schema.sql` with `IF NOT EXISTS`
-2. Update `src/db/index.ts` if new queries needed
-3. Add test in `tests/db.test.ts`
-4. Bump schema_version
+### Adding heavy-path access to a new service
+1. Create CLI wrapper in `tools/` (like `tools/fireflies.ts`)
+2. Add usage examples to `config/prompts/heavy-path.md`
+3. Add `Bash(your-cli:*)` to `--allowedTools` in `heavy-path.ts`
 
-### Adding a new CLI command
-1. Add command file in `src/cli/`
-2. Register in `src/cli/index.ts` via commander `.command()`
+### Adding a memory MCP tool
+1. Add tool definition to `TOOLS` array in `src/mcp/memory/server.ts`
+2. Add handler function
+3. Add to `--allowedTools` in `heavy-path.ts` as `mcp__memory__tool_name`
 
 ## Slack Interaction Principles
 
-These principles are hard-won from a previous failed project. They are non-negotiable design constraints for the Slack interface.
-
 ### Core Philosophy
-> Use the smallest possible signal at each step. Reactions over messages. Message edits over new messages. Silence over acknowledgment (when a reaction already said it). The agent should feel *attentive but quiet* — like a good chief of staff who nods, not one who narrates everything they're doing.
-
-### Never Fake Agent Behavior
-- Don't simulate streaming by rapidly editing messages with growing `...` — that's theater
-- Don't over-classify user intent — four categories (additive, redirect, cancel, unrelated) is enough
-- Don't echo everything — "I see you want to cancel. Cancelling. Cancelled." → just ✅ the message
-- Report milestones ("Found 3 slots, drafting invite..."), never fake progress bars ("50% done")
-- The agent often doesn't know how long a task will take — don't pretend otherwise
-
-### Message Accumulation Window
-Don't process messages immediately. Buffer incoming messages with a debounce timer (default 4s):
-- New message arrives → start/reset timer, add ⏳ reaction
-- `user_typing` event → reset timer (these fire every ~3s; use 4s timeout to handle gaps)
-- Timer expires with no new typing → process entire buffer as one context
-- Hard cap at 30s to prevent indefinite waiting
-- User-tunable: "wait longer" / "be snappier" stored as preference in memories table
-- Three modes: **Snappy** (2s), **Patient** (4s, default), **Wait for me** (15s)
-
-### Checkpoint Interruption
-The agent loop checks for new owner messages at natural checkpoints (between tool calls):
-- **Additive** ("also check X") → inject into current context, keep working
-- **Redirect** ("actually do Y instead") → abort current, start Y
-- **Cancel** ("scratch that") → abort, idle
-- **Unrelated** (different thread/DM) → queue separately, keep working
-- Classification done by Haiku — when confidence is low, ask rather than guess
-- This is where the previous project failed: no interruptibility made it feel like talking to a wall
+> Use the smallest possible signal. Reactions over messages. Silence over acknowledgment.
 
 ### Reaction Lifecycle
-Reactions are the primary status signal — zero message noise:
 ```
-Message arrives              → ⏳ (I see it, accumulating/waiting)
-Accumulation window closes   → remove ⏳, add 🧠 (working on it)
-Mid-stream interrupt ACK'd   → 👍 on the new message
-Task complete                → remove 🧠, post response
-Cancel acknowledged          → remove 🧠, ✅ on cancel message
+Message arrives              → 👀 (accumulating)
+Accumulation window closes   → remove 👀, add 🧠, post progress after 20s delay
+Tool-call boundaries         → update progress ("Searching Gmail...")
+Task complete                → remove 🧠, delete progress, post response
+Cancel                       → remove 🧠, ✅ on cancel message
 ```
 
-### Progress Visibility (Long Tasks)
-- Immediate ACK: "🧠 Checking Sarah's calendar..."
-- Milestone edits: update the ACK at major tool-call boundaries (not percentages)
-- Example: "Checking calendar..." → "Found 3 slots, drafting invite..." → "Sending..."
-- `chat.update` rate limit (~1/sec) is plenty for milestone-based updates
+### Heavy Path Progress
+Stream-json events parsed in real-time → progress updates posted to Slack:
+- `Bash(gws gmail...)` → "Searching Gmail..."
+- `Bash(npx tsx tools/fireflies.ts...)` → "Searching meeting transcripts..."
+- `mcp__memory__store_fact` → "Saving to memory..."
 
-### What NOT to Build
-- No custom WebSocket abstraction on top of Slack
-- No complex conversation state machines
-- No polling-based "check for new messages" loops
-- No token-level streaming simulation
-- No "urgency" or "mood" detection from messages
+### Interrupt During Heavy Path
+Owner can cancel by sending "stop", "cancel", "abort", "nvm", etc. Polled every 2s. Kills SDK subprocess immediately.
 
-## Running the Agent
+## Deployment (Railway)
 
-### First-Time Setup
+### Environment Variables
+```
+ANTHROPIC_API_KEY          — Fast path API access
+CLAUDE_CODE_OAUTH_TOKEN    — Heavy path Max plan auth (from `claude setup-token`)
+GWS_CONFIG_B64             — gws CLI auth (from `cd ~/.config/gws && tar czf - --exclude=cache . | base64`)
+SLACK_BOT_TOKEN            — Slack bot token
+SLACK_APP_TOKEN            — Slack app-level token (Socket Mode)
+OWNER_SLACK_USER_ID        — Owner's Slack user ID
+FIREFLIES_API_KEY          — Fireflies API key
+GOOGLE_AGENT_EMAIL         — Owner's email for Gmail identification
+DATA_DIR=/data             — Persistent volume mount
+```
+
+### Docker Entrypoint (`scripts/docker-entrypoint.sh`)
+1. Symlink `~/.claude` → `/data/claude-config` (persist Claude CLI auth)
+2. Create `.claude.json` with `hasCompletedOnboarding: true`
+3. Unpack `GWS_CONFIG_B64` to `/root/.config/gws/` (gws auth)
+4. Start agent
+
+### Deploying
 ```bash
-npm install
-npx tsx src/cli/index.ts setup   # Interactive wizard — needs Anthropic key + Slack tokens
+railway up --detach
 ```
 
-### Starting the Agent
+### One-Time Auth Setup
 ```bash
-npx tsx src/cli/index.ts start   # Socket Mode takes ~11 seconds to connect
-```
-Wait for `"Slack Socket Mode connection established"` before testing. DM the bot or @mention it.
+# Claude CLI (Max plan)
+claude setup-token  # → get token → railway variables set CLAUDE_CODE_OAUTH_TOKEN=...
 
-### Other Commands
-```bash
-npx tsx src/cli/index.ts status          # Check agent status
-npx tsx src/cli/index.ts config show     # Show config (secrets redacted)
-npx tsx src/cli/index.ts credentials list # Check credential availability
-npx tsx src/cli/index.ts audit           # Show action audit log
-npx tsx src/cli/index.ts trust-level     # Show/set trust level
+# gws CLI (Google)
+railway variables set GWS_CONFIG_B64="$(cd ~/.config/gws && tar czf - --exclude=cache . | base64)"
 ```
 
 ## Gotchas
-- `node:sqlite` is experimental in Node — the `ExperimentalWarning` in test output is expected
+- `node:sqlite` is experimental — `ExperimentalWarning` in test output is expected
 - Schema SQL uses triggers with `;` inside bodies — never split schema on semicolons
-- FTS5 `IF NOT EXISTS` is supported but triggers may need error-catching on re-init
-- **keytar CJS→ESM interop**: `keytar` is a CJS native module. Dynamic `import('keytar')` wraps exports in `{ default: ... }`. The `getKeytar()` function in `credentials.ts` handles this with `imported.default ?? imported`. If keytar's native build fails entirely, credentials fall back to env vars.
-- Config `trustLevel` must be 0-3 — Zod enforces this at load time
-- **DB interfaces MUST use snake_case** to match SQLite column names — `node:sqlite`'s `.get()`/`.all()` return raw column names (e.g., `action_type`, not `actionType`). Use `as unknown as YourType` to cast, and make sure the interface matches the DB schema exactly.
-- `user_typing` events fire every ~3s with no "stopped typing" event — use a 4s grace period to detect the gap
-- **Socket Mode startup is slow** (~11 seconds) — this is normal for Bolt's WebSocket handshake. The process hangs at `app.start()` during this time.
-- **Slack app setup**: When creating the Slack app from manifest, ensure Socket Mode is enabled and the app-level token has the `connections:write` scope. Duplicate app entries in the Slack admin can occur if the app is created multiple times — delete extras via api.slack.com/apps.
-- **Agent SDK subprocess**: `query()` spawns a Claude Code CLI process. Requires `claude` CLI installed and `ANTHROPIC_API_KEY` in the environment. The `model` option may need aliases (`sonnet`) rather than full IDs (`claude-sonnet-4-6`) — see BUG-001 in `.project/state.json`.
-
-## Project Management
-
-Project execution is tracked in `.project/` (git-ignored):
-
-```
-.project/
-  state.json                    # Structured project state (tracks, metrics, issues, sprint)
-  docs/
-    EXECUTION_PLAN.md           # Sprint breakdown with phases and deliverables
-    BACKLOG_FEATURES.md         # Feature backlog (P0-P3)
-    BACKLOG_TECH_DEBT.md        # Tech debt items
-    BACKLOG_EXPLORATION.md      # Research and exploration ideas
-    HANDOFF.md                  # Session handoff notes
-    ADR-001-agent-sdk-as-runtime.md  # Architecture decision record
-  mocks/
-    mock-001-architecture.html  # Interactive architecture diagram
-    board.html                  # Kanban board
-  .original_materials/          # Archived original PM artifacts (safety net)
-```
-
-### Current Priority Order
-1. **Memory system** (Track D) — owner's top priority
-2. **Google Workspace** (Track C) — practical daily use
-3. **Other integrations** (Tracks E-H) — later sprints
+- **MCP stdio server**: ALL logging must go to stderr, not stdout (corrupts JSON-RPC protocol)
+- **Docker `node:22-slim`**: Stripped of CA certificates — must `apt-get install ca-certificates` or gws/external HTTPS calls fail with TLS UnknownIssuer
+- **Heavy path strips `ANTHROPIC_API_KEY`** from subprocess env so Claude CLI uses Max plan OAuth instead of API billing
+- **One-time migrations are dangerous**: Guard keys in `agent_state` may not persist across schema recreations. The v5 reset migration was wiping all memories on every deploy — it was removed.
+- DB interfaces MUST use snake_case to match SQLite column names
+- `keytar` CJS→ESM interop: `imported.default ?? imported`
+- Socket Mode startup is slow (~11s) — normal
+- Startup crawl skips if offline <5 min (prevents re-processing on quick redeploys)
+- Startup crawl always uses fast path (never routed to heavy)
+- Policy engine regexes must use `(?:^|_)` to match prefixed tool names
