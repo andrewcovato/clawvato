@@ -42,6 +42,7 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
   fireflies_get_summary: 'Reading meeting summary...',
   slack_get_channel_history: 'Reading channel history...',
   slack_search_messages: 'Searching Slack...',
+  web_search: 'Searching the web...',
 };
 
 export interface FastPathOptions {
@@ -186,7 +187,11 @@ export async function executeFastPath(
         model: config.models.executor,
         max_tokens: config.agent.fastPathMaxTokens,
         system: systemPrompt,
-        tools: toolDefs,
+        tools: [
+          ...toolDefs,
+          // Server-side web search — Anthropic handles execution, no handler needed
+          { type: 'web_search_20250305' as const, name: 'web_search', max_uses: 3 },
+        ],
         messages,
       });
 
@@ -203,6 +208,7 @@ export async function executeFastPath(
         finalResponse = textBlocks.join('\n');
       }
 
+      // If response only has server-side tool blocks (web_search) and text, it's done
       if (isLastTurn) break;
 
       // Process tool calls
