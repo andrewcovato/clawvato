@@ -20,8 +20,8 @@ COPY src/db/schema.sql ./dist/db/schema.sql
 # (npm prune --omit=dev removes tsx, so we keep it)
 RUN npm prune --omit=dev && npm install tsx
 
-# Install Claude Code CLI for heavy path
-RUN npm install -g @anthropic-ai/claude-code || true
+# Install Claude Code CLI for heavy path + gws for Google Workspace access
+RUN npm install -g @anthropic-ai/claude-code @googleworkspace/cli || true
 
 # Data directory — mount a Railway volume here for persistence
 ENV DATA_DIR=/data
@@ -30,10 +30,7 @@ RUN mkdir -p /data
 # Startup: ensure /data/claude-config exists (volume mounted at runtime, not build time)
 # then symlink ~/.claude to it so auth tokens persist across redeploys.
 # Also restore .claude.json if missing (Claude CLI needs it for onboarding state).
-CMD mkdir -p /data/claude-config /data/claude-config/backups && \
-    rm -f /root/.claude && \
-    ln -sf /data/claude-config /root/.claude && \
-    (test -f /root/.claude.json || \
-     test -f /data/claude-config/.claude.json && cp /data/claude-config/.claude.json /root/.claude.json || \
-     echo '{"hasCompletedOnboarding":true}' > /root/.claude.json) && \
-    node dist/cli/index.js start
+COPY scripts/docker-entrypoint.sh /app/scripts/docker-entrypoint.sh
+RUN chmod +x /app/scripts/docker-entrypoint.sh
+
+CMD ["/app/scripts/docker-entrypoint.sh"]
