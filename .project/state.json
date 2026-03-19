@@ -1,29 +1,24 @@
 {
   "project": {
     "name": "Clawvato",
-    "description": "Always-on personal AI agent — your chief of staff",
-    "version": "0.5.0",
+    "description": "Business operating system for solo technical founders — memory-powered AI agent across Slack, email, calendar, Drive, meetings, and Claude Code",
+    "version": "0.6.0",
     "status": "active",
-    "phase": "hybrid-deployed",
+    "phase": "memory-refactor-complete",
     "startDate": "2026-03-06",
     "adoptedDate": "2026-03-07"
   },
   "tracks": {
     "A": { "name": "Core Foundation", "status": "complete", "completedDate": "2026-03-06" },
-    "B": { "name": "Slack MCP + Agent Core", "status": "complete", "completedDate": "2026-03-17", "notes": "Hybrid agent is active. Old agent/index.ts removed in Phase 5 trim." },
-    "C": { "name": "Google Workspace", "status": "complete", "completedDate": "2026-03-18", "notes": "20 tools. Calendar+gmail_search in fast path. gws CLI for heavy path." },
-    "D": { "name": "Memory + Embeddings", "status": "complete", "completedDate": "2026-03-18", "notes": "Crown jewel. Memory MCP server for SDK. Extraction from both paths. Memory writes now auto-approved at trust level 1." },
-    "E": { "name": "Workflow Engine + Scheduling", "status": "not_started" },
-    "F": { "name": "Security + Training Wheels (undo)", "status": "partial", "notes": "Training wheels enforced in both paths. Memory writes whitelisted. Real confirmation UX still needed." },
-    "G": { "name": "GitHub + Filesystem + Web Research", "status": "not_started" },
-    "H": { "name": "Proactive Intelligence", "status": "not_started" },
-    "I": { "name": "Fireflies.ai", "status": "complete", "completedDate": "2026-03-18", "notes": "GraphQL client + CLI wrapper for SDK." },
-    "J": {
-      "name": "SDK Pivot — Hybrid Architecture",
-      "status": "complete",
-      "completedDate": "2026-03-18",
-      "notes": "Fully deployed and tested on Railway. Fast path (Sonnet, API) + Heavy path (Opus, SDK subprocess). Stream-json progress updates. Interrupt support. Memory MCP server. gws CLI for Google. Fireflies CLI wrapper."
-    }
+    "B": { "name": "Slack MCP + Agent Core", "status": "complete", "completedDate": "2026-03-17", "notes": "Hybrid agent active. Old monolith removed." },
+    "C": { "name": "Google Workspace", "status": "complete", "completedDate": "2026-03-19", "notes": "12 fast-path tools (calendar, gmail read/search, drive read/search with PDF support, freebusy). gws CLI for deep path." },
+    "D": { "name": "Memory + Embeddings", "status": "complete", "completedDate": "2026-03-19", "notes": "Dynamic categories (16 seed + discovered). Entity junction table. Path-aware budgets. Relevance-based retrieval. Async findings file. FTS5-based consolidation." },
+    "E": { "name": "Proactive Intelligence (daily briefing, reminders)", "status": "not_started" },
+    "F": { "name": "Security Hardening", "status": "partial", "notes": "Priority 1 mitigations done (subprocess env allowlist, response sanitization, findings file randomization). Priority 2-3 in docs/MITIGATION_PLAN.md." },
+    "G": { "name": "GitHub + Web Research", "status": "not_started" },
+    "H": { "name": "Plugin Adapter + CC Bridge", "status": "designed", "notes": "Full design at docs/DESIGN_PLUGIN_ADAPTER.md. Enables CC sessions to share memory with Slack agent." },
+    "I": { "name": "Fireflies.ai", "status": "complete", "completedDate": "2026-03-18", "notes": "GraphQL client + CLI wrapper. Search + summary on fast path." },
+    "J": { "name": "Hybrid Architecture (fast + deep)", "status": "complete", "completedDate": "2026-03-19", "notes": "Renamed heavy→deep. Fast path expanded to 12 tools. Pre-flight conversation for deep path. Async findings file for memory capture." }
   },
   "infrastructure": {
     "local": "macOS, npx tsx src/cli/index.ts start",
@@ -32,10 +27,10 @@
     "railwayService": "clawvato",
     "dataVolume": "/data (Railway persistent volume)",
     "deployMethod": "Dockerfile + scripts/docker-entrypoint.sh, railway up --detach",
-    "googleAuth": "gws CLI config via GWS_CONFIG_B64 env var (base64 tar.gz of ~/.config/gws/)",
+    "googleAuth": "gws CLI config via GWS_CONFIG_B64 env var",
     "firefliesAuth": "FIREFLIES_API_KEY env var",
     "claudeAuth": "CLAUDE_CODE_OAUTH_TOKEN env var (from claude setup-token)",
-    "maxPlan": "Claude Max subscription — heavy path costs $0"
+    "maxPlan": "Claude Max subscription — deep path costs $0"
   },
   "metrics": {
     "testFiles": 22,
@@ -43,57 +38,71 @@
     "testsPassing": 297
   },
   "knownIssues": [
-    { "id": "TW-002", "severity": "medium", "title": "Real confirmation UX — currently blocks with error" },
-    { "id": "SEC-001", "severity": "medium", "title": "FTS5 query injection via search_memory" },
-    { "id": "QUAL-002", "severity": "medium", "title": "hasVectorSupport probe per call — no cache" },
-    { "id": "QUAL-003", "severity": "medium", "title": "Consolidation O(n²) merge — no LIMIT" },
-    { "id": "TRIM-001", "severity": "resolved", "title": "Old agent/index.ts, search/, email-scan.ts removed — Phase 5 trim complete" }
+    { "id": "SEC-001", "severity": "medium", "title": "FTS5 query sanitization — special chars cause silent fallback. See docs/MITIGATION_PLAN.md" },
+    { "id": "QUAL-002", "severity": "low", "title": "hasVectorSupport probe per call — no cache" },
+    { "id": "QUAL-005", "severity": "medium", "title": "handleAssistantMessage bypasses serialization chain" },
+    { "id": "QUAL-006", "severity": "medium", "title": "Pre-flight loop has no hard wall-time timeout" },
+    { "id": "QUAL-007", "severity": "low", "title": "No tests for agent orchestration layer (hybrid, fast-path, handler)" }
+  ],
+  "backlog": [
+    { "id": "PROACTIVE-001", "priority": "high", "title": "Daily/weekly briefing — scheduled morning summary of email, calendar, commitments, follow-ups" },
+    { "id": "PLUGIN-001", "priority": "high", "title": "Plugin adapter + unified memory bridge — CC sessions share memory with Slack agent. Design: docs/DESIGN_PLUGIN_ADAPTER.md" },
+    { "id": "SESSION-001", "priority": "high", "title": "--session support for deep path — maintain continuity across Slack thread messages" },
+    { "id": "COMMIT-001", "priority": "medium", "title": "Commitment tracking + follow-up reminders — wire extracted commitments to proactive alerts" },
+    { "id": "GITHUB-001", "priority": "medium", "title": "GitHub integration — PRs, issues, CI status awareness" },
+    { "id": "FINANCE-001", "priority": "medium", "title": "Finance integration — invoicing, bookkeeping, A/P, contract payment schedules (QuickBooks/Stripe plugin)" },
+    { "id": "MITIGATION-P2", "priority": "medium", "title": "Security Priority 2-3 mitigations — see docs/MITIGATION_PLAN.md" },
+    { "id": "OBSIDIAN-001", "priority": "low", "title": "Obsidian integration for memory visibility" }
   ],
   "currentSprint": {
-    "id": "S3",
-    "name": "SDK Pivot — Hybrid Architecture",
+    "id": "S4",
+    "name": "Memory Refactor + UX Overhaul",
     "goals": [
-      "Track J: SDK Pivot ✅",
-      "Memory MCP Server ✅",
-      "Fireflies CLI wrapper ✅",
-      "Heavy path with stream-json progress ✅",
-      "Haiku complexity router ✅",
-      "Fast path simplification ✅",
-      "Cancel/interrupt support ✅",
-      "Memory persistence fix ✅",
-      "Railway deployment with Max auth + gws ✅"
+      "Phase 5 trim (dead code removal) ✅",
+      "Prompt + config externalization ✅",
+      "Rename heavy→deep + expand fast path (3→12 tools) ✅",
+      "Bug fixes: stale progress, interrupt buffer, timer leak ✅",
+      "Pre-flight conversation (LLM-driven) ✅",
+      "Memory refactor: dynamic categories, entity junction, path-aware budgets ✅",
+      "Retriever rebalance + diverse reflection ✅",
+      "FTS5-based consolidation ✅",
+      "Async findings file (zero overhead during research) ✅",
+      "Flexible search_memory (browse without query) ✅",
+      "Security Priority 1 mitigations ✅",
+      "Drive file content reading (PDFs, docs) on fast path ✅"
     ],
-    "progress": "Sprint complete. Hybrid architecture deployed and tested."
+    "progress": "Sprint complete."
   },
   "lastSession": {
-    "number": 14,
-    "date": "2026-03-18",
-    "type": "SDK pivot implementation + deployment + debugging",
+    "number": 15,
+    "date": "2026-03-19",
+    "type": "Memory refactor + UX overhaul + security hardening",
     "commits": 20,
     "keyDecisions": [
-      "Hybrid architecture: Haiku router → fast (Sonnet, API) or heavy (Opus, SDK subprocess)",
-      "Memory MCP is the only MCP server — Google via gws CLI, Fireflies via CLI wrapper",
-      "Stream-json for real-time progress updates during heavy path",
-      "Memory writes (update_working_context, store_fact) auto-approved at trust level 1",
-      "20min timeout for heavy path, 200 max turns — let Opus cook",
-      "Owner can cancel heavy path mid-execution via Slack interrupt"
+      "Renamed heavy→deep throughout codebase",
+      "Dynamic memory categories — seed + discovered organically",
+      "Path-aware budgets: fast (1500 tokens) vs deep (50000 tokens)",
+      "Async findings file: Opus writes one JSON dump at end, background processor stores",
+      "Pre-flight is LLM-driven conversation, not regex matching",
+      "Subprocess env switched to allowlist (Slack tokens excluded)",
+      "Project vision expanded: business OS, not just chief of staff",
+      "Engineering philosophy: always take the pain now, build for durability"
     ]
   },
   "thingsNotToRedo": [
     "Don't split schema.sql on semicolons",
-    "DON'T REBUILD WHAT COMES NATIVELY WITH CLAUDE — use SDK for orchestration",
-    "Don't hardcode prompts in TypeScript — all prompts in config/prompts/*.md (router, synthesis, extraction all externalized)",
-    "Don't hardcode tunables in TypeScript — all operational values in config/default.json with Zod schema in config.ts",
-    "MCP stdio servers MUST redirect all logging to stderr (LOG_DESTINATION=stderr)",
-    "node:22-slim needs ca-certificates installed for external HTTPS (gws, etc.)",
-    "Heavy path must strip ANTHROPIC_API_KEY from env so CLI uses Max plan OAuth",
-    "One-time DB migrations with guard keys are fragile — guard may not persist. Remove after running.",
-    "Don't make ad-hoc prompt fixes for specific situations — diagnose with logs first",
-    "Memory writes (working context, store_fact) are internal state, not external writes — auto-approve at trust level 1",
-    "Startup crawl always routes to fast path — skip the Haiku router",
-    "stream-json requires --verbose flag in --print mode",
-    "Short-term context budget must be generous (8000+ tokens) or follow-up messages lose context",
-    "gws CLI uses encrypted credentials — must copy full ~/.config/gws/ dir, not just export JSON"
+    "DON'T REBUILD WHAT COMES NATIVELY WITH CLAUDE",
+    "Don't hardcode prompts in TypeScript — all prompts in config/prompts/*.md",
+    "Don't hardcode tunables in TypeScript — all operational values in config/default.json",
+    "Always take the pain now — build for durability, no short-term hacks",
+    "Bug reports → investigate + plan + confirm before coding",
+    "MCP stdio servers MUST redirect ALL logging to stderr",
+    "Deep path subprocess env: ALLOWLIST only, never pass Slack tokens",
+    "FTS5 triggers get corrupted when renaming tables — drop triggers first, rebuild after",
+    "Per-finding MCP store_fact calls add 2-5s each — use async findings file instead",
+    "Findings file must use UUID-stamped path (no fixed /tmp/ path — race condition)",
+    "SQLite CHECK constraint removal requires table rebuild + FTS5 trigger rebuild",
+    "RESET_DB env var in docker-entrypoint.sh for emergency DB wipe on Railway"
   ],
-  "lastUpdated": "2026-03-18"
+  "lastUpdated": "2026-03-19"
 }

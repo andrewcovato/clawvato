@@ -1,113 +1,108 @@
 # Session Handoff
 
-> Last updated: 2026-03-18 | Session 14 | Sprint S3
+> Last updated: 2026-03-19 | Session 15 | Sprint S4
 
 ## Quick Resume
 
 ```
-Sprint: S3 — SDK Pivot (COMPLETE)
-Status: Hybrid architecture deployed on Railway and tested
-Tests: 311/311 passing across 24 files
+Sprint: S4 — Memory Refactor + UX Overhaul (COMPLETE)
+Status: Dynamic memory, LLM pre-flight, async findings, PDF reading all deployed
+Tests: 297/297 passing across 22 files
 Build: Clean
 Commits this session: 20
-NEXT: Prompt tuning, Phase 5 trim (old code), consolidation/importance scoring
+NEXT: Daily briefing, plugin adapter, --session support, commitment tracking
 ```
 
-## What Was Built (Session 14)
+## What Was Built (Session 15)
 
-**20 commits** transforming the monolithic agent into a two-path hybrid:
+**20 commits** — memory refactor, UX overhaul, security hardening:
 
-### New Modules (~1,500 lines)
-- `src/agent/hybrid.ts` — Main orchestrator (fast/heavy routing, interrupt handling)
-- `src/agent/router.ts` — Haiku complexity classifier
-- `src/agent/fast-path.ts` — Direct API loop (Sonnet, 10 turns, 60s)
-- `src/agent/heavy-path.ts` — Claude CLI subprocess (Opus, stream-json, 200 turns, 20min)
-- `src/agent/context.ts` — Shared context assembly
-- `src/mcp/memory/server.ts` — Memory MCP server (6 tools)
-- `src/mcp/memory/stdio.ts` — stdio entrypoint with stderr logging
-- `tools/fireflies.ts` — Fireflies CLI for SDK bash access
-- `config/prompts/heavy-path.md` — SDK system prompt
-- `scripts/docker-entrypoint.sh` — Railway startup (auth persistence)
+### Dead Code + Externalization
+- Deleted 9 dead files (-2,980 lines): old agent/index.ts, search/, email-scan.ts
+- Externalized 3 hardcoded prompts → config/prompts/ (router, fact-synthesis, email-extraction removed)
+- Moved 12 hardcoded tunables → config/default.json
+- Fixed 3 Zod schema/default.json mismatches (timeoutMs, shortTermTokenBudget, maxExtractedChars)
+- Added CLAUDE.md directives: never hardcode prompts/tunables, bug fixing protocol, engineering philosophy
 
-### Key Bugs Found & Fixed
-1. **MCP stdout corruption** — pino logs mixed with JSON-RPC → CLI hung. Fix: `LOG_DESTINATION=stderr`
-2. **Memory wipe on every deploy** — v5 reset migration guard key not persisting. Fix: removed migration
-3. **Memory writes blocked** — `update_working_context`/`store_fact` classified as external writes. Fix: whitelisted in policy engine
-4. **Short-term context too small** — 2000 tokens → follow-ups lost context. Fix: bumped to 8000
-5. **TLS errors on Railway** — `node:22-slim` missing CA certs. Fix: `apt-get install ca-certificates`
-6. **gws auth format** — encrypted credentials need full dir, not exported JSON. Fix: `GWS_CONFIG_B64`
-7. **stream-json requires --verbose** — undocumented CLI requirement. Fix: added flag
-8. **.claude.json missing** — CLI hung on onboarding. Fix: create at startup
+### Rename heavy→deep + Fast Path Expansion
+- Global rename: heavy-path → deep-path across all files, types, configs
+- Fast path expanded from 3 → 12 tools: gmail read, drive read (with PDF/doc content), freebusy, drive search, fireflies search/summary, slack search
+- Fast path limits: 10→30 turns, 60s→5min timeout
+- Router prompt updated: fast handles much more, deep only for cross-source synthesis
 
-### What Works Now
-- Fast path: memory queries, calendar checks, gmail search (~2s)
-- Heavy path: multi-source sweeps with Opus via SDK (~1-5min, free on Max)
-- Real-time progress updates in Slack during heavy path
-- Memory persists across deploys
-- Owner can cancel heavy path with "stop"/"cancel"
-- Background extraction from both paths → facts stored to memory
-- gws CLI authenticated on Railway for Gmail/Calendar/Drive
+### UX Overhaul
+- Pre-flight for deep path: LLM-driven conversation (Sonnet), not regex matching
+- Pre-flight never auto-proceeds — must always engage user first
+- Normal reaction lifecycle during pre-flight (:eyes: → :brain: → cleared per message)
+- Stale progress shows last real tool activity, not user's original message
+- Interrupt buffer: re-enqueue after completion, 🔜 for deep path queue
+- Configurable pre-flight reminder (5 min default)
 
-### What Needs Work
-- **Prompt tuning**: Heavy path thoroughness varies, model sometimes misclassifies search results
-- **Phase 5 trim**: Old modules (agent/index.ts, search/, email-scan.ts) still in codebase
-- **Consolidation/importance scoring**: Memory accumulates but doesn't consolidate or decay yet
-- **Gmail search logging**: Added `query` + `threadsFound` logging — use to diagnose search quality
+### Memory Refactor (5 phases)
+- **Phase 1**: Dynamic categories — `memory_categories` table (16 seeds + discovered), entity junction table (O(n)→O(log n))
+- **Phase 2**: Dynamic extraction — {{CATEGORIES}} injected at runtime, configurable content cap (500→2000), auto-discovery
+- **Phase 3**: Path-aware budgets — fast: 1500 tokens, deep: 50000 tokens
+- **Phase 4**: Retriever rebalance — removed hardcoded preference/decision pulls, semantic search limit 10→20
+- **Phase 5**: FTS5-based consolidation (O(n²)→O(n×5)), configurable decay/archive exemptions, weekly category reorg
+
+### Findings File System
+- Deep path Opus writes findings to UUID-stamped temp file in ONE Bash call at end
+- Background processor: parse JSONL, dedup, normalize categories, bulk insert + embed
+- Zero overhead during research (was 60-150s with per-finding store_fact calls)
+- Granularity enforced: one atomic fact per finding, explicit good/bad examples in prompt
+
+### File Content Reading
+- `google_drive_get_file` now reads actual file content (PDFs, docs, sheets, images)
+- Uses existing file-extractor.ts — PDFs as Claude-native document blocks, Office files extracted
+- Fast path can answer "what's in this PDF?" without deep path
+
+### Security Hardening
+- Subprocess env: allowlist only (Slack tokens excluded)
+- Write tool removed from deep path allowed tools
+- Final response sanitized via scanForSecrets() before Slack post
+- Findings file: UUID-stamped per invocation (no race conditions)
+- Full mitigation plan at docs/MITIGATION_PLAN.md
+
+### Design Docs
+- `docs/DESIGN_PLUGIN_ADAPTER.md` — plugin adapter + unified memory bridge
+- `docs/MITIGATION_PLAN.md` — security + quality mitigation plan
 
 ---
 
-## Deployment Checklist
-
-Railway env vars needed:
-```
-ANTHROPIC_API_KEY          — for fast path (Sonnet API calls)
-CLAUDE_CODE_OAUTH_TOKEN    — for heavy path (from `claude setup-token`)
-GWS_CONFIG_B64             — for gws Google access (base64 tar.gz of ~/.config/gws/)
-SLACK_BOT_TOKEN
-SLACK_APP_TOKEN
-OWNER_SLACK_USER_ID
-FIREFLIES_API_KEY
-GOOGLE_AGENT_EMAIL
-```
-
-Deploy: `railway up --detach`
-
----
-
-## Architecture After Pivot
+## Architecture After Session 15
 
 ### Fast Path (Sonnet, ~$0.01, ~2s)
 - Direct `messages.create` loop
-- 7 tools: search_memory, update_working_context, calendar list/get, gmail_search, slack history/search
-- 10 max turns, 60s timeout
-- Training wheels enforced (trust level 1)
+- 12 tools: memory (search/browse, update working ctx), calendar (list/get/freebusy), gmail (search/read), drive (search/get with PDF+doc content), fireflies (search/summary), slack (history/search)
+- 30 max turns, 5 min timeout
+- search_memory works without query (browse by importance/recency)
 
-### Heavy Path (Opus, $0 on Max, ~1-5min)
+### Deep Path (Opus, $0 on Max, ~3-5min)
 - `claude --print --verbose --output-format stream-json` subprocess
-- Memory MCP server (6 tools) + gws CLI (Google) + fireflies CLI (meetings)
-- 200 max turns, 20min timeout
-- `ANTHROPIC_API_KEY` stripped from env → uses Max plan OAuth
-- Stream-json parsed for real-time Slack progress updates
-- AbortController + 2s interrupt polling for cancel support
-
-### Router (Haiku, ~$0.0002, ~200ms)
-- Sees full assembled context (same as both paths)
-- FAST: memory, single-source, simple commands, greetings
-- HEAVY: cross-source, multi-step, synthesis, ambiguous
-- Startup crawl always routes FAST (skip classifier)
+- Pre-flight: LLM-driven conversation to refine scope before launch
+- Memory reads via MCP (search, retrieve, list) — no writes during execution
+- Findings written to temp file in one Bash call at end → background processor stores
+- Subprocess env allowlisted (no Slack tokens)
+- Configurable pre-flight reminder interval
 
 ### Memory System
-- MCP server exposes 6 tools to SDK
-- Background Haiku extraction after every interaction (owner message + SDK response)
-- Working context auto-approved at trust level 1
-- FTS5 + vector hybrid search, token-budgeted retrieval
+- Dynamic categories (16 seed + organic discovery, normalize-on-add)
+- Entity junction table for O(log n) entity lookups
+- Path-aware budgets: 1500 tokens (fast) vs 50000 tokens (deep)
+- Relevance-based retrieval (no hardcoded type pulls)
+- Async findings file: zero overhead during deep path research
+- FTS5-based consolidation with configurable decay/archive exemptions
+- Weekly category reorganization
 
 ---
 
-## Owner Preferences (confirmed this session)
-- DON'T REBUILD WHAT COMES NATIVELY WITH CLAUDE
-- Don't make ad-hoc one-off prompt fixes — diagnose with logs first
-- All prompts in config/prompts/*.md — never hardcode in TypeScript
-- Memory should be HIGH RESOLUTION
-- Let Opus cook — 20min timeout, 200 turns, free on Max
-- Budget: Max plan for heavy ($0), API for fast (~$30-50/mo)
+## Backlog (priority order)
+
+1. **PROACTIVE-001**: Daily/weekly briefing — proactive morning summary
+2. **PLUGIN-001**: Plugin adapter + unified memory bridge — CC↔Slack memory sharing
+3. **SESSION-001**: --session support for deep path thread continuity
+4. **COMMIT-001**: Commitment tracking + follow-up reminders
+5. **GITHUB-001**: GitHub integration
+6. **FINANCE-001**: Finance integration (invoicing, bookkeeping, A/P)
+7. **MITIGATION-P2**: Security Priority 2-3 fixes
+8. **OBSIDIAN-001**: Obsidian integration for memory visibility
