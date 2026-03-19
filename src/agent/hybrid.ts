@@ -162,6 +162,19 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
             await handler.updateProgress('Deep analysis in progress...');
           }
 
+          // Set up abort controller so interrupts can kill the SDK subprocess
+          const heavyAbort = new AbortController();
+
+          // Poll for interrupts while heavy path runs
+          const interruptPoll = setInterval(async () => {
+            const interrupt = handler.drainInterrupt();
+            if (interrupt) {
+              logger.info({ text: interrupt.text.slice(0, 80) }, 'Interrupt during heavy path — aborting');
+              heavyAbort.abort();
+              try { await handler.ackInterrupt(batch.channel, interrupt.ts); } catch { /* */ }
+            }
+          }, 2000);
+
           const workingContext = loadWorkingContext(db);
           const result = await executeHeavyPath(
             context.userPrompt,
@@ -172,7 +185,10 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
               workingContext,
             },
             handler,
+            heavyAbort.signal,
           );
+
+          clearInterval(interruptPoll);
 
           if (result.success && result.response) {
             finalResponse = result.response;

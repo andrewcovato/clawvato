@@ -150,6 +150,7 @@ export async function executeHeavyPath(
   userPrompt: string,
   opts: HeavyPathOptions,
   handler?: SlackHandler,
+  abortSignal?: AbortSignal,
 ): Promise<HeavyPathResult> {
   const startTime = Date.now();
   const config = getConfig();
@@ -183,6 +184,7 @@ export async function executeHeavyPath(
 
     const result = await spawnClaudeStreaming(args, userPrompt, {
       timeoutMs: config.agent.timeoutMs,
+      abortSignal,
       onProgress: handler ? async (text: string) => {
         try { await handler.updateProgress(text); } catch { /* non-critical */ }
       } : undefined,
@@ -232,6 +234,7 @@ function spawnClaudeStreaming(
   stdinInput: string,
   opts: {
     timeoutMs: number;
+    abortSignal?: AbortSignal;
     onProgress?: (text: string) => Promise<void>;
   },
 ): Promise<StreamResult> {
@@ -251,6 +254,16 @@ function spawnClaudeStreaming(
     proc.on('spawn', () => {
       logger.info({ pid: proc.pid }, 'Claude CLI process spawned');
     });
+
+    // Allow external abort (e.g., owner sends "cancel" in Slack)
+    if (opts.abortSignal) {
+      const onAbort = () => {
+        logger.info({ pid: proc.pid }, 'Heavy path aborted by signal');
+        proc.kill('SIGTERM');
+      };
+      opts.abortSignal.addEventListener('abort', onAbort, { once: true });
+      proc.on('close', () => opts.abortSignal!.removeEventListener('abort', onAbort));
+    }
 
     let stderr = '';
     let finalResponse = '';

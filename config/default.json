@@ -14,7 +14,7 @@
   "sandboxRoots": [],
   "agent": {
     "maxTurns": 30,
-    "timeoutMs": 600000
+    "timeoutMs": 1200000
   },
   "context": {
     "shortTermMessageLimit": 50,
