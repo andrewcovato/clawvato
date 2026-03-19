@@ -526,12 +526,65 @@ export class SlackHandler {
 
   /**
    * Silently dismiss the 👀 from a message (no replacement reaction).
-   * Used during pre-flight conversation where reactions aren't needed.
    */
   async dismissEyes(channel: string, messageTs: string): Promise<void> {
     try {
       await this.reactions.remove(channel, messageTs, 'eyes');
     } catch { /* may not exist */ }
+  }
+
+  /**
+   * Start processing indicator on a specific message — swap 👀 for 🧠.
+   */
+  async startThinking(channel: string, messageTs: string): Promise<void> {
+    try {
+      await this.reactions.remove(channel, messageTs, 'eyes');
+    } catch { /* may not exist */ }
+    try {
+      await this.reactions.add(channel, messageTs, 'brain');
+    } catch { /* non-critical */ }
+  }
+
+  /**
+   * Clear the 🧠 from a message (done thinking).
+   */
+  async stopThinking(channel: string, messageTs: string): Promise<void> {
+    try {
+      await this.reactions.remove(channel, messageTs, 'brain');
+    } catch { /* may not exist */ }
+  }
+
+  /**
+   * Clear reactions and progress timer from the active task WITHOUT clearing activeTask state.
+   * Used after initial pre-flight response — activeTask must stay set so incoming
+   * messages continue to route to the interrupt buffer for the pre-flight loop.
+   */
+  async clearReactionsOnly(): Promise<void> {
+    if (!this.activeTask) return;
+
+    const { channel, eyesMessageTs } = this.activeTask;
+
+    // Remove :brain: from the last message
+    const lastTs = eyesMessageTs[eyesMessageTs.length - 1];
+    if (lastTs) {
+      try { await this.reactions.remove(channel, lastTs, 'brain'); } catch { /* */ }
+    }
+
+    // Delete progress message if one was posted
+    if (this.activeTask.progressMessageTs) {
+      try { await this.messages.delete(channel, this.activeTask.progressMessageTs); } catch { /* */ }
+      this.activeTask.progressMessageTs = undefined;
+    }
+
+    // Clear timers (no progress message or stale refresh during pre-flight)
+    if (this.activeTask.progressDelayTimer) {
+      clearTimeout(this.activeTask.progressDelayTimer);
+      this.activeTask.progressDelayTimer = undefined;
+    }
+    if (this.activeTask.staleTimer) {
+      clearTimeout(this.activeTask.staleTimer);
+      this.activeTask.staleTimer = undefined;
+    }
   }
 
   /**

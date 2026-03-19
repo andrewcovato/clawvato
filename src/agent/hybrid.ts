@@ -348,6 +348,11 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
                 botMsgTs = posted.ts;
               } catch { /* */ }
 
+              // Clear :brain: + progress timer from the initial message
+              // (pre-flight conversation handles its own per-message reactions)
+              // Keep activeTask set so incoming messages route to interrupt buffer
+              await handler.clearReactionsOnly();
+
               preflightMessages.push({ role: 'assistant', content: initialText });
 
               // Conversation loop — wait for user messages, respond via LLM
@@ -376,11 +381,12 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
                 // Skip duplicate of original message
                 if (interrupt.text.toLowerCase().trim() === originalText) {
                   logger.debug('Pre-flight: skipping duplicate of original message');
+                  await handler.dismissEyes(batch.channel, interrupt.ts);
                   continue;
                 }
 
-                // Remove :eyes: from the user's message (no special reactions during pre-flight)
-                await handler.dismissEyes(batch.channel, interrupt.ts);
+                // Normal reaction lifecycle: :eyes: → :brain: (thinking)
+                await handler.startThinking(batch.channel, interrupt.ts);
 
                 // Send user message to LLM
                 preflightMessages.push({ role: 'user', content: interrupt.text });
@@ -396,6 +402,9 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
                   .map(b => b.text).join('');
 
                 preflightMessages.push({ role: 'assistant', content: responseText });
+
+                // Clear :brain: — done thinking
+                await handler.stopThinking(batch.channel, interrupt.ts);
 
                 if (responseText.includes('[PROCEED]')) {
                   proceed = true;
