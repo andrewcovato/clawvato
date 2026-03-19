@@ -249,8 +249,8 @@ function spawnClaude(
     proc.stdin?.write(stdinInput);
     proc.stdin?.end();
 
-    // 2 min timeout for heavy path (not the full 5 min agent timeout)
-    const heavyTimeoutMs = Math.min(opts.timeoutMs, 120_000);
+    // 5 min timeout for heavy path — Opus doing multi-source sweeps can take 3-5 min
+    const heavyTimeoutMs = opts.timeoutMs;
     const timeout = setTimeout(() => {
       logger.error({ pid: proc.pid, stdout: stdout.slice(0, 200), stderr: stderr.slice(0, 500) }, 'SDK call timed out — killing process');
       proc.kill('SIGTERM');
