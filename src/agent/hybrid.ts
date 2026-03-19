@@ -173,18 +173,30 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
             handler,
           );
 
-          if (result.success) {
+          if (result.success && result.response) {
             finalResponse = result.response;
           } else {
-            // Fallback to fast path if SDK fails
-            logger.warn({ error: result.error }, 'Heavy path failed — falling back to fast path');
+            // Heavy path failed — notify user and try fast path
+            const errorDetail = result.error?.slice(0, 200) ?? 'unknown error';
+            logger.warn({ error: errorDetail, durationMs: result.durationMs }, 'Heavy path failed');
+
+            if (isRealSlackMessage) {
+              await handler.updateProgress(`Deep analysis failed — trying simpler approach...`);
+            }
+
             const fastResult = await executeFastPath(
               context.userPrompt,
               context.systemPrompt,
               { client: anthropicClient, db, tools: fastPathTools },
               handler,
             );
-            finalResponse = fastResult.response;
+
+            if (fastResult.response) {
+              finalResponse = fastResult.response;
+            } else {
+              // Both paths failed — tell the user
+              finalResponse = `Sorry, I hit an error on the deep analysis path and couldn't recover.\n\n*Error:* ${errorDetail}\n\nThis usually means the Claude CLI subprocess failed. Check the logs for details.`;
+            }
           }
         } else {
           // ── Fast Path: direct API ──
