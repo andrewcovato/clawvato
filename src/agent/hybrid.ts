@@ -149,8 +149,8 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
       }
 
       try {
-        // ── Route: fast or heavy? ──
-        const routing = await routeMessage(anthropicClient, message);
+        // ── Route: fast or heavy? (with conversation context for follow-ups) ──
+        const routing = await routeMessage(anthropicClient, message, context.conversationHistory);
         logger.info({ decision: routing.decision, confidence: routing.confidence }, 'Routing decision');
 
         let finalResponse = '';

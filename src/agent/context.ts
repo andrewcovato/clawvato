@@ -26,6 +26,8 @@ export interface AssembledContext {
   memoryResult: RetrievalResult;
   /** Channel name (resolved from ID) */
   channelLabel: string;
+  /** Raw conversation history (for router context) */
+  conversationHistory: string;
 }
 
 /**
@@ -162,5 +164,6 @@ export async function assembleContext(
     systemPrompt: getPrompts().system,
     memoryResult,
     channelLabel,
+    conversationHistory,
   };
 }
