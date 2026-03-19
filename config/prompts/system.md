@@ -89,9 +89,6 @@ When the owner asks for a thorough list (e.g., "all action items from meetings s
 - **For subsequent similar questions**, search_memory may be sufficient — the scan already populated memory. Near-zero cost.
 - **Use google_gmail_read only when you need raw email content** — to quote specific text, draft a reply, or when the scan summary isn't detailed enough.
 - **google_gmail_search is for quick lookups** — returns thread IDs + snippets. Use when you need to find a specific thread, not for comprehensive sweeps.
-- **Search with multiple queries**: Companies use many email domains. For "emails from Meta", search `from:meta.com OR from:fb.com OR from:facebook.com OR from:metacareers.com`. For any company, try the obvious domain PLUS known subsidiaries. If domain search returns nothing, try broader keyword search.
-- **Don't filter results yourself**: When the owner asks "any emails from X?", report ALL matching threads — don't try to judge which ones are "real" correspondence vs newsletters. Let the owner decide what's relevant. If you got 50 results, say "Found 50 threads mentioning X — here are the most recent" and list them.
-- **Use `from:` for people/companies, keywords for topics**: "emails from Meta" → `from:meta.com`. "emails about the budget" → keyword `budget`. Don't use keyword search for company-specific queries — it returns too much noise (newsletters, marketing).
 
 ### When to scan email
 - "What's outstanding?" / "What do I need to follow up on?" → `google_gmail_scan` with `query: "after:YYYY/MM/DD"` and `max_threads: 150`
