@@ -145,7 +145,7 @@ export async function executeHeavyPath(
       'mcp__memory__list_people', 'mcp__memory__list_commitments',
     ];
 
-    logger.info({ promptLength: userPrompt.length }, 'Starting heavy path SDK call');
+    logger.info({ promptLength: userPrompt.length, args: args.join(' ') }, 'Starting heavy path SDK call');
 
     if (handler) {
       await handler.updateProgress('Thinking deeply about this...');
@@ -215,6 +215,7 @@ function spawnClaude(
     proc.stdout?.on('data', (chunk: Buffer) => {
       const text = chunk.toString();
       stdout += text;
+      logger.debug({ stdoutChunk: text.slice(0, 200) }, 'SDK stdout');
 
       // Send progress update after first substantial output
       if (!progressUpdateSent && stdout.length > 100 && opts.onProgress) {
@@ -224,7 +225,9 @@ function spawnClaude(
     });
 
     proc.stderr?.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString();
+      const text = chunk.toString();
+      stderr += text;
+      logger.warn({ stderrChunk: text.slice(0, 500) }, 'SDK stderr');
     });
 
     // Write the user prompt to stdin
