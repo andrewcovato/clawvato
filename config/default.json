@@ -19,7 +19,7 @@
   "context": {
     "shortTermMessageLimit": 50,
     "shortTermMsgCharLimit": 1000,
-    "shortTermTokenBudget": 2000,
+    "shortTermTokenBudget": 8000,
     "longTermTokenBudget": 1500,
     "workingContextTokenBudget": 1000
   },
