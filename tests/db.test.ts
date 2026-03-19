@@ -96,14 +96,17 @@ describe('database', () => {
     expect(results[0].content).toContain('morning meetings');
   });
 
-  it('enforces memory type constraints', () => {
+  it('allows dynamic memory types (no CHECK constraint)', () => {
     const db = initDb();
+    // Dynamic categories — any string type is allowed at the schema level
     expect(() => {
+      const id = generateId();
       db.prepare(`
         INSERT INTO memories (id, type, content, source)
         VALUES (?, ?, ?, ?)
-      `).run(generateId(), 'invalid_type', 'test', 'test');
-    }).toThrow();
+      `).run(id, 'custom_dynamic_type', 'test', 'test');
+      db.prepare('DELETE FROM memories WHERE id = ?').run(id);
+    }).not.toThrow();
   });
 
   it('is idempotent on repeated init', () => {

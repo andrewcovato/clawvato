@@ -65,19 +65,16 @@ export function initDb(): DatabaseSync {
     }
   }
 
-  // Migrate: expand memory type CHECK constraint (v1 → v2)
+  // Migrate: remove type CHECK constraint (allows dynamic categories)
   // SQLite can't ALTER CHECK constraints, so we recreate the table if needed
   try {
-    // Test if new types are accepted
-    db.exec(`INSERT INTO memories (id, type, content, source) VALUES ('__type_test__', 'strategy', 'test', 'migration')`);
+    // Test if dynamic types are accepted (old schema had CHECK constraint)
+    db.exec(`INSERT INTO memories (id, type, content, source) VALUES ('__type_test__', 'technical', 'test', 'migration')`);
     db.exec(`DELETE FROM memories WHERE id = '__type_test__'`);
   } catch {
-    // Old constraint — need to migrate
-    logger.info('Migrating memories table to support new memory types...');
-    db.exec(`
-      ALTER TABLE memories RENAME TO memories_old;
-    `);
-    // Re-run schema to create new table with expanded CHECK
+    // Old constraint — need to migrate to unconstrained type column
+    logger.info('Migrating memories table to remove type CHECK constraint (dynamic categories)...');
+    db.exec(`ALTER TABLE memories RENAME TO memories_old;`);
     const newSchema = schema
       .split('\n')
       .filter(line => !line.trim().startsWith('CREATE INDEX') || !line.includes('memories'))
@@ -87,13 +84,77 @@ export function initDb(): DatabaseSync {
       INSERT INTO memories SELECT * FROM memories_old;
       DROP TABLE memories_old;
     `);
-    logger.info('Memories table migrated successfully');
+    logger.info('Memories table migrated successfully — dynamic categories enabled');
   }
 
-  // v5 reset migration REMOVED — it was firing on every deploy and wiping all memories.
-  // The guard key wasn't persisting (likely schema recreation or race condition).
-  // Original purpose: one-time reset for improved extraction prompts (2026-03-18).
-  // That's done — memories will now accumulate properly.
+  // Migrate: populate memory_entities junction table from JSON entities column
+  const entityMigrationDone = db.prepare(
+    "SELECT value FROM agent_state WHERE key = 'migration:memory_entities_v1'"
+  ).get() as { value: string } | undefined;
+
+  if (!entityMigrationDone) {
+    logger.info('Migrating: populating memory_entities junction table...');
+    const rows = db.prepare(
+      "SELECT id, entities FROM memories WHERE entities != '[]' AND entities IS NOT NULL AND valid_until IS NULL"
+    ).all() as Array<{ id: string; entities: string }>;
+
+    const insertEntity = db.prepare(
+      'INSERT OR IGNORE INTO memory_entities (memory_id, entity) VALUES (?, ?)'
+    );
+    let entityCount = 0;
+    for (const row of rows) {
+      try {
+        const entities = JSON.parse(row.entities) as string[];
+        for (const entity of entities) {
+          if (entity && typeof entity === 'string') {
+            insertEntity.run(row.id, entity);
+            entityCount++;
+          }
+        }
+      } catch { /* malformed JSON — skip */ }
+    }
+
+    // Seed memory_categories with defaults
+    const seedCategories: Array<[string, string]> = [
+      ['fact', 'Objective truths about the world'],
+      ['preference', 'How the owner likes things done'],
+      ['decision', 'Choices made with reasoning'],
+      ['observation', 'Patterns noticed but not confirmed'],
+      ['strategy', 'Plans, approaches, pivots with rationale'],
+      ['conclusion', 'Insights, analyses, realizations'],
+      ['commitment', 'Promises, deadlines, deliverables'],
+      ['reflection', 'System-generated synthesized insights'],
+      ['technical', 'Code, architecture, APIs, debugging insights'],
+      ['research', 'Findings from investigation or analysis'],
+      ['project', 'Project status, milestones, blockers'],
+      ['reference', 'Links, docs, resources to revisit'],
+      ['learning', 'Lessons learned, mistakes, growth'],
+      ['creative', 'Ideas, brainstorms, possibilities'],
+      ['relationship', 'Dynamics between people, collaboration patterns'],
+      ['artifact', 'Key assets: repos, directories, strategy docs, tools, infrastructure'],
+    ];
+
+    const insertCategory = db.prepare(
+      "INSERT OR IGNORE INTO memory_categories (name, description, source) VALUES (?, ?, 'seed')"
+    );
+    for (const [name, desc] of seedCategories) {
+      insertCategory.run(name, desc);
+    }
+
+    // Populate category counts from existing data
+    db.exec(`
+      UPDATE memory_categories SET count = (
+        SELECT COUNT(*) FROM memories WHERE type = memory_categories.name AND valid_until IS NULL
+      )
+    `);
+
+    // Mark migration complete
+    db.prepare(
+      "INSERT OR REPLACE INTO agent_state (key, value, status, updated_at) VALUES ('migration:memory_entities_v1', 'done', 'active', datetime('now'))"
+    ).run();
+
+    logger.info({ entityCount, memories: rows.length, categories: seedCategories.length }, 'Entity junction + category migration complete');
+  }
 
   // Create vector table (requires sqlite-vec extension)
   try {

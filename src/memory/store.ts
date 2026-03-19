@@ -28,9 +28,9 @@ function cachedPrepare(db: DatabaseSync, sql: string): ReturnType<DatabaseSync['
   return stmt;
 }
 
-// ── Memory types ──
+// ── Memory types (dynamic categories — no fixed enum) ──
 
-export type MemoryType = 'fact' | 'preference' | 'decision' | 'observation' | 'reflection' | 'strategy' | 'conclusion' | 'commitment';
+export type MemoryType = string;
 
 export interface Memory {
   id: string;
@@ -92,7 +92,8 @@ export interface NewPerson {
 
 export function insertMemory(db: DatabaseSync, memory: NewMemory): string {
   const id = generateId();
-  const entities = JSON.stringify(memory.entities ?? []);
+  const entityList = memory.entities ?? [];
+  const entities = JSON.stringify(entityList);
 
   db.prepare(`
     INSERT INTO memories (id, type, content, source, importance, confidence, entities)
@@ -106,6 +107,25 @@ export function insertMemory(db: DatabaseSync, memory: NewMemory): string {
     memory.confidence ?? 0.5,
     entities,
   );
+
+  // Populate entity junction table
+  if (entityList.length > 0) {
+    const insertEntity = db.prepare(
+      'INSERT OR IGNORE INTO memory_entities (memory_id, entity) VALUES (?, ?)'
+    );
+    for (const entity of entityList) {
+      if (entity && typeof entity === 'string') {
+        insertEntity.run(id, entity);
+      }
+    }
+  }
+
+  // Increment category count
+  try {
+    db.prepare(
+      'UPDATE memory_categories SET count = count + 1 WHERE name = ?'
+    ).run(memory.type);
+  } catch { /* category may not exist yet — created by findOrCreateCategory */ }
 
   logger.debug({ id, type: memory.type, contentLength: memory.content.length }, 'Memory stored');
   return id;
@@ -188,6 +208,7 @@ export function searchMemories(
 
 /**
  * Find memories mentioning a specific entity.
+ * Uses the memory_entities junction table for O(log n) indexed lookup.
  */
 export function findMemoriesByEntity(
   db: DatabaseSync,
@@ -195,14 +216,12 @@ export function findMemoriesByEntity(
   opts?: { limit?: number },
 ): Memory[] {
   const limit = opts?.limit ?? 10;
-  // entities is a JSON array — use LIKE for simple substring match
-  // Escape LIKE wildcards in the entity to prevent injection
-  const escapedEntity = entity.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
-  const pattern = `%"${escapedEntity}"%`;
   return db.prepare(
-    `SELECT * FROM memories WHERE entities LIKE ? ESCAPE '\\' AND valid_until IS NULL
-     ORDER BY importance DESC, created_at DESC LIMIT ?`
-  ).all(pattern, limit) as unknown as Memory[];
+    `SELECT m.* FROM memories m
+     JOIN memory_entities me ON m.id = me.memory_id
+     WHERE me.entity = ? COLLATE NOCASE AND m.valid_until IS NULL
+     ORDER BY m.importance DESC, m.created_at DESC LIMIT ?`
+  ).all(entity, limit) as unknown as Memory[];
 }
 
 /**
@@ -516,4 +535,94 @@ function hybridSearch(
   // Restore RRF order
   const memoryMap = new Map(memories.map(m => [m.id, m]));
   return rankedIds.map(id => memoryMap.get(id)).filter((m): m is Memory => !!m);
+}
+
+// ── Category CRUD ──
+
+export interface CategoryRow {
+  name: string;
+  description: string | null;
+  count: number;
+  source: 'seed' | 'discovered';
+  created_at: string;
+}
+
+/**
+ * Get all categories ordered by count (most-used first).
+ */
+export function getCategories(db: DatabaseSync): CategoryRow[] {
+  return db.prepare(
+    'SELECT * FROM memory_categories ORDER BY count DESC'
+  ).all() as unknown as CategoryRow[];
+}
+
+/**
+ * Format categories as a string list for prompt injection.
+ */
+export function getCategoryList(db: DatabaseSync): string {
+  const cats = getCategories(db);
+  return cats
+    .map(c => c.description ? `- "${c.name}" — ${c.description}` : `- "${c.name}"`)
+    .join('\n');
+}
+
+/**
+ * Find or create a category, normalizing on add.
+ * If a fuzzy match is found against existing categories, returns the existing name.
+ * Otherwise creates a new discovered category.
+ */
+export function findOrCreateCategory(
+  db: DatabaseSync,
+  name: string,
+  description?: string,
+  fuzzyThreshold = 0.8,
+): string {
+  // Normalize: lowercase, trim, no trailing 's' for simple plurals
+  const normalized = name.toLowerCase().trim().replace(/s$/, '');
+  if (!normalized) return 'fact'; // fallback
+
+  // Exact match (singular or plural)
+  const exact = db.prepare(
+    'SELECT name FROM memory_categories WHERE name = ? OR name = ?'
+  ).get(normalized, normalized + 's') as { name: string } | undefined;
+  if (exact) return exact.name;
+
+  // Fuzzy match against existing categories
+  const existing = db.prepare(
+    'SELECT name FROM memory_categories'
+  ).all() as unknown as Array<{ name: string }>;
+
+  for (const cat of existing) {
+    if (categoryFuzzyMatch(normalized, cat.name) >= fuzzyThreshold) {
+      return cat.name;
+    }
+  }
+
+  // No match — create new discovered category
+  db.prepare(
+    "INSERT OR IGNORE INTO memory_categories (name, description, source) VALUES (?, ?, 'discovered')"
+  ).run(normalized, description ?? null);
+
+  logger.info({ category: normalized }, 'New memory category discovered');
+  return normalized;
+}
+
+/**
+ * Fuzzy match two category names using character overlap + containment.
+ */
+function categoryFuzzyMatch(a: string, b: string): number {
+  if (a === b) return 1;
+
+  // Containment check (one is substring of other)
+  if (a.includes(b) || b.includes(a)) return 0.9;
+
+  // Word overlap (Jaccard on word fragments split by _ and -)
+  const wordsA = new Set(a.split(/[-_\s]+/));
+  const wordsB = new Set(b.split(/[-_\s]+/));
+  let overlap = 0;
+  for (const w of wordsA) {
+    if (wordsB.has(w)) overlap++;
+  }
+  const union = new Set([...wordsA, ...wordsB]).size;
+  return union > 0 ? overlap / union : 0;
 }

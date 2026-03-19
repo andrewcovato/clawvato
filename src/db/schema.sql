@@ -7,7 +7,7 @@ PRAGMA foreign_keys = ON;
 -- Core memory store with triple-factor scoring + bi-temporal tracking
 CREATE TABLE IF NOT EXISTS memories (
   id TEXT PRIMARY KEY,
-  type TEXT NOT NULL CHECK(type IN ('fact','preference','decision','observation','reflection','strategy','conclusion','commitment')),
+  type TEXT NOT NULL,  -- dynamic categories stored in memory_categories table
   content TEXT NOT NULL,
   source TEXT NOT NULL,
 
@@ -57,6 +57,26 @@ CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
   INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.rowid, old.content);
   INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content);
 END;
+
+-- Dynamic category registry — seeded at startup, grows organically
+CREATE TABLE IF NOT EXISTS memory_categories (
+  name TEXT PRIMARY KEY,
+  description TEXT,
+  count INTEGER NOT NULL DEFAULT 0,
+  source TEXT NOT NULL DEFAULT 'seed' CHECK(source IN ('seed','discovered')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Entity junction table — replaces JSON LIKE scan on memories.entities
+CREATE TABLE IF NOT EXISTS memory_entities (
+  memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+  entity TEXT NOT NULL COLLATE NOCASE,
+  PRIMARY KEY (memory_id, entity)
+);
+CREATE INDEX IF NOT EXISTS idx_memory_entities_entity ON memory_entities(entity COLLATE NOCASE);
+
+-- Composite index for type + validity queries
+CREATE INDEX IF NOT EXISTS idx_memories_type_valid ON memories(type, valid_until);
 
 -- People (structured, not embedded)
 CREATE TABLE IF NOT EXISTS people (
