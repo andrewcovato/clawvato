@@ -18,7 +18,7 @@ import { logger } from '../logger.js';
 import { getConfig } from '../config.js';
 import { generateId } from '../db/index.js';
 import { contentSimilarity } from './extractor.js';
-import { deleteEmbedding, insertMemory } from './store.js';
+import { deleteEmbedding, insertMemory, findDuplicates, type Memory } from './store.js';
 
 // Memory consolidation tunables loaded from config (memory.*)
 
@@ -74,6 +74,9 @@ export function consolidate(db: DatabaseSync): ConsolidationResult {
   // ── 4. Working context cleanup ──
   archiveStaleWorkingContext(db);
 
+  // ── 5. Category reorganization (weekly cadence) ──
+  reorganizeCategories(db);
+
   const memoriesProcessed = merged + decayed + archived;
 
   // Record the run
@@ -91,45 +94,43 @@ export function consolidate(db: DatabaseSync): ConsolidationResult {
 }
 
 /**
- * Find and merge near-duplicate memories.
- * Keeps the higher-importance/higher-confidence version.
+ * Find and merge near-duplicate memories using FTS5-based candidate finding.
+ * O(n × 5) instead of O(n²) — for each memory, find top 5 FTS5 candidates and compare only those.
  */
 function mergeDuplicates(db: DatabaseSync): number {
   let merged = 0;
+  const superseded = new Set<string>();
+  const config = getConfig();
 
-  // Get all valid memories grouped by type
-  const types = ['fact', 'preference', 'decision', 'strategy', 'conclusion', 'commitment', 'observation'];
+  // Get all valid memories ordered by importance (keep highest)
+  const memories = db.prepare(
+    'SELECT id, type, content, importance, confidence FROM memories WHERE valid_until IS NULL ORDER BY importance DESC'
+  ).all() as unknown as Array<{ id: string; type: string; content: string; importance: number; confidence: number }>;
 
-  for (const type of types) {
-    const memories = db.prepare(
-      'SELECT id, content, importance, confidence, created_at FROM memories WHERE type = ? AND valid_until IS NULL ORDER BY importance DESC'
-    ).all(type) as unknown as Array<{ id: string; content: string; importance: number; confidence: number; created_at: string }>;
+  for (const mem of memories) {
+    if (superseded.has(mem.id)) continue;
 
-    // Compare pairs — O(n²) but n is small per type
-    const superseded = new Set<string>();
+    // Use FTS5 to find candidate duplicates (already exists, returns top 5)
+    const candidates = findDuplicates(db, mem.content, mem.type);
 
-    for (let i = 0; i < memories.length; i++) {
-      if (superseded.has(memories[i].id)) continue;
+    for (const candidate of candidates) {
+      if (candidate.id === mem.id || superseded.has(candidate.id)) continue;
 
-      for (let j = i + 1; j < memories.length; j++) {
-        if (superseded.has(memories[j].id)) continue;
+      const similarity = contentSimilarity(mem.content, candidate.content);
+      if (similarity >= config.memory.mergeSimilarityThreshold) {
+        // mem has higher importance (ORDER BY DESC), supersede candidate
+        db.prepare(`
+          UPDATE memories SET valid_until = datetime('now'), superseded_by = ?
+          WHERE id = ?
+        `).run(mem.id, candidate.id);
+        deleteEmbedding(db, candidate.id);
+        superseded.add(candidate.id);
+        merged++;
 
-        const similarity = contentSimilarity(memories[i].content, memories[j].content);
-        if (similarity >= getConfig().memory.mergeSimilarityThreshold) {
-          // Keep i (higher importance due to ORDER BY), supersede j
-          db.prepare(`
-            UPDATE memories SET valid_until = datetime('now'), superseded_by = ?
-            WHERE id = ?
-          `).run(memories[i].id, memories[j].id);
-          deleteEmbedding(db, memories[j].id);
-          superseded.add(memories[j].id);
-          merged++;
-
-          logger.debug(
-            { kept: memories[i].id, superseded: memories[j].id, similarity: similarity.toFixed(2), type },
-            'Merged duplicate memory',
-          );
-        }
+        logger.debug(
+          { kept: mem.id, superseded: candidate.id, similarity: similarity.toFixed(2), type: mem.type },
+          'Merged duplicate memory',
+        );
       }
     }
   }
@@ -143,28 +144,30 @@ function mergeDuplicates(db: DatabaseSync): number {
  * - Not accessed in 90 days: importance *= 0.7
  */
 function decayStaleMemories(db: DatabaseSync): number {
-  const now = Date.now();
+  const config = getConfig();
+  const decayExempt = config.memory.decayExemptCategories;
+  const exemptPlaceholders = decayExempt.map(() => '?').join(',');
 
   // 90-day decay (stronger)
   const decay90 = db.prepare(`
     UPDATE memories
     SET importance = MAX(1, CAST(importance * 0.7 AS INTEGER))
     WHERE valid_until IS NULL
-      AND type NOT IN ('preference', 'commitment')
+      AND type NOT IN (${exemptPlaceholders})
       AND (last_accessed_at IS NOT NULL AND julianday('now') - julianday(last_accessed_at) > ?)
       AND importance > 1
-  `).run(getConfig().memory.decayThresholdDays90);
+  `).run(...decayExempt, config.memory.decayThresholdDays90);
 
   // 30-day decay (lighter)
   const decay30 = db.prepare(`
     UPDATE memories
     SET importance = MAX(1, CAST(importance * 0.9 AS INTEGER))
     WHERE valid_until IS NULL
-      AND type NOT IN ('preference', 'commitment')
+      AND type NOT IN (${exemptPlaceholders})
       AND (last_accessed_at IS NOT NULL AND julianday('now') - julianday(last_accessed_at) > ?)
       AND (last_accessed_at IS NULL OR julianday('now') - julianday(last_accessed_at) <= ?)
       AND importance > 1
-  `).run(getConfig().memory.decayThresholdDays30, getConfig().memory.decayThresholdDays90);
+  `).run(...decayExempt, config.memory.decayThresholdDays30, config.memory.decayThresholdDays90);
 
   const total = Number(decay90.changes ?? 0) + Number(decay30.changes ?? 0);
 
@@ -180,13 +183,17 @@ function decayStaleMemories(db: DatabaseSync): number {
  * Sets valid_until to now (removes from active retrieval) but keeps in DB for audit.
  */
 function archiveMemories(db: DatabaseSync): number {
+  const config = getConfig();
+  const exemptCategories = config.memory.archiveExemptCategories;
+  const exemptPlaceholders = exemptCategories.map(() => '?').join(',');
+
   const result = db.prepare(`
     UPDATE memories
     SET valid_until = datetime('now')
     WHERE valid_until IS NULL
       AND importance <= ?
-      AND type NOT IN ('preference', 'commitment', 'reflection')
-  `).run(getConfig().memory.archiveThreshold);
+      AND type NOT IN (${exemptPlaceholders})
+  `).run(config.memory.archiveThreshold, ...exemptCategories);
 
   const count = Number(result.changes ?? 0);
 
@@ -231,5 +238,48 @@ function archiveStaleWorkingContext(db: DatabaseSync): void {
     }
   } catch {
     // agent_state may not exist — non-critical
+  }
+}
+
+/**
+ * Reorganize memory categories — recalculate counts and prune empty discovered categories.
+ * Runs as part of consolidation but at a weekly cadence (guarded by agent_state).
+ * No merge needed — duplicates are prevented at insert time by findOrCreateCategory.
+ */
+function reorganizeCategories(db: DatabaseSync): void {
+  try {
+    const config = getConfig();
+    const guardKey = 'last_category_reorg';
+    const lastReorg = db.prepare(
+      "SELECT value FROM agent_state WHERE key = ?"
+    ).get(guardKey) as { value: string } | undefined;
+
+    if (lastReorg) {
+      const hoursSince = (Date.now() - new Date(lastReorg.value).getTime()) / (1000 * 60 * 60);
+      if (hoursSince < config.memory.categoryReorgIntervalHours) return;
+    }
+
+    // Recalculate counts
+    db.exec(`
+      UPDATE memory_categories SET count = (
+        SELECT COUNT(*) FROM memories WHERE type = memory_categories.name AND valid_until IS NULL
+      )
+    `);
+
+    // Remove discovered categories with zero memories
+    const removed = db.prepare(
+      "DELETE FROM memory_categories WHERE source = 'discovered' AND count = 0"
+    ).run();
+
+    if (Number(removed.changes ?? 0) > 0) {
+      logger.info({ removed: removed.changes }, 'Pruned empty discovered categories');
+    }
+
+    // Update guard
+    db.prepare(
+      "INSERT OR REPLACE INTO agent_state (key, value, status, updated_at) VALUES (?, ?, 'active', datetime('now'))"
+    ).run(guardKey, new Date().toISOString());
+  } catch (error) {
+    logger.debug({ error }, 'Category reorganization failed — non-critical');
   }
 }

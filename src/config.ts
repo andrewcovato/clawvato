@@ -127,6 +127,9 @@ const ConfigSchema = z.object({
     reflectionMaxTokens: z.number().int().default(1000),
     extractionContentMaxChars: z.number().int().min(0).default(2000),
     categoryFuzzyThreshold: z.number().min(0).max(1).default(0.8),
+    decayExemptCategories: z.array(z.string()).default(['preference', 'commitment']),
+    archiveExemptCategories: z.array(z.string()).default(['preference', 'commitment', 'reflection']),
+    categoryReorgIntervalHours: z.number().default(168),
   }).default(() => ({
     consolidationIntervalHours: 24,
     workingContextArchiveDays: 14,
@@ -139,6 +142,9 @@ const ConfigSchema = z.object({
     reflectionMaxTokens: 1000,
     extractionContentMaxChars: 2000,
     categoryFuzzyThreshold: 0.8,
+    decayExemptCategories: ['preference', 'commitment'],
+    archiveExemptCategories: ['preference', 'commitment', 'reflection'],
+    categoryReorgIntervalHours: 168,
   })),
 
   drive: z.object({
@@ -236,6 +242,9 @@ function getDefaultConfig(): Partial<ClawvatoConfig> {
       reflectionMaxTokens: 1000,
       extractionContentMaxChars: 2000,
       categoryFuzzyThreshold: 0.8,
+      decayExemptCategories: ['preference', 'commitment'],
+      archiveExemptCategories: ['preference', 'commitment', 'reflection'],
+      categoryReorgIntervalHours: 168,
     },
     drive: {
       syncBatchSize: 10,
