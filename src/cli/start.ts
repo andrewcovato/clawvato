@@ -94,10 +94,24 @@ export async function startAgent(): Promise<void> {
     await agent.processBatch(batch, slack.handler);
   });
 
+  // ── Periodic consolidation + backup (every 6h, guarded by shouldConsolidate) ──
+  const CONSOLIDATION_CHECK_MS = 6 * 60 * 60 * 1000; // 6 hours
+  const consolidationTimer = setInterval(() => {
+    try {
+      if (shouldConsolidate(db)) {
+        const result = consolidate(db);
+        logger.info(result, 'Periodic consolidation complete');
+      }
+    } catch (error) {
+      logger.warn({ error }, 'Periodic consolidation failed — non-critical');
+    }
+  }, CONSOLIDATION_CHECK_MS);
+
   // ── Graceful shutdown ──
   const shutdown = async () => {
     logger.info('Shutting down...');
     try { writeFileSync(join(config.dataDir, 'last-active.txt'), String(Date.now()), 'utf-8'); } catch { /* */ }
+    clearInterval(consolidationTimer);
     await agent.shutdown();
     await slack.stop();
     closeDb();
