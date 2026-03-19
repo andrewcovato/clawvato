@@ -135,6 +135,13 @@ export async function executeHeavyPath(
       '--mcp-config', configPath,
       '--append-system-prompt', sdkSystemPrompt,
       '--max-turns', '25',
+      // Pre-approve bash commands the SDK needs — gws (Google), fireflies CLI, and general read tools
+      '--allowedTools',
+      'Bash(gws:*)', 'Bash(npx:*)', 'Bash(cat:*)', 'Bash(ls:*)',
+      'Read', 'Glob', 'Grep',
+      'mcp__memory__search_memory', 'mcp__memory__retrieve_context',
+      'mcp__memory__store_fact', 'mcp__memory__update_working_context',
+      'mcp__memory__list_people', 'mcp__memory__list_commitments',
     ];
 
     logger.info({ promptLength: userPrompt.length }, 'Starting heavy path SDK call');
