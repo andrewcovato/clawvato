@@ -58,14 +58,8 @@ function formatPerson(p: Person): string {
  * Format a memory as a concise context line.
  */
 function formatMemory(m: Memory): string {
-  const typeLabel = m.type === 'preference' ? 'Pref' :
-    m.type === 'decision' ? 'Decision' :
-    m.type === 'fact' ? 'Fact' :
-    m.type === 'reflection' ? 'Insight' :
-    m.type === 'strategy' ? 'Strategy' :
-    m.type === 'conclusion' ? 'Conclusion' :
-    m.type === 'commitment' ? 'Commitment' :
-    'Note';
+  // Dynamic label — capitalize first letter of any category
+  const typeLabel = m.type.charAt(0).toUpperCase() + m.type.slice(1);
   const confidence = m.confidence >= 0.9 ? '' : ` [${Math.round(m.confidence * 100)}% confident]`;
   return `${typeLabel}: ${m.content}${confidence}`;
 }
@@ -179,24 +173,7 @@ export async function retrieveContext(
     }
   }
 
-  // ── 2. Preferences (always valuable when relevant) ──
-  if (tokensUsed < budget) {
-    const prefs = findMemoriesByType(db, 'preference', { validOnly: true, limit: 5 });
-    for (const pref of prefs) {
-      if (tokensUsed >= budget) break;
-
-      const line = formatMemory(pref);
-      const tokens = estimateTokens(line);
-      if (tokensUsed + tokens <= budget) {
-        parts.push(line);
-        tokensUsed += tokens;
-        memoriesRetrieved++;
-        touchMemory(db, pref.id);
-      }
-    }
-  }
-
-  // ── 3. Memories about mentioned entities ──
+  // ── 2. Memories about mentioned entities ──
   for (const name of names) {
     if (tokensUsed >= budget) break;
 
@@ -225,13 +202,13 @@ export async function retrieveContext(
     if (hasVectorSupport(db)) {
       try {
         const queryEmbedding = await embed(message);
-        searchResults = vectorSearch(db, queryEmbedding, { limit: 10, ftsQuery });
+        searchResults = vectorSearch(db, queryEmbedding, { limit: 20, ftsQuery });
       } catch {
         // Embedding failed — fall back to FTS5 only
-        searchResults = searchMemories(db, ftsQuery, { limit: 10 });
+        searchResults = searchMemories(db, ftsQuery, { limit: 20 });
       }
     } else {
-      searchResults = searchMemories(db, ftsQuery, { limit: 10 });
+      searchResults = searchMemories(db, ftsQuery, { limit: 20 });
     }
 
     for (const mem of searchResults) {
@@ -266,22 +243,8 @@ export async function retrieveContext(
     } catch { /* agent_state may not exist */ }
   }
 
-  // ── 6. Recent decisions (always useful as background) ──
-  if (tokensUsed < budget) {
-    const decisions = findMemoriesByType(db, 'decision', { validOnly: true, limit: 3 });
-    for (const dec of decisions) {
-      if (tokensUsed >= budget) break;
-
-      const line = formatMemory(dec);
-      const tokens = estimateTokens(line);
-      if (tokensUsed + tokens <= budget) {
-        parts.push(line);
-        tokensUsed += tokens;
-        memoriesRetrieved++;
-        touchMemory(db, dec.id);
-      }
-    }
-  }
+  // Preferences and decisions now surface via semantic search when relevant
+  // (removed hardcoded type-biased pulls that consumed budget regardless of relevance)
 
   const context = parts.length > 0
     ? `## Memory\n${parts.join('\n')}`

@@ -55,7 +55,7 @@ describe('retrieveContext', () => {
     expect(result.context).toContain('Engineer');
   });
 
-  it('retrieves preferences', async () => {
+  it('retrieves preferences via semantic search', async () => {
     insertMemory(db, {
       type: 'preference',
       content: 'Andrew prefers meetings after 10am',
@@ -64,7 +64,8 @@ describe('retrieveContext', () => {
       confidence: 1.0,
     });
 
-    const result = await retrieveContext(db, 'Schedule something for tomorrow');
+    // Preferences surface via FTS5 when query keywords overlap
+    const result = await retrieveContext(db, 'When does Andrew prefer meetings?');
 
     expect(result.memoriesRetrieved).toBeGreaterThanOrEqual(1);
     expect(result.context).toContain('meetings after 10am');
@@ -99,17 +100,17 @@ describe('retrieveContext', () => {
   });
 
   it('respects token budget', async () => {
-    // Insert many memories
+    // Insert many memories with common keywords
     for (let i = 0; i < 20; i++) {
       insertMemory(db, {
-        type: 'preference',
-        content: `Preference number ${i}: This is a moderately long preference statement that takes up some tokens`,
+        type: 'fact',
+        content: `Meeting update number ${i}: The quarterly budget review discussion covered important financial topics`,
         source: 'test',
         importance: 5,
       });
     }
 
-    const result = await retrieveContext(db, 'What are my preferences?', { tokenBudget: 200 });
+    const result = await retrieveContext(db, 'quarterly budget review meeting', { tokenBudget: 200 });
 
     // Should not exceed budget
     expect(result.tokensUsed).toBeLessThanOrEqual(200);
@@ -122,27 +123,28 @@ describe('retrieveContext', () => {
   it('touches retrieved memories (updates access tracking)', async () => {
     const id = insertMemory(db, {
       type: 'preference',
-      content: 'Andrew prefers short meetings',
+      content: 'Andrew prefers short meetings over long discussions',
       source: 'test',
       importance: 8,
     });
 
-    retrieveContext(db, 'Schedule a meeting');
+    await retrieveContext(db, 'What does Andrew prefer about meetings?');
 
     const memory = getMemory(db, id);
     expect(memory!.access_count).toBeGreaterThanOrEqual(1);
   });
 
-  it('includes decisions in context', async () => {
+  it('includes decisions via semantic search', async () => {
     insertMemory(db, {
       type: 'decision',
-      content: 'Andrew decided to use view-only sharing by default',
+      content: 'Andrew decided to use view-only sharing by default for all files',
       source: 'test',
       importance: 9,
       confidence: 1.0,
     });
 
-    const result = await retrieveContext(db, 'Share this file with Jake');
+    // Decisions surface via FTS5 when query keywords overlap
+    const result = await retrieveContext(db, 'What sharing default view-only decision?');
 
     expect(result.context).toContain('view-only');
   });
@@ -150,12 +152,12 @@ describe('retrieveContext', () => {
   it('formats context with ## Memory header', async () => {
     insertMemory(db, {
       type: 'preference',
-      content: 'Andrew prefers concise emails',
+      content: 'Andrew prefers concise emails over long ones',
       source: 'test',
       importance: 8,
     });
 
-    const result = await retrieveContext(db, 'Draft an email');
+    const result = await retrieveContext(db, 'What are Andrew preferences about emails?');
 
     expect(result.context).toMatch(/^## Memory/);
   });

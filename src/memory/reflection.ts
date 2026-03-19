@@ -105,7 +105,9 @@ async function runReflection(
 
       insertMemory(db, {
         type: 'reflection',
-        content: String(insight.content).slice(0, 500),
+        content: config.memory.extractionContentMaxChars > 0
+          ? String(insight.content).slice(0, config.memory.extractionContentMaxChars)
+          : String(insight.content),
         source: `reflection:${new Date().toISOString()}`,
         importance: Math.max(1, Math.min(10, Math.round(Number(insight.importance) || 7))),
         confidence: 0.8,
