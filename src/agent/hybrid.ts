@@ -194,93 +194,139 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
           context.userPrompt = deepParts.join('\n\n---\n\n');
           context.memoryResult = deepMemory;
 
-          // Pre-flight: collect context until user explicitly says "go"
+          // Pre-flight: LLM-driven conversation to refine the request
           // (can't inject context mid-subprocess, so gather everything upfront)
-          let additionalContext = '';
+          let preflightContext = '';
           if (isRealSlackMessage) {
-            const confirmMsg = await handler.getMessages().post(
-              batch.channel,
-              `\u{1f9e0} This needs deep analysis — it may take a few minutes and I won't be able to change direction mid-way.\n\nAnything you want to add before I start? Say *go* when ready, or *cancel* to stop.`,
-              batch.threadTs,
-            );
-
-            // Wait indefinitely for explicit "go" or "cancel" — never auto-proceed
-            let ready = false;
             const PREFLIGHT_POLL_MS = 1000;
             const REMINDER_INTERVAL_MS = config.agent.preflightReminderMs;
             let lastActivityAt = Date.now();
-            const originalText = message.toLowerCase().trim(); // For dedup
+            const originalText = message.toLowerCase().trim();
 
-            while (!ready && !finalResponse) {
-              await new Promise(r => setTimeout(r, PREFLIGHT_POLL_MS));
-              const interrupt = handler.drainInterrupt();
+            // Build pre-flight conversation with Sonnet
+            const preflightMessages: Anthropic.MessageParam[] = [
+              { role: 'user', content: `The owner's request:\n${message}\n\nAssembled context:\n${context.userPrompt}` },
+            ];
 
-              if (!interrupt) {
-                // No message — check if we should send a reminder
-                if (Date.now() - lastActivityAt > REMINDER_INTERVAL_MS) {
-                  try {
-                    await handler.getMessages().update(
-                      batch.channel,
-                      confirmMsg.ts,
-                      `\u{1f9e0} Still waiting — say *go* to start deep analysis, or *cancel* to stop.${additionalContext ? `\n\n_Additional context collected so far: ${additionalContext.trim().slice(0, 100)}..._` : ''}`,
-                    );
-                  } catch { /* */ }
-                  lastActivityAt = Date.now();
+            // Get initial bot response (offer to clarify / ask if ready)
+            const initialResponse = await anthropicClient.messages.create({
+              model: config.models.executor,
+              max_tokens: 500,
+              system: getPrompts().preflight,
+              messages: preflightMessages,
+            });
+            const initialText = initialResponse.content
+              .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+              .map(b => b.text).join('');
+
+            // Check if LLM already decided to proceed (clear request, no questions)
+            if (initialText.includes('[PROCEED]')) {
+              preflightContext = '';
+              logger.info('Pre-flight: LLM determined request is clear — proceeding immediately');
+              await handler.updateProgress('Deep analysis in progress...');
+            } else if (initialText.includes('[CANCEL]')) {
+              finalResponse = 'Cancelled.';
+              logger.info('Pre-flight: LLM cancelled');
+            } else {
+              // Post the bot's response to Slack
+              const cleanInitial = initialText.replace(/\[PROCEED\]|\[CANCEL\]/g, '').trim();
+              let botMsgTs: string | undefined;
+              try {
+                const posted = await handler.getMessages().post(batch.channel, cleanInitial, batch.threadTs);
+                botMsgTs = posted.ts;
+              } catch { /* */ }
+
+              preflightMessages.push({ role: 'assistant', content: initialText });
+
+              // Conversation loop — wait for user messages, respond via LLM
+              let proceed = false;
+              while (!proceed && !finalResponse) {
+                await new Promise(r => setTimeout(r, PREFLIGHT_POLL_MS));
+                const interrupt = handler.drainInterrupt();
+
+                if (!interrupt) {
+                  // Periodic reminder
+                  if (Date.now() - lastActivityAt > REMINDER_INTERVAL_MS && botMsgTs) {
+                    try {
+                      await handler.getMessages().post(
+                        batch.channel,
+                        `Still here — let me know when you're ready to start, or if you have more to add.`,
+                        batch.threadTs,
+                      );
+                    } catch { /* */ }
+                    lastActivityAt = Date.now();
+                  }
+                  continue;
                 }
-                continue;
-              }
 
-              lastActivityAt = Date.now();
-              const text = interrupt.text.toLowerCase().trim();
+                lastActivityAt = Date.now();
 
-              // Skip duplicate of the original message (Slack can re-deliver events)
-              if (text === originalText) {
-                logger.debug('Pre-flight: skipping duplicate of original message');
-                try { await handler.ackInterrupt(batch.channel, interrupt.ts); } catch { /* */ }
-                continue;
-              }
+                // Skip duplicate of original message
+                if (interrupt.text.toLowerCase().trim() === originalText) {
+                  logger.debug('Pre-flight: skipping duplicate of original message');
+                  continue;
+                }
 
-              const isGoSignal = /^(go|yes|do it|proceed|start|ok|yep|yeah|y|sure|ready|let'?s go|send it|ship it|run it|go ahead)\s*[.!]?$/i.test(text);
-              const isCancelSignal = /^(stop|cancel|nevermind|never mind|scratch that|abort|nvm|nah|no|forget it)\s*[.!]?$/i.test(text);
+                // Remove :eyes: from the user's message (no special reactions during pre-flight)
+                await handler.dismissEyes(batch.channel, interrupt.ts);
 
-              if (isGoSignal) {
-                ready = true;
-                try { await handler.ackInterrupt(batch.channel, interrupt.ts); } catch { /* */ }
-                logger.info('Pre-flight: user said go');
-              } else if (isCancelSignal) {
-                try { await handler.ackInterrupt(batch.channel, interrupt.ts); } catch { /* */ }
-                try { await handler.getMessages().delete(batch.channel, confirmMsg.ts); } catch { /* */ }
-                finalResponse = 'Cancelled.';
-                logger.info('Deep path cancelled during pre-flight');
-              } else {
-                // Additive context — accumulate and acknowledge
-                additionalContext += `\n${interrupt.text}`;
-                try { await handler.ackInterrupt(batch.channel, interrupt.ts); } catch { /* */ }
-                try {
-                  await handler.getMessages().update(
-                    batch.channel,
-                    confirmMsg.ts,
-                    `\u{1f9e0} Got it, added to context. Say *go* when ready, or *cancel* to stop.\n\n_Context so far: ${additionalContext.trim().slice(0, 200)}${additionalContext.trim().length > 200 ? '...' : ''}_`,
-                  );
-                } catch { /* */ }
-                logger.info({ text: interrupt.text.slice(0, 80) }, 'Pre-flight additive context received');
+                // Send user message to LLM
+                preflightMessages.push({ role: 'user', content: interrupt.text });
+
+                const llmResponse = await anthropicClient.messages.create({
+                  model: config.models.executor,
+                  max_tokens: 500,
+                  system: getPrompts().preflight,
+                  messages: preflightMessages,
+                });
+                const responseText = llmResponse.content
+                  .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+                  .map(b => b.text).join('');
+
+                preflightMessages.push({ role: 'assistant', content: responseText });
+
+                if (responseText.includes('[PROCEED]')) {
+                  proceed = true;
+                  // Post confirmation (without the sentinel)
+                  const cleanResponse = responseText.replace(/\[PROCEED\]/g, '').trim();
+                  if (cleanResponse) {
+                    try { await handler.getMessages().post(batch.channel, cleanResponse, batch.threadTs); } catch { /* */ }
+                  }
+                  // Collect all user messages from the conversation as additional context
+                  preflightContext = preflightMessages
+                    .filter(m => m.role === 'user')
+                    .slice(1) // skip the initial system context message
+                    .map(m => typeof m.content === 'string' ? m.content : '')
+                    .filter(Boolean)
+                    .join('\n');
+                  logger.info('Pre-flight: user confirmed — proceeding to deep path');
+                } else if (responseText.includes('[CANCEL]')) {
+                  finalResponse = 'Cancelled.';
+                  const cleanResponse = responseText.replace(/\[CANCEL\]/g, '').trim();
+                  if (cleanResponse) {
+                    try { await handler.getMessages().post(batch.channel, cleanResponse, batch.threadTs); } catch { /* */ }
+                  }
+                  logger.info('Pre-flight: cancelled by user');
+                } else {
+                  // Regular response — post to Slack, continue loop
+                  const cleanResponse = responseText.replace(/\[PROCEED\]|\[CANCEL\]/g, '').trim();
+                  try {
+                    const posted = await handler.getMessages().post(batch.channel, cleanResponse, batch.threadTs);
+                    botMsgTs = posted.ts;
+                  } catch { /* */ }
+                }
               }
             }
 
-            // Clean up confirmation message
-            try { await handler.getMessages().delete(batch.channel, confirmMsg.ts); } catch { /* */ }
-
-            if (finalResponse) {
-              // Cancelled during pre-flight — skip deep path
-            } else {
+            if (!finalResponse) {
               await handler.updateProgress('Deep analysis in progress...');
             }
           }
 
           if (!finalResponse) {
-          // Append any additional context from pre-flight to the user prompt
-          const deepUserPrompt = additionalContext
-            ? `${context.userPrompt}\n\n## Additional context from user\n${additionalContext.trim()}`
+          // Append any additional context from pre-flight conversation to the user prompt
+          const deepUserPrompt = preflightContext
+            ? `${context.userPrompt}\n\n## Additional context from pre-flight conversation\n${preflightContext.trim()}`
             : context.userPrompt;
 
           // Set up abort controller so interrupts can kill the SDK subprocess
@@ -299,9 +345,9 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
                 try { await handler.ackInterrupt(batch.channel, interrupt.ts); } catch { /* */ }
               } else {
                 // Non-cancel interrupt during deep path — queue for processing after completion
-                // Swap :eyes: for :memo: so user knows it'll be addressed after
+                // Swap :eyes: for 🔜 so user knows it'll be addressed after
                 logger.info({ text: interrupt.text.slice(0, 80) }, 'Non-cancel interrupt during deep path — queued for after completion');
-                await handler.deferInterrupt(batch.channel, interrupt.ts);
+                await handler.queueInterrupt(batch.channel, interrupt.ts);
                 // Push back to buffer (drainInterrupt shifted it out) for re-enqueue in completeProcessing
                 handler.pushInterrupt(interrupt);
               }

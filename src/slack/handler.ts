@@ -456,10 +456,9 @@ export class SlackHandler {
         'Re-enqueueing interrupt-buffered messages',
       );
       for (const interrupt of this.interruptBuffer) {
-        // Remove stale :eyes: from the buffered message
-        try {
-          await this.reactions.remove(channel, interrupt.ts, 'eyes');
-        } catch { /* may not exist */ }
+        // Clear queue/eyes reactions from the buffered message
+        try { await this.reactions.remove(channel, interrupt.ts, 'eyes'); } catch { /* */ }
+        try { await this.reactions.remove(channel, interrupt.ts, 'soon'); } catch { /* */ }
         // Re-enqueue so it goes through the normal queue → router flow
         this.queue.enqueue({
           text: interrupt.text,
@@ -526,15 +525,35 @@ export class SlackHandler {
   }
 
   /**
-   * Mark an interrupt as "queued for later" — swap 👀 for 📝.
+   * Silently dismiss the 👀 from a message (no replacement reaction).
+   * Used during pre-flight conversation where reactions aren't needed.
    */
-  async deferInterrupt(channel: string, messageTs: string): Promise<void> {
+  async dismissEyes(channel: string, messageTs: string): Promise<void> {
+    try {
+      await this.reactions.remove(channel, messageTs, 'eyes');
+    } catch { /* may not exist */ }
+  }
+
+  /**
+   * Mark an interrupt as "queued for later" — swap 👀 for 🔜.
+   * The queue reaction is cleared in completeProcessing when queued messages are re-enqueued.
+   */
+  async queueInterrupt(channel: string, messageTs: string): Promise<void> {
     try {
       await this.reactions.remove(channel, messageTs, 'eyes');
     } catch { /* may not exist */ }
     try {
-      await this.reactions.add(channel, messageTs, 'memo');
+      await this.reactions.add(channel, messageTs, 'soon');
     } catch { /* non-critical */ }
+  }
+
+  /**
+   * Clear the queue reaction from a message (called when re-enqueuing after deep path).
+   */
+  async clearQueueReaction(channel: string, messageTs: string): Promise<void> {
+    try {
+      await this.reactions.remove(channel, messageTs, 'soon');
+    } catch { /* may not exist */ }
   }
 
   /**

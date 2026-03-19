@@ -92,6 +92,7 @@ interface LoadedPrompts {
   deepPath: string;
   router: string;
   factSynthesis: string;
+  preflight: string;
 }
 
 let cachedPrompts: LoadedPrompts | null = null;
@@ -118,6 +119,7 @@ export function loadPrompts(): LoadedPrompts {
     deepPath: 'deep-path.md',
     router: 'router.md',
     factSynthesis: 'fact-synthesis.md',
+    preflight: 'preflight.md',
   };
 
   const loaded: Partial<LoadedPrompts> = {};
