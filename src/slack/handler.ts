@@ -448,8 +448,32 @@ export class SlackHandler {
       clearTimeout(this.activeTask.staleTimer);
     }
 
+    // Clean up :eyes: on any interrupt-buffered messages and re-enqueue them
+    // so they get processed as new batches (with conversation history providing context)
+    if (this.interruptBuffer.length > 0) {
+      logger.info(
+        { count: this.interruptBuffer.length },
+        'Re-enqueueing interrupt-buffered messages',
+      );
+      for (const interrupt of this.interruptBuffer) {
+        // Remove stale :eyes: from the buffered message
+        try {
+          await this.reactions.remove(channel, interrupt.ts, 'eyes');
+        } catch { /* may not exist */ }
+        // Re-enqueue so it goes through the normal queue → router flow
+        this.queue.enqueue({
+          text: interrupt.text,
+          channel,
+          threadTs: this.activeTask.threadTs,
+          userId: getConfig().ownerSlackUserId ?? '',
+          ts: interrupt.ts,
+          receivedAt: Date.now(),
+        });
+      }
+    }
+
     logger.info(
-      { hadTask: true, droppedInterrupts: this.interruptBuffer.length },
+      { hadTask: true, reEnqueued: this.interruptBuffer.length },
       'Processing complete',
     );
 
@@ -481,20 +505,36 @@ export class SlackHandler {
   }
 
   /**
+   * Push an interrupt back to the buffer (e.g., non-cancel interrupt
+   * during deep path that should be re-enqueued after completion).
+   */
+  pushInterrupt(interrupt: { text: string; ts: string }): void {
+    this.interruptBuffer.push(interrupt);
+  }
+
+  /**
    * Acknowledge an interrupt message with 👍 and remove the 👀 that was
    * added when the message first arrived (before it was routed to the interrupt buffer).
    */
   async ackInterrupt(channel: string, messageTs: string): Promise<void> {
     try {
       await this.reactions.remove(channel, messageTs, 'eyes');
-    } catch {
-      // May not exist — non-critical
-    }
+    } catch { /* may not exist */ }
     try {
       await this.reactions.add(channel, messageTs, 'thumbsup');
-    } catch {
-      // Non-critical
-    }
+    } catch { /* non-critical */ }
+  }
+
+  /**
+   * Mark an interrupt as "queued for later" — swap 👀 for 📝.
+   */
+  async deferInterrupt(channel: string, messageTs: string): Promise<void> {
+    try {
+      await this.reactions.remove(channel, messageTs, 'eyes');
+    } catch { /* may not exist */ }
+    try {
+      await this.reactions.add(channel, messageTs, 'memo');
+    } catch { /* non-critical */ }
   }
 
   /**
@@ -525,8 +565,8 @@ export class SlackHandler {
       ? `${Math.round(elapsed / 60)}m`
       : `${elapsed}s`;
 
-    const description = this.activeTask.description.slice(0, 80);
-    const text = `\u{1f9e0} Still working — ${description} (${elapsedStr})`;
+    const lastProgress = this.activeTask.lastProgressText?.replace(/^\u{1f9e0}\s*/u, '').replace(/\s*\([\d]+[ms],?\s*still working\)\s*$/u, '') ?? 'Working on it...';
+    const text = `\u{1f9e0} ${lastProgress} (${elapsedStr}, still working)`;
 
     try {
       await this.messages.update(

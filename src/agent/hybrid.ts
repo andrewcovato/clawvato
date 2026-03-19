@@ -194,26 +194,33 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
                 deepAbort.abort();
                 try { await handler.ackInterrupt(batch.channel, interrupt.ts); } catch { /* */ }
               } else {
-                // Non-cancel interrupt — log but don't abort (might be additive context)
-                logger.info({ text: interrupt.text.slice(0, 80) }, 'Non-cancel interrupt during deep path — ignoring');
+                // Non-cancel interrupt during deep path — queue for processing after completion
+                // Swap :eyes: for :memo: so user knows it'll be addressed after
+                logger.info({ text: interrupt.text.slice(0, 80) }, 'Non-cancel interrupt during deep path — queued for after completion');
+                await handler.deferInterrupt(batch.channel, interrupt.ts);
+                // Push back to buffer (drainInterrupt shifted it out) for re-enqueue in completeProcessing
+                handler.pushInterrupt(interrupt);
               }
             }
           }, config.agent.interruptPollMs);
 
           const workingContext = loadWorkingContext(db);
-          const result = await executeDeepPath(
-            context.userPrompt,
-            {
-              dataDir: config.dataDir,
-              systemPrompt: context.systemPrompt,
-              memoryContext: context.memoryResult.context,
-              workingContext,
-            },
-            handler,
-            deepAbort.signal,
-          );
-
-          clearInterval(interruptPoll);
+          let result;
+          try {
+            result = await executeDeepPath(
+              context.userPrompt,
+              {
+                dataDir: config.dataDir,
+                systemPrompt: context.systemPrompt,
+                memoryContext: context.memoryResult.context,
+                workingContext,
+              },
+              handler,
+              deepAbort.signal,
+            );
+          } finally {
+            clearInterval(interruptPoll);
+          }
 
           if (deepAbort.signal.aborted) {
             // Owner cancelled — acknowledge and stop
