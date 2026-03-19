@@ -27,6 +27,8 @@ import {
 } from './store.js';
 import { embed } from './embeddings.js';
 import { getConfig } from '../config.js';
+import { getPrompts } from '../prompts.js';
+import Anthropic from '@anthropic-ai/sdk';
 
 /** Rough estimate: 1 token ≈ 4 characters */
 function estimateTokens(text: string): number {
@@ -138,18 +140,80 @@ const STOPWORDS = new Set([
 ]);
 
 /**
+ * Rerank memory candidates using Haiku for relevance scoring.
+ * Takes RRF-ranked candidates and rescores them based on actual relevance
+ * to the query — catches keyword matches that aren't semantically relevant.
+ */
+async function rerankMemories(
+  query: string,
+  candidates: Memory[],
+  maxCandidates: number,
+): Promise<Memory[]> {
+  if (candidates.length === 0) return candidates;
+
+  const config = getConfig();
+  const toRerank = candidates.slice(0, maxCandidates);
+
+  try {
+    const client = new Anthropic();
+    const snippets = toRerank.map((m, i) => ({
+      id: i,
+      type: m.type,
+      content: m.content.slice(0, 500),
+    }));
+
+    const response = await client.messages.create({
+      model: config.models.classifier,
+      max_tokens: 300,
+      system: getPrompts().rerank,
+      messages: [{
+        role: 'user',
+        content: `Query: "${query}"\n\nMemories:\n${JSON.stringify(snippets)}`,
+      }],
+    });
+
+    const text = response.content
+      .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+      .map(b => b.text)
+      .join('');
+
+    const jsonStr = text.replace(/^```json?\s*/i, '').replace(/\s*```$/, '').trim();
+    const scores: Array<{ id: number; score: number }> = JSON.parse(jsonStr);
+
+    // Build score map and sort
+    const scoreMap = new Map(scores.map(s => [s.id, s.score]));
+    const reranked = toRerank
+      .map((m, i) => ({ memory: m, score: scoreMap.get(i) ?? 0.5 }))
+      .sort((a, b) => b.score - a.score)
+      .filter(r => r.score > 0.1) // Drop clearly irrelevant results
+      .map(r => r.memory);
+
+    // Append any candidates beyond maxCandidates (weren't reranked)
+    const remaining = candidates.slice(maxCandidates);
+    logger.debug({ reranked: reranked.length, dropped: toRerank.length - reranked.length }, 'Memory rerank complete');
+    return [...reranked, ...remaining];
+  } catch (error) {
+    // Rerank failed — fall back to original RRF order
+    logger.debug({ error }, 'Memory rerank failed — using RRF order');
+    return candidates;
+  }
+}
+
+/**
  * Retrieve relevant memory context for a given message.
  *
  * Returns formatted context string and metadata about what was retrieved.
  * Respects the token budget — stops adding context when budget is exceeded.
  * Uses hybrid search (FTS5 + vector) when sqlite-vec is available.
+ * Optionally reranks results via Haiku for precision.
  */
 export async function retrieveContext(
   db: DatabaseSync,
   message: string,
   opts?: { tokenBudget?: number },
 ): Promise<RetrievalResult> {
-  const budget = opts?.tokenBudget ?? getConfig().context.longTermTokenBudget;
+  const config = getConfig();
+  const budget = opts?.tokenBudget ?? config.context.longTermTokenBudget;
   const parts: string[] = [];
   let tokensUsed = 0;
   let memoriesRetrieved = 0;
@@ -209,6 +273,11 @@ export async function retrieveContext(
       }
     } else {
       searchResults = searchMemories(db, ftsQuery, { limit: 20 });
+    }
+
+    // LLM rerank: Haiku scores candidates for actual relevance to the query
+    if (config.memory.rerankEnabled && searchResults.length > 0) {
+      searchResults = await rerankMemories(message, searchResults, config.memory.rerankMaxCandidates);
     }
 
     for (const mem of searchResults) {

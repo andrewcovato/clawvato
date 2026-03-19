@@ -93,6 +93,7 @@ interface LoadedPrompts {
   router: string;
   factSynthesis: string;
   preflight: string;
+  rerank: string;
 }
 
 let cachedPrompts: LoadedPrompts | null = null;
@@ -120,6 +121,7 @@ export function loadPrompts(): LoadedPrompts {
     router: 'router.md',
     factSynthesis: 'fact-synthesis.md',
     preflight: 'preflight.md',
+    rerank: 'rerank.md',
   };
 
   const loaded: Partial<LoadedPrompts> = {};
