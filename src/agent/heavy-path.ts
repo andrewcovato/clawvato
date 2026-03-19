@@ -162,6 +162,7 @@ export async function executeHeavyPath(
 
     const args = [
       '--print',
+      '--verbose',
       '--output-format', 'stream-json',
       '--model', 'claude-opus-4-6',
       '--mcp-config', configPath,
