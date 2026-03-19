@@ -25,7 +25,7 @@ import { getGoogleAuth } from '../google/auth.js';
 import { createGoogleTools } from '../google/tools.js';
 import { createSlackTools, type SlackTool, type ToolHandlerResult } from '../mcp/slack/server.js';
 import { assembleContext, loadWorkingContext } from './context.js';
-import { routeMessage } from './router.js';
+import { routeMessage, type RouterResult } from './router.js';
 import { executeFastPath, createFastPathMemoryTools } from './fast-path.js';
 import { executeHeavyPath } from './heavy-path.js';
 import { extractFacts, storeExtractionResult } from '../memory/extractor.js';
@@ -148,12 +148,13 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
         try { await assistantAPI.setStatus('Thinking...'); } catch { /* */ }
       }
 
+      let routing: RouterResult | undefined;
+      let finalResponse = '';
+
       try {
         // ── Route: fast or heavy? Router sees full context (same as both paths) ──
-        const routing = await routeMessage(anthropicClient, context.userPrompt);
+        routing = await routeMessage(anthropicClient, context.userPrompt);
         logger.info({ decision: routing.decision, confidence: routing.confidence }, 'Routing decision');
-
-        let finalResponse = '';
 
         if (routing.decision === 'heavy') {
           // ── Heavy Path: Claude Code SDK ──
@@ -245,6 +246,7 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
         }
 
         // ── Post-interaction memory extraction (fire-and-forget) ──
+        // Extract facts from the owner's message
         if (isRealSlackMessage && message.length > 10) {
           const extractionSource = `slack:${batch.channel}:${lastMsg.ts}`;
           extractFacts(anthropicClient, config.models.classifier, message, extractionSource)
@@ -256,6 +258,27 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
             })
             .catch(err => {
               logger.debug({ error: err }, 'Background extraction failed');
+            });
+        }
+
+        // Extract facts from heavy path response — the SDK reads emails/meetings/files
+        // via CLI tools that bypass our extraction hooks, so we extract from its output.
+        // This is actually better: the SDK already synthesized the content.
+        if (finalResponse && finalResponse.length > 50 && routing?.decision === 'heavy') {
+          const responseSource = `sdk:${batch.channel}:${lastMsg.ts}`;
+          extractFacts(anthropicClient, config.models.classifier, finalResponse, responseSource)
+            .then(async result => {
+              if (result.facts.length > 0 || result.people.length > 0) {
+                const stored = await storeExtractionResult(db, result, responseSource);
+                logger.info(
+                  { facts: stored.memoriesStored, people: stored.peopleStored },
+                  'Heavy path response extraction complete',
+                );
+                await maybeReflect(db, anthropicClient, config.models.classifier);
+              }
+            })
+            .catch(err => {
+              logger.debug({ error: err }, 'Heavy path response extraction failed');
             });
         }
 
