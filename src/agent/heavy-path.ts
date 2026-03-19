@@ -192,9 +192,11 @@ function spawnClaude(
   },
 ): Promise<SpawnResult> {
   return new Promise((resolve, reject) => {
+    // Strip ANTHROPIC_API_KEY so Claude CLI uses Max plan OAuth instead of API billing
+    const { ANTHROPIC_API_KEY: _, ...cleanEnv } = process.env;
     const proc: ChildProcess = spawn('claude', args, {
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env },
+      env: cleanEnv,
       cwd: process.cwd(),
     });
 
