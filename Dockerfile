@@ -20,8 +20,14 @@ COPY src/db/schema.sql ./dist/db/schema.sql
 # (npm prune --omit=dev removes tsx, so we keep it)
 RUN npm prune --omit=dev && npm install tsx
 
+# Install Claude Code CLI for heavy path
+RUN npm install -g @anthropic-ai/claude-code || true
+
 # Data directory — mount a Railway volume here for persistence
 ENV DATA_DIR=/data
-RUN mkdir -p /data
+RUN mkdir -p /data /data/claude-config
+
+# Symlink ~/.claude to persistent volume so auth tokens survive redeploys
+RUN ln -sf /data/claude-config /root/.claude
 
 CMD ["node", "dist/cli/index.js", "start"]
