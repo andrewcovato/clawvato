@@ -22,7 +22,7 @@ As you complete the user's task, you will interact with artifacts — emails, do
 **When you have accumulated findings (or at the end of your research), write them all to a file:**
 
 ```bash
-cat << 'FINDINGS_EOF' > /tmp/clawvato-findings.json
+cat << 'FINDINGS_EOF' > {{FINDINGS_FILE}}
 [
   {
     "type": "fact",
@@ -66,7 +66,7 @@ For each finding:
 - Track findings mentally in your context as you work.
 - **After ALL research is complete and BEFORE writing your final response**, write all findings in a single Bash call:
 ```bash
-cat << 'FINDINGS_EOF' > /tmp/clawvato-findings.json
+cat << 'FINDINGS_EOF' > {{FINDINGS_FILE}}
 {"type":"fact","content":"Vail engagement kicked off Jan 15","source":"gmail:thread:abc","importance":7,"confidence":0.9,"entities":["Vail","sales"]}
 {"type":"decision","content":"Board approved Q2 budget of $2.1M","source":"fireflies:meeting:xyz","importance":9,"confidence":0.95,"entities":["budget","Q2","board"]}
 FINDINGS_EOF

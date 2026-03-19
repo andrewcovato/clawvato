@@ -32,6 +32,8 @@ export interface DeepPathOptions {
   memoryContext: string;
   /** Working context string */
   workingContext: string;
+  /** Path for the findings file (unique per invocation) */
+  findingsFile: string;
 }
 
 export interface DeepPathResult {
@@ -79,8 +81,9 @@ function buildMcpConfig(dataDir: string): { configPath: string; cleanup: () => v
 function buildSdkSystemPrompt(opts: DeepPathOptions): string {
   const parts: string[] = [];
 
-  // Base prompt from external file — edit config/prompts/deep-path.md to tune behavior
-  parts.push(getPrompts().deepPath);
+  // Base prompt from external file — inject findings file path
+  const basePrompt = getPrompts().deepPath.replace('{{FINDINGS_FILE}}', opts.findingsFile);
+  parts.push(basePrompt);
 
   if (opts.memoryContext) {
     parts.push(`\n## Memory Context\n${opts.memoryContext}`);
@@ -157,7 +160,7 @@ export async function executeDeepPath(
       // Memory writes happen via findings file (/tmp/clawvato-findings.json) + background processor
       '--allowedTools',
       'Bash(gws:*)', 'Bash(npx:*)', 'Bash(cat:*)', 'Bash(ls:*)', 'Bash(echo:*)',
-      'Read', 'Write', 'Glob', 'Grep',
+      'Read', 'Glob', 'Grep',
       'mcp__memory__search_memory', 'mcp__memory__retrieve_context',
       'mcp__memory__list_people', 'mcp__memory__list_commitments',
     ];
@@ -225,15 +228,26 @@ function spawnClaudeStreaming(
   },
 ): Promise<StreamResult> {
   return new Promise((resolve, reject) => {
-    // Strip ANTHROPIC_API_KEY so Claude CLI uses Max plan OAuth
-    const { ANTHROPIC_API_KEY: _, ...cleanEnv } = process.env;
+    // Allowlist env vars — exclude Slack tokens and other secrets the subprocess doesn't need
+    const cleanEnv: Record<string, string | undefined> = {
+      HOME: process.env.HOME,
+      PATH: process.env.PATH,
+      NODE_ENV: process.env.NODE_ENV,
+      DATA_DIR: process.env.DATA_DIR,
+      CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN,
+      GWS_CONFIG_B64: process.env.GWS_CONFIG_B64,
+      FIREFLIES_API_KEY: process.env.FIREFLIES_API_KEY,
+      GOOGLE_AGENT_EMAIL: process.env.GOOGLE_AGENT_EMAIL,
+      // ANTHROPIC_API_KEY intentionally excluded — forces Max plan OAuth
+      // SLACK_BOT_TOKEN, SLACK_APP_TOKEN intentionally excluded — subprocess has no Slack access
+    };
 
     const hasOAuth = !!cleanEnv.CLAUDE_CODE_OAUTH_TOKEN;
     logger.info({ hasOAuth, HOME: cleanEnv.HOME ?? '(unset)' }, 'Spawning claude CLI (stream-json)');
 
     const proc: ChildProcess = spawn('claude', args, {
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: cleanEnv,
+      env: cleanEnv as NodeJS.ProcessEnv,
       cwd: process.cwd(),
     });
 

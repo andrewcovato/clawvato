@@ -39,6 +39,7 @@ import { findOrCreateCategory, insertMemory, findDuplicates, supersedeMemory, de
 import { contentSimilarity } from '../memory/extractor.js';
 import { embedBatch } from '../memory/embeddings.js';
 import { classifyInterrupt, generateClarificationMessage } from '../slack/interrupt-classifier.js';
+import { scanForSecrets } from '../security/output-sanitizer.js';
 import type { SlackHandler } from '../slack/handler.js';
 import type { AccumulatedBatch } from '../slack/event-queue.js';
 
@@ -53,7 +54,10 @@ export interface HybridAgentOptions {
   userClient?: WebClient;
 }
 
-const FINDINGS_FILE = '/tmp/clawvato-findings.json';
+/** Generate a unique findings file path per deep-path invocation */
+function getFindingsFilePath(): string {
+  return `/tmp/clawvato-findings-${crypto.randomUUID()}.json`;
+}
 
 /**
  * Process the findings file written by the deep path subprocess.
@@ -63,18 +67,19 @@ const FINDINGS_FILE = '/tmp/clawvato-findings.json';
 async function processDeepPathFindings(
   db: DatabaseSync,
   source: string,
+  findingsFilePath: string,
 ): Promise<{ stored: number; skipped: number; errors: number }> {
   let stored = 0;
   let skipped = 0;
   let errors = 0;
 
-  if (!existsSync(FINDINGS_FILE)) {
+  if (!existsSync(findingsFilePath)) {
     logger.info('No findings file from deep path — skipping');
     return { stored, skipped, errors };
   }
 
   try {
-    const raw = readFileSync(FINDINGS_FILE, 'utf-8');
+    const raw = readFileSync(findingsFilePath, 'utf-8');
     // Clean up: handle markdown wrapping, multiple JSON arrays, JSONL
     const cleaned = raw
       .replace(/^```json?\s*/gim, '')
@@ -106,7 +111,7 @@ async function processDeepPathFindings(
 
     for (const finding of findings) {
       try {
-        const content = String(finding.content ?? '');
+        const content = String(finding.content ?? '').slice(0, 10_000);
         if (!content || content.length < 10) continue;
 
         const type = findOrCreateCategory(db, String(finding.type ?? 'fact'));
@@ -158,7 +163,7 @@ async function processDeepPathFindings(
     logger.warn({ error: err }, 'Failed to process findings file');
   } finally {
     // Clean up the findings file
-    try { unlinkSync(FINDINGS_FILE); } catch { /* */ }
+    try { unlinkSync(findingsFilePath); } catch { /* */ }
   }
 
   return { stored, skipped, errors };
@@ -279,6 +284,7 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
 
       let routing: RouterResult | undefined;
       let finalResponse = '';
+      let findingsFile: string | undefined;
 
       try {
         // ── Startup crawl: always fast path, bias toward silence ──
@@ -475,7 +481,8 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
             }
           }, config.agent.interruptPollMs);
 
-          const workingContext = loadWorkingContext(db);
+          const workingContext = deepWorkingContext;
+          findingsFile = getFindingsFilePath();
           let result;
           try {
             result = await executeDeepPath(
@@ -485,6 +492,7 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
                 systemPrompt: context.systemPrompt,
                 memoryContext: context.memoryResult.context,
                 workingContext,
+                findingsFile,
               },
               handler,
               deepAbort.signal,
@@ -496,7 +504,7 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
           if (deepAbort.signal.aborted) {
             // Owner cancelled — acknowledge and stop
             finalResponse = 'Cancelled.';
-            logger.info({ durationMs: result.durationMs, toolCalls: result.durationMs }, 'Deep path cancelled by owner');
+            logger.info({ durationMs: result.durationMs }, 'Deep path cancelled by owner');
           } else if (result.success && result.response) {
             finalResponse = result.response;
           } else {
@@ -536,8 +544,14 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
 
         // ── Post response ──
         if (finalResponse && !finalResponse.trim().includes(NO_RESPONSE)) {
-          const cleanResponse = finalResponse.replace(/\[NO_RESPONSE\]/g, '').trim();
+          let cleanResponse = finalResponse.replace(/\[NO_RESPONSE\]/g, '').trim();
           if (cleanResponse) {
+            // Sanitize: scan for accidentally leaked secrets before posting
+            const scan = scanForSecrets(cleanResponse);
+            if (scan.hasSecrets) {
+              logger.warn({ patterns: scan.matches?.length }, 'Secrets detected in response — redacting before Slack post');
+              cleanResponse = scan.redacted;
+            }
             logger.info({ responseLength: cleanResponse.length, path: routing.decision }, 'Posting response');
             try {
               if (isAssistantMode) {
@@ -585,9 +599,9 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
             });
         }
 
-        // Process findings file from deep path (Opus writes findings to /tmp/clawvato-findings.json)
-        if (routing?.decision === 'deep') {
-          processDeepPathFindings(db, `deep:${batch.channel}:${lastMsg.ts}`)
+        // Process findings file from deep path (unique path per invocation)
+        if (routing?.decision === 'deep' && findingsFile) {
+          processDeepPathFindings(db, `deep:${batch.channel}:${lastMsg.ts}`, findingsFile)
             .then(async result => {
               if (result.stored > 0) {
                 logger.info(
