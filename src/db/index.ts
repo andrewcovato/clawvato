@@ -66,25 +66,48 @@ export function initDb(): DatabaseSync {
   }
 
   // Migrate: remove type CHECK constraint (allows dynamic categories)
-  // SQLite can't ALTER CHECK constraints, so we recreate the table if needed
-  try {
-    // Test if dynamic types are accepted (old schema had CHECK constraint)
-    db.exec(`INSERT INTO memories (id, type, content, source) VALUES ('__type_test__', 'technical', 'test', 'migration')`);
-    db.exec(`DELETE FROM memories WHERE id = '__type_test__'`);
-  } catch {
-    // Old constraint — need to migrate to unconstrained type column
-    logger.info('Migrating memories table to remove type CHECK constraint (dynamic categories)...');
-    db.exec(`ALTER TABLE memories RENAME TO memories_old;`);
-    const newSchema = schema
-      .split('\n')
-      .filter(line => !line.trim().startsWith('CREATE INDEX') || !line.includes('memories'))
-      .join('\n');
-    try { db.exec(newSchema); } catch { /* tables may partially exist */ }
-    db.exec(`
-      INSERT INTO memories SELECT * FROM memories_old;
-      DROP TABLE memories_old;
-    `);
-    logger.info('Memories table migrated successfully — dynamic categories enabled');
+  // SQLite can't ALTER CHECK constraints, so we recreate the table if needed.
+  // Self-healing: handles partial migration state from prior crash.
+
+  // First: check if memories_old exists from a prior crashed migration
+  const hasMemoriesOld = (() => {
+    try {
+      db.exec("SELECT 1 FROM memories_old LIMIT 1");
+      return true;
+    } catch { return false; }
+  })();
+
+  if (hasMemoriesOld) {
+    // Prior migration crashed mid-way — recover
+    logger.info('Recovering from partial type migration — memories_old found');
+    // Ensure memories table exists with new schema
+    try { db.exec(schema); } catch { /* tables may partially exist */ }
+    // Check if memories has data
+    const count = (db.prepare('SELECT COUNT(*) as c FROM memories').get() as { c: number }).c;
+    if (count === 0) {
+      // Data is in memories_old — copy it over
+      db.exec('INSERT INTO memories SELECT * FROM memories_old;');
+      logger.info('Recovered data from memories_old');
+    }
+    db.exec('DROP TABLE IF EXISTS memories_old;');
+    logger.info('Cleaned up memories_old');
+  } else {
+    // Normal check: test if dynamic types are accepted
+    try {
+      db.exec(`INSERT INTO memories (id, type, content, source) VALUES ('__type_test__', 'technical', 'test', 'migration')`);
+      db.exec(`DELETE FROM memories WHERE id = '__type_test__'`);
+    } catch {
+      // Old constraint — need to migrate to unconstrained type column
+      logger.info('Migrating memories table to remove type CHECK constraint (dynamic categories)...');
+      db.exec(`ALTER TABLE memories RENAME TO memories_old;`);
+      // Create fresh memories table with new schema (no CHECK)
+      try { db.exec(schema); } catch { /* tables may partially exist */ }
+      db.exec(`
+        INSERT INTO memories SELECT * FROM memories_old;
+        DROP TABLE memories_old;
+      `);
+      logger.info('Memories table migrated successfully — dynamic categories enabled');
+    }
   }
 
   // Migrate: populate memory_entities junction table from JSON entities column
