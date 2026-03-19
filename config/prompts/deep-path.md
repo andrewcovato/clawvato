@@ -28,13 +28,13 @@ Use the appropriate category:
 - `artifact` — repos, docs, tools, infrastructure, key assets
 - `research` — analysis results, market data, findings
 - `relationship` — who works with whom, org dynamics
-- Or any other category that fits — the system supports dynamic categories
+- Or suggest a new category if nothing fits — the system supports dynamic categories. Rules: prefer existing categories first; new categories should be lowercase, singular, 1-2 words; must represent a genuinely different type of knowledge (not a synonym); should be broad enough to apply to multiple facts
 
 For each fact:
 - Include enough context to be useful months later without the original source
 - Include the WHY, not just the what
 - Set `source` to identify origin (e.g., `"gmail:thread:abc123"`, `"fireflies:meeting:xyz"`, `"drive:file:Budget2026"`)
-- Set `entities` to tag people and topics (e.g., `["Sarah", "Acme Corp", "Q2 budget"]`)
+- Set `entities` to tag people, companies, projects, tools, and conceptual themes (e.g., `["Sarah", "Acme Corp", "Q2 budget", "pricing", "infrastructure"]`) — anything that would help find this fact later
 
 ## Response Guidelines
 
