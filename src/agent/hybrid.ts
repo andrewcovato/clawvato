@@ -416,9 +416,17 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
                   proceed = true;
                   // Post confirmation (without the sentinel)
                   const cleanResponse = responseText.replace(/\[PROCEED\]/g, '').trim();
+                  let confirmTs: string | undefined;
                   if (cleanResponse) {
-                    try { await handler.getMessages().post(batch.channel, cleanResponse, batch.threadTs); } catch { /* */ }
+                    try {
+                      const posted = await handler.getMessages().post(batch.channel, cleanResponse, batch.threadTs);
+                      confirmTs = posted.ts;
+                    } catch { /* */ }
                   }
+                  // Start a fresh processing cycle on the confirm message for progress updates
+                  const progressTs = confirmTs ?? interrupt.ts;
+                  await handler.startProcessing('Deep analysis...', batch.channel, [progressTs], batch.threadTs);
+
                   // Collect all user messages from the conversation as additional context
                   preflightContext = preflightMessages
                     .filter(m => m.role === 'user')
@@ -428,7 +436,8 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
                     .join('\n');
                   logger.info('Pre-flight: user confirmed — proceeding to deep path');
                 } else if (responseText.includes('[CANCEL]')) {
-                  finalResponse = 'Cancelled.';
+                  // Let the LLM's cancel response be the only output
+                  finalResponse = ' '; // non-empty but blank — prevents the main response section from posting
                   const cleanResponse = responseText.replace(/\[CANCEL\]/g, '').trim();
                   if (cleanResponse) {
                     try { await handler.getMessages().post(batch.channel, cleanResponse, batch.threadTs); } catch { /* */ }
@@ -445,9 +454,7 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
               }
             }
 
-            if (!finalResponse) {
-              await handler.updateProgress('Deep analysis in progress...');
-            }
+            // Progress updates now start inside the [PROCEED] handler via startProcessing
           }
 
           if (!finalResponse) {
