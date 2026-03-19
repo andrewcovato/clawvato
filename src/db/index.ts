@@ -69,7 +69,13 @@ export function initDb(): DatabaseSync {
   // SQLite can't ALTER CHECK constraints, so we recreate the table if needed.
   // Self-healing: handles partial migration state from prior crash.
 
-  // First: check if memories_old exists from a prior crashed migration
+  // Migrate: remove type CHECK constraint (allows dynamic categories)
+  // Self-healing: handles corrupted FTS5 state from prior crash-restart loops.
+  //
+  // The FTS5 content table (memories_fts with content='memories') gets corrupted
+  // when memories is renamed. We detect this and do a clean rebuild.
+
+  // Check for stale memories_old from a prior crashed migration
   const hasMemoriesOld = (() => {
     try {
       db.exec("SELECT 1 FROM memories_old LIMIT 1");
@@ -78,35 +84,93 @@ export function initDb(): DatabaseSync {
   })();
 
   if (hasMemoriesOld) {
-    // Prior migration crashed mid-way — recover
-    logger.info('Recovering from partial type migration — memories_old found');
-    // Ensure memories table exists with new schema
+    // Prior migration crashed — rebuild clean
+    logger.info('Recovering from partial type migration — rebuilding memories table...');
+
+    // Drop corrupted FTS5 state (triggers reference stale content table)
+    try { db.exec('DROP TRIGGER IF EXISTS memories_ai;'); } catch { /* */ }
+    try { db.exec('DROP TRIGGER IF EXISTS memories_ad;'); } catch { /* */ }
+    try { db.exec('DROP TRIGGER IF EXISTS memories_au;'); } catch { /* */ }
+    try { db.exec('DROP TABLE IF EXISTS memories_fts;'); } catch { /* */ }
+    try { db.exec('DROP TABLE IF EXISTS memories;'); } catch { /* */ }
+
+    // Rename memories_old back to memories (preserves data)
+    db.exec('ALTER TABLE memories_old RENAME TO memories;');
+
+    // Now re-run full schema — creates FTS5 + triggers + new tables
+    // The memories table exists with data, CREATE TABLE IF NOT EXISTS is a no-op for it
+    // But we need the CHECK constraint removed — so rebuild:
+    // 1. Create temp table with new schema
+    db.exec(`CREATE TABLE memories_new (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL,
+      content TEXT NOT NULL,
+      source TEXT NOT NULL,
+      importance INTEGER NOT NULL DEFAULT 5 CHECK(importance BETWEEN 1 AND 10),
+      confidence REAL NOT NULL DEFAULT 0.5 CHECK(confidence BETWEEN 0 AND 1),
+      valid_from TEXT NOT NULL DEFAULT (datetime('now')),
+      valid_until TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_accessed_at TEXT,
+      access_count INTEGER NOT NULL DEFAULT 0,
+      entities TEXT DEFAULT '[]',
+      superseded_by TEXT,
+      reflection_source INTEGER DEFAULT 0
+    );`);
+    // 2. Copy data
+    db.exec('INSERT INTO memories_new SELECT * FROM memories;');
+    // 3. Drop old table
+    db.exec('DROP TABLE memories;');
+    // 4. Rename
+    db.exec('ALTER TABLE memories_new RENAME TO memories;');
+    // 5. Re-run schema for FTS5 + triggers + indexes + new tables
     try { db.exec(schema); } catch { /* tables may partially exist */ }
-    // Check if memories has data
-    const count = (db.prepare('SELECT COUNT(*) as c FROM memories').get() as { c: number }).c;
-    if (count === 0) {
-      // Data is in memories_old — copy it over
-      db.exec('INSERT INTO memories SELECT * FROM memories_old;');
-      logger.info('Recovered data from memories_old');
-    }
-    db.exec('DROP TABLE IF EXISTS memories_old;');
-    logger.info('Cleaned up memories_old');
+
+    logger.info('Recovery complete — memories table rebuilt with dynamic categories');
   } else {
-    // Normal check: test if dynamic types are accepted
+    // Normal path: test if dynamic types are accepted
+    let needsMigration = false;
     try {
       db.exec(`INSERT INTO memories (id, type, content, source) VALUES ('__type_test__', 'technical', 'test', 'migration')`);
       db.exec(`DELETE FROM memories WHERE id = '__type_test__'`);
     } catch {
-      // Old constraint — need to migrate to unconstrained type column
-      logger.info('Migrating memories table to remove type CHECK constraint (dynamic categories)...');
-      db.exec(`ALTER TABLE memories RENAME TO memories_old;`);
-      // Create fresh memories table with new schema (no CHECK)
+      needsMigration = true;
+    }
+
+    if (needsMigration) {
+      logger.info('Migrating memories table to remove type CHECK constraint...');
+
+      // Drop FTS5 triggers + table first (they reference memories)
+      try { db.exec('DROP TRIGGER IF EXISTS memories_ai;'); } catch { /* */ }
+      try { db.exec('DROP TRIGGER IF EXISTS memories_ad;'); } catch { /* */ }
+      try { db.exec('DROP TRIGGER IF EXISTS memories_au;'); } catch { /* */ }
+      try { db.exec('DROP TABLE IF EXISTS memories_fts;'); } catch { /* */ }
+
+      // Rebuild memories table without CHECK constraint
+      db.exec('ALTER TABLE memories RENAME TO memories_old;');
+      db.exec(`CREATE TABLE memories (
+        id TEXT PRIMARY KEY,
+        type TEXT NOT NULL,
+        content TEXT NOT NULL,
+        source TEXT NOT NULL,
+        importance INTEGER NOT NULL DEFAULT 5 CHECK(importance BETWEEN 1 AND 10),
+        confidence REAL NOT NULL DEFAULT 0.5 CHECK(confidence BETWEEN 0 AND 1),
+        valid_from TEXT NOT NULL DEFAULT (datetime('now')),
+        valid_until TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        last_accessed_at TEXT,
+        access_count INTEGER NOT NULL DEFAULT 0,
+        entities TEXT DEFAULT '[]',
+        superseded_by TEXT,
+        reflection_source INTEGER DEFAULT 0
+      );`);
+      db.exec('INSERT INTO memories SELECT * FROM memories_old;');
+      db.exec('DROP TABLE memories_old;');
+
+      // Re-run schema for FTS5 + triggers + indexes + new tables
       try { db.exec(schema); } catch { /* tables may partially exist */ }
-      db.exec(`
-        INSERT INTO memories SELECT * FROM memories_old;
-        DROP TABLE memories_old;
-      `);
-      logger.info('Memories table migrated successfully — dynamic categories enabled');
+
+      logger.info('Memories table migrated — dynamic categories enabled');
     }
   }
 
