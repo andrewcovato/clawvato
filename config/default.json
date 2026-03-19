@@ -20,7 +20,8 @@
     "fastPathMaxTokens": 4096,
     "deepPathMaxTurns": 200,
     "classifierMaxTokens": 100,
-    "interruptPollMs": 2000
+    "interruptPollMs": 2000,
+    "preflightReminderMs": 300000
   },
   "context": {
     "shortTermMessageLimit": 50,

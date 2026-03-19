@@ -207,7 +207,7 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
             // Wait indefinitely for explicit "go" or "cancel" — never auto-proceed
             let ready = false;
             const PREFLIGHT_POLL_MS = 1000;
-            const REMINDER_INTERVAL_MS = 120_000; // Nudge every 2 min of silence
+            const REMINDER_INTERVAL_MS = config.agent.preflightReminderMs;
             let lastActivityAt = Date.now();
             const originalText = message.toLowerCase().trim(); // For dedup
 

@@ -63,6 +63,7 @@ const ConfigSchema = z.object({
     deepPathMaxTurns: z.number().int().min(1).default(200),
     classifierMaxTokens: z.number().int().min(10).default(100),
     interruptPollMs: z.number().int().min(500).default(2000),
+    preflightReminderMs: z.number().int().min(10_000).default(300_000),
   }).default(() => ({
     maxTurns: 30,
     timeoutMs: 1_200_000,
@@ -72,6 +73,7 @@ const ConfigSchema = z.object({
     deepPathMaxTurns: 200,
     classifierMaxTokens: 100,
     interruptPollMs: 2000,
+    preflightReminderMs: 300_000,
   })),
 
   context: z.object({
@@ -212,6 +214,7 @@ function getDefaultConfig(): Partial<ClawvatoConfig> {
       deepPathMaxTurns: 200,
       classifierMaxTokens: 100,
       interruptPollMs: 2000,
+      preflightReminderMs: 300_000,
     },
     context: {
       shortTermMessageLimit: 50,
