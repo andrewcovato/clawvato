@@ -5,9 +5,13 @@ let loggerInstance: pino.Logger | null = null;
 export function initLogger(level: string = 'info'): pino.Logger {
   if (loggerInstance) return loggerInstance;
 
+  // MCP stdio server sets LOG_DESTINATION=stderr to keep stdout clean for JSON-RPC
+  const useStderr = process.env.LOG_DESTINATION === 'stderr';
+  const destination = useStderr ? pino.destination(2) : undefined; // fd 2 = stderr
+
   loggerInstance = pino({
     level,
-    transport: process.stdout.isTTY
+    transport: !useStderr && process.stdout.isTTY
       ? {
           target: 'pino-pretty',
           options: {
@@ -18,7 +22,7 @@ export function initLogger(level: string = 'info'): pino.Logger {
         }
       : undefined,
     base: { service: 'clawvato' },
-  });
+  }, destination as unknown as pino.DestinationStream);
 
   return loggerInstance;
 }
