@@ -97,7 +97,7 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
   async function classifierCall(systemPrompt: string, userMessage: string): Promise<string> {
     const response = await anthropicClient.messages.create({
       model: config.models.classifier,
-      max_tokens: 100,
+      max_tokens: config.agent.classifierMaxTokens,
       system: systemPrompt,
       messages: [{ role: 'user', content: userMessage }],
     });
@@ -186,7 +186,7 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
                 logger.info({ text: interrupt.text.slice(0, 80) }, 'Non-cancel interrupt during heavy path — ignoring');
               }
             }
-          }, 2000);
+          }, config.agent.interruptPollMs);
 
           const workingContext = loadWorkingContext(db);
           const result = await executeHeavyPath(

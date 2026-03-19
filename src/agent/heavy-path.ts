@@ -149,10 +149,10 @@ export async function executeHeavyPath(
       '--print',
       '--verbose',
       '--output-format', 'stream-json',
-      '--model', 'claude-opus-4-6',
+      '--model', config.models.planner,
       '--mcp-config', configPath,
       '--append-system-prompt', sdkSystemPrompt,
-      '--max-turns', '200',
+      '--max-turns', String(config.agent.heavyPathMaxTurns),
       // Pre-approve bash commands the SDK needs
       '--allowedTools',
       'Bash(gws:*)', 'Bash(npx:*)', 'Bash(cat:*)', 'Bash(ls:*)',

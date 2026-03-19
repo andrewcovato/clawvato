@@ -20,6 +20,7 @@
 
 import { createHash } from 'node:crypto';
 import { logger } from '../logger.js';
+import { getConfig } from '../config.js';
 import type { DatabaseSync } from 'node:sqlite';
 
 /**
@@ -41,9 +42,7 @@ export interface PatternRecord {
   non_graduatable: number; // SQLite stores booleans as 0/1
 }
 
-const GRADUATION_THRESHOLD = 10;
-const MAX_REJECTION_RATE = 0.05;
-const RECENT_WINDOW = 5;
+// Graduation thresholds read from config.trainingWheels
 
 /**
  * Compute a stable hash for an action pattern.
@@ -164,12 +163,13 @@ function checkGraduation(
   if (alreadyGraduated) return false;
 
   // Must have enough approvals
-  if (totalApprovals < GRADUATION_THRESHOLD) return false;
+  const twConfig = getConfig().trainingWheels;
+  if (totalApprovals < twConfig.graduationThreshold) return false;
 
   // Rejection rate must be below threshold
   if (totalOccurrences > 0) {
     const rejectionRate = totalRejections / totalOccurrences;
-    if (rejectionRate >= MAX_REJECTION_RATE) return false;
+    if (rejectionRate >= twConfig.maxRejectionRate) return false;
   }
 
   // Note: "zero rejections in last 5" requires tracking per-occurrence history.

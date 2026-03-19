@@ -4,32 +4,25 @@
     "description": "Always-on personal AI agent — your chief of staff",
     "version": "0.5.0",
     "status": "active",
-    "phase": "hybrid",
+    "phase": "hybrid-deployed",
     "startDate": "2026-03-06",
     "adoptedDate": "2026-03-07"
   },
   "tracks": {
     "A": { "name": "Core Foundation", "status": "complete", "completedDate": "2026-03-06" },
-    "B": { "name": "Slack MCP + Agent Core", "status": "complete", "completedDate": "2026-03-17", "notes": "Agent core replaced by hybrid agent in Track J. Old agent/index.ts preserved as fallback." },
-    "C": { "name": "Google Workspace", "status": "complete", "completedDate": "2026-03-18", "notes": "20 tools. Calendar + gmail_search in fast path. gws CLI for SDK heavy path." },
-    "D": { "name": "Memory + Embeddings", "status": "complete", "completedDate": "2026-03-18", "notes": "Crown jewel. Memory MCP server added for SDK access." },
-    "E": { "name": "Workflow Engine + Scheduling", "status": "not_started", "dependsOn": ["J"], "notes": "Proactive scheduling via cron after SDK is stable." },
-    "F": { "name": "Security + Training Wheels (undo)", "status": "partial", "notes": "Training wheels enforced in both fast/heavy paths. Real confirmation UX still needed." },
-    "G": { "name": "GitHub + Filesystem + Web Research", "status": "not_started", "dependsOn": ["J"], "notes": "Claude Code SDK has native file/bash access." },
-    "H": { "name": "Proactive Intelligence", "status": "not_started", "dependsOn": ["J", "E"] },
-    "I": { "name": "Fireflies.ai", "status": "complete", "completedDate": "2026-03-18", "notes": "4 tools + CLI wrapper for SDK access." },
+    "B": { "name": "Slack MCP + Agent Core", "status": "complete", "completedDate": "2026-03-17", "notes": "Hybrid agent is active. Old agent/index.ts removed in Phase 5 trim." },
+    "C": { "name": "Google Workspace", "status": "complete", "completedDate": "2026-03-18", "notes": "20 tools. Calendar+gmail_search in fast path. gws CLI for heavy path." },
+    "D": { "name": "Memory + Embeddings", "status": "complete", "completedDate": "2026-03-18", "notes": "Crown jewel. Memory MCP server for SDK. Extraction from both paths. Memory writes now auto-approved at trust level 1." },
+    "E": { "name": "Workflow Engine + Scheduling", "status": "not_started" },
+    "F": { "name": "Security + Training Wheels (undo)", "status": "partial", "notes": "Training wheels enforced in both paths. Memory writes whitelisted. Real confirmation UX still needed." },
+    "G": { "name": "GitHub + Filesystem + Web Research", "status": "not_started" },
+    "H": { "name": "Proactive Intelligence", "status": "not_started" },
+    "I": { "name": "Fireflies.ai", "status": "complete", "completedDate": "2026-03-18", "notes": "GraphQL client + CLI wrapper for SDK." },
     "J": {
       "name": "SDK Pivot — Hybrid Architecture",
       "status": "complete",
       "completedDate": "2026-03-18",
-      "notes": "Phases 1-4 implemented. Phase 5 (trim) deferred — old modules preserved as fallback. Hybrid agent wired into start.ts.",
-      "phases": [
-        "Phase 1: Memory MCP Server + Fireflies CLI ✅",
-        "Phase 2: Heavy Path + SDK Integration ✅",
-        "Phase 3: Router + Fast Path ✅",
-        "Phase 4: Wire Up + Startup ✅",
-        "Phase 5: Trim — deferred (old code preserved as fallback until integration tested)"
-      ]
+      "notes": "Fully deployed and tested on Railway. Fast path (Sonnet, API) + Heavy path (Opus, SDK subprocess). Stream-json progress updates. Interrupt support. Memory MCP server. gws CLI for Google. Fireflies CLI wrapper."
     }
   },
   "infrastructure": {
@@ -38,89 +31,69 @@
     "railwayProject": "99ecf42e-5142-442c-a79a-2f6fd0864ecf",
     "railwayService": "clawvato",
     "dataVolume": "/data (Railway persistent volume)",
-    "deployMethod": "Dockerfile, railway up --detach",
-    "googleAuth": "gws CLI → OAuth export → Railway env vars",
-    "firefliesAuth": "API key → FIREFLIES_API_KEY env var",
-    "maxPlan": "Claude Max subscription — SDK heavy path costs $0"
+    "deployMethod": "Dockerfile + scripts/docker-entrypoint.sh, railway up --detach",
+    "googleAuth": "gws CLI config via GWS_CONFIG_B64 env var (base64 tar.gz of ~/.config/gws/)",
+    "firefliesAuth": "FIREFLIES_API_KEY env var",
+    "claudeAuth": "CLAUDE_CODE_OAUTH_TOKEN env var (from claude setup-token)",
+    "maxPlan": "Claude Max subscription — heavy path costs $0"
   },
   "metrics": {
-    "testFiles": 24,
-    "testCount": 311,
-    "testsPassing": 311,
-    "tools": { "slack": 7, "google": 20, "fireflies": 4, "memory": 6, "search": 2, "total": 39 },
-    "newModules": {
-      "memoryMcp": "src/mcp/memory/server.ts + stdio.ts (~280 lines)",
-      "firefliesCli": "tools/fireflies.ts (~140 lines)",
-      "heavyPath": "src/agent/heavy-path.ts (~180 lines)",
-      "fastPath": "src/agent/fast-path.ts (~230 lines)",
-      "router": "src/agent/router.ts (~100 lines)",
-      "context": "src/agent/context.ts (~130 lines)",
-      "hybrid": "src/agent/hybrid.ts (~220 lines)"
-    }
+    "testFiles": 22,
+    "testCount": 297,
+    "testsPassing": 297
   },
   "knownIssues": [
     { "id": "TW-002", "severity": "medium", "title": "Real confirmation UX — currently blocks with error" },
     { "id": "SEC-001", "severity": "medium", "title": "FTS5 query injection via search_memory" },
-    { "id": "SEC-002", "severity": "medium", "title": "HTML extractor skipContent not nesting-aware" },
-    { "id": "SEC-003", "severity": "medium", "title": "Google refresh token not in output sanitizer" },
-    { "id": "SEC-004", "severity": "medium", "title": "Rate limiter resets on restart" },
-    { "id": "SEC-005", "severity": "medium", "title": "Post-tool sanitizer only scans strings" },
-    { "id": "SEC-006", "severity": "medium", "title": "scan_channel_history no trust tagging" },
-    { "id": "QUAL-001", "severity": "medium", "title": "buildFolderPathMap calls deprecated getFilePath" },
     { "id": "QUAL-002", "severity": "medium", "title": "hasVectorSupport probe per call — no cache" },
     { "id": "QUAL-003", "severity": "medium", "title": "Consolidation O(n²) merge — no LIMIT" },
-    { "id": "SDK-001", "severity": "high", "title": "Max plan OAuth on headless Railway — token persistence strategy needed" },
-    { "id": "SDK-002", "severity": "high", "title": "gws CLI installability on Railway — fallback to Google MCP if not available" },
-    { "id": "SDK-003", "severity": "medium", "title": "SDK session → Slack thread mapping — test --resume with thread_ts" },
-    { "id": "SDK-005", "severity": "low", "title": "Max plan rate limits — monitor and adjust router threshold if needed" },
-    { "id": "SDK-006", "severity": "medium", "title": "Heavy path fallback to fast path needs testing — verify claude CLI available" },
-    { "id": "TRIM-001", "severity": "low", "title": "Old agent/index.ts, search/, email-scan.ts still in codebase — trim after integration testing" }
+    { "id": "TRIM-001", "severity": "resolved", "title": "Old agent/index.ts, search/, email-scan.ts removed — Phase 5 trim complete" }
   ],
   "currentSprint": {
     "id": "S3",
     "name": "SDK Pivot — Hybrid Architecture",
     "goals": [
-      "Track J: SDK Pivot (ALL 5 PHASES) ✅ (Phase 5 trim deferred)",
+      "Track J: SDK Pivot ✅",
       "Memory MCP Server ✅",
       "Fireflies CLI wrapper ✅",
-      "Claude Code SDK heavy path integration ✅",
+      "Heavy path with stream-json progress ✅",
       "Haiku complexity router ✅",
       "Fast path simplification ✅",
-      "Deploy hybrid to Railway with Max auth (NEXT)"
+      "Cancel/interrupt support ✅",
+      "Memory persistence fix ✅",
+      "Railway deployment with Max auth + gws ✅"
     ],
-    "progress": "Phases 1-4 complete. Build passes. 311/311 tests pass. Ready for integration testing and deployment."
+    "progress": "Sprint complete. Hybrid architecture deployed and tested."
   },
   "lastSession": {
     "number": 14,
     "date": "2026-03-18",
-    "type": "SDK pivot implementation — hybrid architecture",
-    "commits": 1,
-    "keyDecision": "Built hybrid agent with fast path (API) and heavy path (SDK). Preserved old code as fallback. Phase 5 trim deferred until integration tested."
+    "type": "SDK pivot implementation + deployment + debugging",
+    "commits": 20,
+    "keyDecisions": [
+      "Hybrid architecture: Haiku router → fast (Sonnet, API) or heavy (Opus, SDK subprocess)",
+      "Memory MCP is the only MCP server — Google via gws CLI, Fireflies via CLI wrapper",
+      "Stream-json for real-time progress updates during heavy path",
+      "Memory writes (update_working_context, store_fact) auto-approved at trust level 1",
+      "20min timeout for heavy path, 200 max turns — let Opus cook",
+      "Owner can cancel heavy path mid-execution via Slack interrupt"
+    ]
   },
   "thingsNotToRedo": [
     "Don't split schema.sql on semicolons",
     "DON'T REBUILD WHAT COMES NATIVELY WITH CLAUDE — use SDK for orchestration",
-    "Custom agent loops are worse than Claude Code — proven in session 13",
-    "schema.sql must be explicitly copied in Dockerfile",
-    "Google OAuth: gws CLI for setup AND for SDK runtime access (no MCP needed)",
-    "Don't hard-code bot responses — prompts are in config/prompts/",
-    "Startup crawl skips if offline <5 min",
-    "Non-owner messages tagged [EXTERNAL]",
-    "Audit log sanitized BEFORE writing",
-    "keytar uses false sentinel — logs warning only once",
-    "File summaries are conclusions, not descriptions — stored as memories",
-    "Self-healing compares expected vs actual memory content",
-    "Folder path is evidence, not gospel — content wins over structure",
-    "One-time migrations use agent_state guard keys",
-    "Mid-loop text is NOT the final response — only capture from final turn",
-    "Don't force premature answers — let Claude Code finish",
-    "Slack markdown block does NOT support tables — use bulleted key-value pairs",
-    "Document tasks require reading the actual file, not answering from memory",
-    "Policy engine regexes must use (?:^|_) to match prefixed tool names",
-    "Always parallelize API fetches, sequential DB writes",
-    "Heavy path must fall back to fast path if claude CLI not available",
-    "Don't trim old code until integration testing confirms hybrid works end-to-end",
-    "Memory MCP server runs as stdio subprocess — needs --data-dir flag pointing to same DB"
+    "Don't hardcode prompts in TypeScript — all prompts in config/prompts/*.md (router, synthesis, extraction all externalized)",
+    "Don't hardcode tunables in TypeScript — all operational values in config/default.json with Zod schema in config.ts",
+    "MCP stdio servers MUST redirect all logging to stderr (LOG_DESTINATION=stderr)",
+    "node:22-slim needs ca-certificates installed for external HTTPS (gws, etc.)",
+    "Heavy path must strip ANTHROPIC_API_KEY from env so CLI uses Max plan OAuth",
+    "One-time DB migrations with guard keys are fragile — guard may not persist. Remove after running.",
+    "Don't make ad-hoc prompt fixes for specific situations — diagnose with logs first",
+    "Memory writes (working context, store_fact) are internal state, not external writes — auto-approve at trust level 1",
+    "Startup crawl always routes to fast path — skip the Haiku router",
+    "stream-json requires --verbose flag in --print mode",
+    "Short-term context budget must be generous (8000+ tokens) or follow-up messages lose context",
+    "gws CLI uses encrypted credentials — must copy full ~/.config/gws/ dir, not just export JSON"
   ],
   "lastUpdated": "2026-03-18"
 }

@@ -78,9 +78,10 @@ async function runReflection(
   ).join('\n');
 
   try {
+    const config = getConfig();
     const response = await client.messages.create({
       model,
-      max_tokens: 1000,
+      max_tokens: config.memory.reflectionMaxTokens,
       system: getPrompts().reflection,
       messages: [{ role: 'user', content: `Recent memories:\n${memoryList}` }],
     });

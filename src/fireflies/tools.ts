@@ -183,8 +183,8 @@ export function createFirefliesTools(client: FirefliesClient): FirefliesToolDef[
             ? `\n\n[Transcript truncated — showing ${sentences.length} of ${t.sentences.length} sentences]`
             : '';
 
-          // Note: background fact extraction is triggered by the agent loop handler
-          // (see fireflies_sync_meetings handler in agent/index.ts)
+          // Note: background fact extraction is triggered by the hybrid agent loop
+          // (see post-interaction extraction in agent/hybrid.ts)
 
           return {
             content: `${header}\n\n--- Transcript ---\n\n${formatted}${truncated}`,
@@ -214,7 +214,7 @@ export function createFirefliesTools(client: FirefliesClient): FirefliesToolDef[
           required: [],
         },
       },
-      // Handler is overridden in agent/index.ts to inject DB and Anthropic client
+      // Handler placeholder — sync is invoked via heavy path CLI (tools/fireflies.ts)
       handler: async () => {
         return { content: 'Fireflies sync handler not configured.', isError: true };
       },

@@ -79,12 +79,10 @@ src/
     tools.ts       # 20 tools (calendar, gmail, drive)
     auth.ts        # OAuth2 setup
     drive-sync.ts  # Drive file extraction + sync
-    email-scan.ts  # Email extraction pipeline (legacy, SDK replaces)
   fireflies/       # Fireflies.ai meeting transcripts
     api.ts         # GraphQL client
     tools.ts       # 4 tool definitions
     sync.ts        # Meeting sync + extraction
-  search/          # Cross-source search (legacy, SDK replaces)
   hooks/           # PreToolUse / PostToolUse hooks
   config.ts        # Zod-validated config
   credentials.ts   # macOS Keychain via keytar, env fallback
@@ -100,7 +98,9 @@ config/
     system.md      # Main Slack bot system prompt
     heavy-path.md  # SDK heavy path system prompt
     extraction.md  # Haiku fact extraction prompt
-    + 8 more
+    router.md      # Haiku complexity classifier prompt
+    fact-synthesis.md  # Fact dedup/enrichment (shared template with {{SOURCE_TYPE}})
+    + 7 more
 ```
 
 ### Three-Model Architecture
@@ -136,12 +136,21 @@ Graduation: 10+ approvals with <5% rejection rate and zero rejections in last 5.
 
 ## Coding Conventions
 
-### Prompts
+### Prompts — NEVER hardcode in TypeScript
 - **All prompts MUST live in `config/prompts/*.md`** — never hardcode prompt text in TypeScript source files.
+- This includes system prompts, classifier prompts, extraction prompts, synthesis prompts — any text sent to an LLM as instructions.
+- Tool `description` fields and Slack UI strings are NOT prompts and may stay inline.
 - Prompts are loaded at startup via `src/prompts.ts` (`loadPrompts()` / `getPrompts()`).
-- Use `{{VARIABLE}}` placeholders for dynamic values.
+- Use `{{VARIABLE}}` placeholders for dynamic values. Runtime-only variables (e.g., `{{SOURCE_TYPE}}`) are listed in `RUNTIME_VARIABLES` and resolved at the call site.
 - Dynamic context (memory, working context, conversation history) is appended at runtime.
 - To add a new prompt: create the `.md` file, add the key to `LoadedPrompts` interface and `files` map in `src/prompts.ts`.
+
+### Configuration — NEVER hardcode tunables
+- **All operational tunables MUST be in `config/default.json`** with a matching Zod schema in `src/config.ts`.
+- This includes: timeouts, turn limits, max_tokens values, model names, thresholds, intervals, batch sizes, confidence cutoffs, and graduation criteria.
+- True constants (embedding dimensions, API URLs, security regex patterns, MIME type maps) may stay in code.
+- When adding a new tunable: add it to both the Zod schema AND `getDefaultConfig()` in `src/config.ts`, then to `config/default.json`. Keep schema defaults in sync with the JSON file.
+- Access via `getConfig()` — never read `process.env` directly for tunables (env vars are mapped in `loadConfig()`).
 
 ### TypeScript
 - ESM modules (`"type": "module"` in package.json)
@@ -164,7 +173,7 @@ Graduation: 10+ approvals with <5% rejection rate and zero rejections in last 5.
 - Test files: `tests/**/*.test.ts`
 - Use temp directories for DB/config tests (`mkdtempSync` + cleanup in `afterEach`)
 - Security tests are pure functions — no I/O needed
-- **24 test files, 311 tests, all passing**
+- **22 test files, 297 tests, all passing**
 
 ## Important Patterns
 
@@ -207,16 +216,28 @@ Supports `LOG_DESTINATION=stderr` for MCP server mode.
 3. Environment variables
 4. CLI flags
 
-### Context Limits (all in `config/default.json`)
+### Config Reference (all in `config/default.json`)
 
 | Setting | Value | Purpose |
 |---|---|---|
 | `agent.timeoutMs` | 1,200,000 | Heavy path timeout (20 min) |
-| `agent.maxTurns` | 30 | Fast path max tool-call turns |
+| `agent.maxTurns` | 30 | Generic max turns |
+| `agent.fastPathMaxTurns` | 10 | Fast path tool-call turn limit |
+| `agent.fastPathTimeoutMs` | 60,000 | Fast path timeout (60s) |
+| `agent.fastPathMaxTokens` | 4,096 | Fast path response token limit |
+| `agent.heavyPathMaxTurns` | 200 | Heavy path turn limit |
+| `agent.classifierMaxTokens` | 100 | Router/classifier response limit |
+| `agent.interruptPollMs` | 2,000 | Interrupt polling interval |
 | `context.shortTermTokenBudget` | 8,000 | Slack conversation context |
 | `context.longTermTokenBudget` | 1,500 | Memory retrieval budget |
 | `context.workingContextTokenBudget` | 1,000 | Scratch pad budget |
 | `context.shortTermMessageLimit` | 50 | Max Slack messages fetched |
+| `memory.extractionMaxTokens` | 1,000 | Haiku extraction response limit |
+| `memory.reflectionMaxTokens` | 1,000 | Haiku reflection response limit |
+| `slack.interruptConfidenceThreshold` | 0.7 | Below this, ask user to clarify |
+| `trainingWheels.graduationThreshold` | 10 | Approvals needed for graduation |
+| `trainingWheels.maxRejectionRate` | 0.05 | Max rejection rate for graduation |
+| `trainingWheels.recentWindow` | 5 | Recent window for rejection check |
 
 ### Three Memory Tiers
 - **Working context** = Scratch pad in `agent_state` (1000 tokens, auto-archives after 14 days)

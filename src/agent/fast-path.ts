@@ -25,8 +25,7 @@ import { isGraduated, recordOccurrence } from '../training-wheels/graduation.js'
 import type { ToolHandlerResult } from '../mcp/slack/server.js';
 import type { SlackHandler } from '../slack/handler.js';
 
-const FAST_PATH_MAX_TURNS = 10;
-const FAST_PATH_TIMEOUT_MS = 60_000;
+// Fast path limits are read from config.agent.fastPathMaxTurns / fastPathTimeoutMs
 
 // ── Tool progress descriptions ──
 const TOOL_DESCRIPTIONS: Record<string, string> = {
@@ -162,7 +161,7 @@ export async function executeFastPath(
   const abortController = new AbortController();
   const timeout = setTimeout(() => {
     abortController.abort();
-  }, FAST_PATH_TIMEOUT_MS);
+  }, config.agent.fastPathTimeoutMs);
 
   try {
     const messages: Anthropic.MessageParam[] = [
@@ -171,12 +170,12 @@ export async function executeFastPath(
 
     let finalResponse = '';
 
-    for (let turn = 0; turn < FAST_PATH_MAX_TURNS; turn++) {
+    for (let turn = 0; turn < config.agent.fastPathMaxTurns; turn++) {
       if (abortController.signal.aborted) break;
 
       const response = await opts.client.messages.create({
         model: config.models.executor,
-        max_tokens: 4096,
+        max_tokens: config.agent.fastPathMaxTokens,
         system: systemPrompt,
         tools: toolDefs,
         messages,

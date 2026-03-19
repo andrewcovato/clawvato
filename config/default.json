@@ -14,7 +14,13 @@
   "sandboxRoots": [],
   "agent": {
     "maxTurns": 30,
-    "timeoutMs": 1200000
+    "timeoutMs": 1200000,
+    "fastPathMaxTurns": 10,
+    "fastPathTimeoutMs": 60000,
+    "fastPathMaxTokens": 4096,
+    "heavyPathMaxTurns": 200,
+    "classifierMaxTokens": 100,
+    "interruptPollMs": 2000
   },
   "context": {
     "shortTermMessageLimit": 50,
@@ -32,7 +38,8 @@
     "hardCapMs": 30000,
     "typingGraceMs": 4000,
     "progressDelayMs": 20000,
-    "progressStaleIntervalMs": 60000
+    "progressStaleIntervalMs": 60000,
+    "interruptConfidenceThreshold": 0.7
   },
   "memory": {
     "consolidationIntervalHours": 24,
@@ -41,7 +48,9 @@
     "decayThresholdDays90": 90,
     "archiveThreshold": 1,
     "mergeSimilarityThreshold": 0.85,
-    "reflectionThreshold": 50
+    "reflectionThreshold": 50,
+    "extractionMaxTokens": 1000,
+    "reflectionMaxTokens": 1000
   },
   "drive": {
     "syncBatchSize": 10,
@@ -53,10 +62,10 @@
     "maxTranscriptsPerSync": 20,
     "defaultDaysBack": 7
   },
-  "search": {
-    "relevanceThreshold": 3,
-    "maxOutputTokens": 8000,
-    "defaultMaxPerSource": 100
+  "trainingWheels": {
+    "graduationThreshold": 10,
+    "maxRejectionRate": 0.05,
+    "recentWindow": 5
   },
   "google": {},
   "github": {}

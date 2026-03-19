@@ -48,9 +48,12 @@ function getPromptsDir(): string {
 
 // ── Template resolution ──
 
+/** Placeholders that are resolved at call time, not at load time */
+const RUNTIME_VARIABLES = new Set(['SOURCE_TYPE']);
+
 /**
  * Replace all {{VARIABLE}} placeholders with their values.
- * Throws if any placeholders remain unresolved.
+ * Throws if any placeholders remain unresolved (except runtime variables).
  */
 function resolveTemplate(template: string, fileName: string): string {
   let result = template;
@@ -63,9 +66,10 @@ function resolveTemplate(template: string, fileName: string): string {
     result = result.replaceAll(`{{${key}}}`, value);
   }
 
-  // Check for unresolved placeholders
-  const unresolved = result.match(/\{\{[A-Z_]+\}\}/g);
-  if (unresolved) {
+  // Check for unresolved placeholders (skip runtime variables)
+  const unresolved = result.match(/\{\{[A-Z_]+\}\}/g)
+    ?.filter(v => !RUNTIME_VARIABLES.has(v.slice(2, -2)));
+  if (unresolved && unresolved.length > 0) {
     throw new Error(
       `Unresolved template variables in ${fileName}: ${unresolved.join(', ')}. ` +
       `Known variables: ${Object.keys(TEMPLATE_VARIABLES).join(', ')}`
@@ -85,12 +89,9 @@ interface LoadedPrompts {
   reflection: string;
   interruptClassification: string;
   meetingExtraction: string;
-  emailExtraction: string;
   heavyPath: string;
-  /** @deprecated Will be removed in SDK pivot cleanup */
-  searchPlanning: string;
-  /** @deprecated Will be removed in SDK pivot cleanup */
-  searchRelevance: string;
+  router: string;
+  factSynthesis: string;
 }
 
 let cachedPrompts: LoadedPrompts | null = null;
@@ -114,10 +115,9 @@ export function loadPrompts(): LoadedPrompts {
     reflection: 'reflection.md',
     interruptClassification: 'interrupt-classification.md',
     meetingExtraction: 'meeting-extraction.md',
-    emailExtraction: 'email-extraction.md',
     heavyPath: 'heavy-path.md',
-    searchPlanning: 'search-planning.md',
-    searchRelevance: 'search-relevance.md',
+    router: 'router.md',
+    factSynthesis: 'fact-synthesis.md',
   };
 
   const loaded: Partial<LoadedPrompts> = {};

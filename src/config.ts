@@ -56,19 +56,34 @@ const ConfigSchema = z.object({
 
   agent: z.object({
     maxTurns: z.number().int().min(1).default(30),
-    timeoutMs: z.number().int().min(10_000).default(600_000),
-  }).default(() => ({ maxTurns: 30, timeoutMs: 600_000 })),
+    timeoutMs: z.number().int().min(10_000).default(1_200_000),
+    fastPathMaxTurns: z.number().int().min(1).default(10),
+    fastPathTimeoutMs: z.number().int().min(1_000).default(60_000),
+    fastPathMaxTokens: z.number().int().min(100).default(4096),
+    heavyPathMaxTurns: z.number().int().min(1).default(200),
+    classifierMaxTokens: z.number().int().min(10).default(100),
+    interruptPollMs: z.number().int().min(500).default(2000),
+  }).default(() => ({
+    maxTurns: 30,
+    timeoutMs: 1_200_000,
+    fastPathMaxTurns: 10,
+    fastPathTimeoutMs: 60_000,
+    fastPathMaxTokens: 4096,
+    heavyPathMaxTurns: 200,
+    classifierMaxTokens: 100,
+    interruptPollMs: 2000,
+  })),
 
   context: z.object({
     shortTermMessageLimit: z.number().int().default(50),
     shortTermMsgCharLimit: z.number().int().default(1000),
-    shortTermTokenBudget: z.number().int().default(2000),
+    shortTermTokenBudget: z.number().int().default(8000),
     longTermTokenBudget: z.number().int().default(1500),
     workingContextTokenBudget: z.number().int().default(1000),
   }).default(() => ({
     shortTermMessageLimit: 50,
     shortTermMsgCharLimit: 1000,
-    shortTermTokenBudget: 2000,
+    shortTermTokenBudget: 8000,
     longTermTokenBudget: 1500,
     workingContextTokenBudget: 1000,
   })),
@@ -86,12 +101,14 @@ const ConfigSchema = z.object({
     typingGraceMs: z.number().int().default(4000),
     progressDelayMs: z.number().int().default(20_000),
     progressStaleIntervalMs: z.number().int().default(60_000),
+    interruptConfidenceThreshold: z.number().min(0).max(1).default(0.7),
   }).default(() => ({
     accumulationWindows: { snappy: 2000, patient: 4000, waitForMe: 15_000 },
     hardCapMs: 30_000,
     typingGraceMs: 4000,
     progressDelayMs: 20_000,
     progressStaleIntervalMs: 60_000,
+    interruptConfidenceThreshold: 0.7,
   })),
 
   memory: z.object({
@@ -102,6 +119,8 @@ const ConfigSchema = z.object({
     archiveThreshold: z.number().default(1),
     mergeSimilarityThreshold: z.number().default(0.85),
     reflectionThreshold: z.number().int().default(50),
+    extractionMaxTokens: z.number().int().default(1000),
+    reflectionMaxTokens: z.number().int().default(1000),
   }).default(() => ({
     consolidationIntervalHours: 24,
     workingContextArchiveDays: 14,
@@ -110,16 +129,18 @@ const ConfigSchema = z.object({
     archiveThreshold: 1,
     mergeSimilarityThreshold: 0.85,
     reflectionThreshold: 50,
+    extractionMaxTokens: 1000,
+    reflectionMaxTokens: 1000,
   })),
 
   drive: z.object({
     syncBatchSize: z.number().int().default(10),
     maxFileSizeBytes: z.number().int().default(50 * 1024 * 1024),
-    maxExtractedChars: z.number().int().default(10_000),
+    maxExtractedChars: z.number().int().default(50_000),
   }).default(() => ({
     syncBatchSize: 10,
     maxFileSizeBytes: 50 * 1024 * 1024,
-    maxExtractedChars: 10_000,
+    maxExtractedChars: 50_000,
   })),
 
   fireflies: z.object({
@@ -132,15 +153,16 @@ const ConfigSchema = z.object({
     defaultDaysBack: 7,
   })),
 
-  search: z.object({
-    relevanceThreshold: z.number().default(3),
-    maxOutputTokens: z.number().int().default(8000),
-    defaultMaxPerSource: z.number().int().default(100),
+  trainingWheels: z.object({
+    graduationThreshold: z.number().int().min(1).default(10),
+    maxRejectionRate: z.number().min(0).max(1).default(0.05),
+    recentWindow: z.number().int().min(1).default(5),
   }).default(() => ({
-    relevanceThreshold: 3,
-    maxOutputTokens: 8000,
-    defaultMaxPerSource: 100,
+    graduationThreshold: 10,
+    maxRejectionRate: 0.05,
+    recentWindow: 5,
   })),
+
 });
 
 export type ClawvatoConfig = z.infer<typeof ConfigSchema>;
@@ -167,11 +189,20 @@ function getDefaultConfig(): Partial<ClawvatoConfig> {
     sandboxRoots: [],
     google: {},
     github: {},
-    agent: { maxTurns: 30, timeoutMs: 600_000 },
+    agent: {
+      maxTurns: 30,
+      timeoutMs: 1_200_000,
+      fastPathMaxTurns: 10,
+      fastPathTimeoutMs: 60_000,
+      fastPathMaxTokens: 4096,
+      heavyPathMaxTurns: 200,
+      classifierMaxTokens: 100,
+      interruptPollMs: 2000,
+    },
     context: {
       shortTermMessageLimit: 50,
       shortTermMsgCharLimit: 1000,
-      shortTermTokenBudget: 2000,
+      shortTermTokenBudget: 8000,
       longTermTokenBudget: 1500,
       workingContextTokenBudget: 1000,
     },
@@ -181,6 +212,7 @@ function getDefaultConfig(): Partial<ClawvatoConfig> {
       typingGraceMs: 4000,
       progressDelayMs: 20_000,
       progressStaleIntervalMs: 60_000,
+      interruptConfidenceThreshold: 0.7,
     },
     memory: {
       consolidationIntervalHours: 24,
@@ -190,11 +222,13 @@ function getDefaultConfig(): Partial<ClawvatoConfig> {
       archiveThreshold: 1,
       mergeSimilarityThreshold: 0.85,
       reflectionThreshold: 50,
+      extractionMaxTokens: 1000,
+      reflectionMaxTokens: 1000,
     },
     drive: {
       syncBatchSize: 10,
       maxFileSizeBytes: 50 * 1024 * 1024,
-      maxExtractedChars: 10_000,
+      maxExtractedChars: 50_000,
     },
     fireflies: {
       syncIntervalHours: 6,

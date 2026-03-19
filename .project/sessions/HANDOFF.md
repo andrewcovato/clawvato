@@ -5,130 +5,109 @@
 ## Quick Resume
 
 ```
-Sprint: S3 — SDK Pivot + Hybrid Architecture
-Status: PHASES 1-4 COMPLETE — hybrid agent built and wired in
+Sprint: S3 — SDK Pivot (COMPLETE)
+Status: Hybrid architecture deployed on Railway and tested
 Tests: 311/311 passing across 24 files
-Build: Clean (npm run build passes)
-New modules: 7 files (~1,280 lines)
-NEXT: Integration test locally → deploy to Railway → Phase 5 trim
+Build: Clean
+Commits this session: 20
+NEXT: Prompt tuning, Phase 5 trim (old code), consolidation/importance scoring
 ```
 
 ## What Was Built (Session 14)
 
-### New Files Created
+**20 commits** transforming the monolithic agent into a two-path hybrid:
 
-| File | Lines | Purpose |
-|---|---|---|
-| `src/mcp/memory/server.ts` | ~240 | Memory MCP server — 6 tools wrapping SQLite store |
-| `src/mcp/memory/stdio.ts` | ~25 | stdio entrypoint for SDK subprocess |
-| `tools/fireflies.ts` | ~140 | Fireflies CLI wrapper (search, summary, transcript, list) |
-| `src/agent/heavy-path.ts` | ~180 | Claude Code SDK integration via `claude --print` |
-| `src/agent/fast-path.ts` | ~230 | Simplified API loop (10 turns, 60s, limited tools) |
-| `src/agent/router.ts` | ~100 | Haiku complexity classifier (FAST vs HEAVY) |
-| `src/agent/context.ts` | ~130 | Shared context assembly (memory + working ctx + history) |
-| `src/agent/hybrid.ts` | ~220 | Hybrid agent orchestrator (replaces old createAgent) |
+### New Modules (~1,500 lines)
+- `src/agent/hybrid.ts` — Main orchestrator (fast/heavy routing, interrupt handling)
+- `src/agent/router.ts` — Haiku complexity classifier
+- `src/agent/fast-path.ts` — Direct API loop (Sonnet, 10 turns, 60s)
+- `src/agent/heavy-path.ts` — Claude CLI subprocess (Opus, stream-json, 200 turns, 20min)
+- `src/agent/context.ts` — Shared context assembly
+- `src/mcp/memory/server.ts` — Memory MCP server (6 tools)
+- `src/mcp/memory/stdio.ts` — stdio entrypoint with stderr logging
+- `tools/fireflies.ts` — Fireflies CLI for SDK bash access
+- `config/prompts/heavy-path.md` — SDK system prompt
+- `scripts/docker-entrypoint.sh` — Railway startup (auth persistence)
 
-### Files Modified
+### Key Bugs Found & Fixed
+1. **MCP stdout corruption** — pino logs mixed with JSON-RPC → CLI hung. Fix: `LOG_DESTINATION=stderr`
+2. **Memory wipe on every deploy** — v5 reset migration guard key not persisting. Fix: removed migration
+3. **Memory writes blocked** — `update_working_context`/`store_fact` classified as external writes. Fix: whitelisted in policy engine
+4. **Short-term context too small** — 2000 tokens → follow-ups lost context. Fix: bumped to 8000
+5. **TLS errors on Railway** — `node:22-slim` missing CA certs. Fix: `apt-get install ca-certificates`
+6. **gws auth format** — encrypted credentials need full dir, not exported JSON. Fix: `GWS_CONFIG_B64`
+7. **stream-json requires --verbose** — undocumented CLI requirement. Fix: added flag
+8. **.claude.json missing** — CLI hung on onboarding. Fix: create at startup
 
-- `src/cli/start.ts` — now imports `createHybridAgent` instead of `createAgent`
-- `src/prompts.ts` — marked `searchPlanning` and `searchRelevance` as deprecated
+### What Works Now
+- Fast path: memory queries, calendar checks, gmail search (~2s)
+- Heavy path: multi-source sweeps with Opus via SDK (~1-5min, free on Max)
+- Real-time progress updates in Slack during heavy path
+- Memory persists across deploys
+- Owner can cancel heavy path with "stop"/"cancel"
+- Background extraction from both paths → facts stored to memory
+- gws CLI authenticated on Railway for Gmail/Calendar/Drive
 
-### Architecture
+### What Needs Work
+- **Prompt tuning**: Heavy path thoroughness varies, model sometimes misclassifies search results
+- **Phase 5 trim**: Old modules (agent/index.ts, search/, email-scan.ts) still in codebase
+- **Consolidation/importance scoring**: Memory accumulates but doesn't consolidate or decay yet
+- **Gmail search logging**: Added `query` + `threadsFound` logging — use to diagnose search quality
 
+---
+
+## Deployment Checklist
+
+Railway env vars needed:
 ```
-Slack message arrives
-  → SlackHandler.handleMessage()
-  → EventQueue accumulates (4s debounce)
-  → handler.onBatch() triggers...
-  → createHybridAgent.processBatch()
-    → assembleContext() (shared: memory + working ctx + conversation history)
-    → routeMessage() (Haiku classifier: FAST or HEAVY?)
-    ├── FAST: executeFastPath() — direct API, limited tools
-    │   Tools: search_memory, update_working_context,
-    │          google_calendar_list/get, google_gmail_search,
-    │          slack_get_channel_history, slack_search_messages
-    └── HEAVY: executeHeavyPath() — claude --print subprocess
-        MCP: memory server (stdio)
-        CLI: gws (Google), tools/fireflies.ts (meetings)
-        Fallback: if SDK fails → fast path
+ANTHROPIC_API_KEY          — for fast path (Sonnet API calls)
+CLAUDE_CODE_OAUTH_TOKEN    — for heavy path (from `claude setup-token`)
+GWS_CONFIG_B64             — for gws Google access (base64 tar.gz of ~/.config/gws/)
+SLACK_BOT_TOKEN
+SLACK_APP_TOKEN
+OWNER_SLACK_USER_ID
+FIREFLIES_API_KEY
+GOOGLE_AGENT_EMAIL
 ```
 
-### Memory MCP Server Tools
-
-1. `search_memory` — FTS5 + vector hybrid search with filters
-2. `retrieve_context` — token-budgeted context retrieval
-3. `store_fact` — store new memories
-4. `update_working_context` — scratch pad CRUD
-5. `list_people` — known people directory
-6. `list_commitments` — outstanding commitments
-
-### Fireflies CLI Commands
-
-- `npx tsx tools/fireflies.ts search --query "X" --days-back 60`
-- `npx tsx tools/fireflies.ts summary --id "abc123"`
-- `npx tsx tools/fireflies.ts transcript --id "abc123"`
-- `npx tsx tools/fireflies.ts list --days-back 30`
+Deploy: `railway up --detach`
 
 ---
 
-## What's Left
+## Architecture After Pivot
 
-### Immediate (before first deployment)
+### Fast Path (Sonnet, ~$0.01, ~2s)
+- Direct `messages.create` loop
+- 7 tools: search_memory, update_working_context, calendar list/get, gmail_search, slack history/search
+- 10 max turns, 60s timeout
+- Training wheels enforced (trust level 1)
 
-1. **Integration test locally**: `npx tsx src/cli/index.ts start` — verify both paths work with real Slack
-2. **Verify `claude` CLI is available**: heavy path needs it installed and authenticated
-3. **Deploy to Railway**: Dockerfile needs `claude` CLI installed + Max plan auth
+### Heavy Path (Opus, $0 on Max, ~1-5min)
+- `claude --print --verbose --output-format stream-json` subprocess
+- Memory MCP server (6 tools) + gws CLI (Google) + fireflies CLI (meetings)
+- 200 max turns, 20min timeout
+- `ANTHROPIC_API_KEY` stripped from env → uses Max plan OAuth
+- Stream-json parsed for real-time Slack progress updates
+- AbortController + 2s interrupt polling for cancel support
 
-### Phase 5 Trim (after integration test)
+### Router (Haiku, ~$0.0002, ~200ms)
+- Sees full assembled context (same as both paths)
+- FAST: memory, single-source, simple commands, greetings
+- HEAVY: cross-source, multi-step, synthesis, ambiguous
+- Startup crawl always routes FAST (skip classifier)
 
-Old modules preserved as fallback — remove after confirming hybrid works:
-- `src/search/cross-source.ts` + `adapters.ts` (SDK replaces cross-source orchestration)
-- `src/google/email-scan.ts` (SDK handles email analysis)
-- `config/prompts/search-planning.md` + `search-relevance.md` (SDK doesn't need these)
-- Old `src/agent/index.ts` (replaced by `hybrid.ts`, keep as reference)
-
-### Open Issues
-
-- **SDK-001**: Max plan OAuth on headless Railway — need SSH auth first, then persist tokens
-- **SDK-002**: `gws` CLI on Railway — installable? Fallback to Google MCP if not
-- **SDK-006**: Heavy path fallback behavior needs testing
-- **TRIM-001**: Old code cleanup after integration testing
-
----
-
-## Key Design Decisions
-
-1. **Preserve old code**: Don't trim until hybrid is proven. Old agent/index.ts is the fallback.
-2. **Haiku router**: ~$0.0002/call, ~200ms. Routes every message. Cost is negligible.
-3. **Heavy path uses `claude --print`**: CLI subprocess, not SDK npm package. More stable interface.
-4. **Memory is the only MCP server**: Google uses `gws` CLI, Fireflies uses thin CLI wrapper. Both via bash.
-5. **Fast path includes calendar + gmail_search**: Single-source lookups that don't need the full SDK.
-6. **Fallback on SDK failure**: If `claude` CLI not available or fails, fall back to fast path.
+### Memory System
+- MCP server exposes 6 tools to SDK
+- Background Haiku extraction after every interaction (owner message + SDK response)
+- Working context auto-approved at trust level 1
+- FTS5 + vector hybrid search, token-budgeted retrieval
 
 ---
 
-## Previous Session Context (Session 13)
-
-Session 13 built comprehensive search (gmail_scan, cross_source_search, 10 commits) then realized the fundamental problem: we were rebuilding Claude Code's agent loop. This led to the pivot decision that Session 14 implemented.
-
-### What Stays After Pivot
-
-| Module | Status |
-|---|---|
-| Memory system (src/memory/*.ts) | Untouched — exposed via MCP server |
-| Database + schema (src/db/) | Untouched |
-| Slack bot layer (src/slack/*.ts) | Untouched |
-| Security (src/security/*.ts) | Untouched — used by fast path |
-| Training wheels | Untouched — used by fast path |
-| Config + credentials | Untouched |
-| Google tools (src/google/tools.ts) | Fast path uses calendar + gmail_search |
-| Fireflies (api.ts + tools.ts + sync.ts) | CLI wrapper reuses api.ts |
-
-## Owner Preferences
-
-- **DON'T REBUILD WHAT COMES NATIVELY WITH CLAUDE** — prime directive
-- Memory should be HIGH RESOLUTION — the differentiator
+## Owner Preferences (confirmed this session)
+- DON'T REBUILD WHAT COMES NATIVELY WITH CLAUDE
+- Don't make ad-hoc one-off prompt fixes — diagnose with logs first
+- All prompts in config/prompts/*.md — never hardcode in TypeScript
+- Memory should be HIGH RESOLUTION
+- Let Opus cook — 20min timeout, 200 turns, free on Max
 - Budget: Max plan for heavy ($0), API for fast (~$30-50/mo)
-- Don't over-engineer
-- Let Claude Code cook
-- Preserve what we built where it adds value

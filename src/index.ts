@@ -8,7 +8,6 @@
 export { loadConfig, getConfig, updateConfig } from './config.js';
 export { initDb, getDb, closeDb } from './db/index.js';
 export { initLogger, logger } from './logger.js';
-export { createAgent } from './agent/index.js';
 export {
   getCredential,
   setCredential,

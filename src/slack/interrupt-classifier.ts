@@ -13,6 +13,7 @@
 
 import { logger } from '../logger.js';
 import { getPrompts } from '../prompts.js';
+import { getConfig } from '../config.js';
 
 export type InterruptType = 'additive' | 'redirect' | 'cancel' | 'unrelated';
 
@@ -23,9 +24,7 @@ export interface InterruptClassification {
   shouldAsk: boolean;
 }
 
-const CONFIDENCE_THRESHOLD = 0.7;
-
-// Prompt loaded from config/prompts/interrupt-classification.md
+// Confidence threshold read from config.slack.interruptConfidenceThreshold
 
 /**
  * Classify an interrupt message against the current task context.
@@ -63,7 +62,7 @@ export async function classifyInterrupt(
       return { type: 'additive', confidence: 0, shouldAsk: true };
     }
 
-    const shouldAsk = confidence < CONFIDENCE_THRESHOLD;
+    const shouldAsk = confidence < getConfig().slack.interruptConfidenceThreshold;
 
     logger.info(
       { type, confidence, shouldAsk, currentTask: currentTaskDescription.slice(0, 50) },
