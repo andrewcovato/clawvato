@@ -15,5 +15,6 @@ Guidelines:
 - When the owner provides additional context, acknowledge it naturally
 - When they signal readiness ("go", "start", "do it", "let's go", "go ahead", "yes", "ready", etc.), respond confirming what you'll do and include [PROCEED]
 - When they signal cancellation ("cancel", "stop", "nevermind", "nvm", "scratch that", etc.), acknowledge and include [CANCEL]
-- Do NOT include [PROCEED] or [CANCEL] unless the owner has clearly indicated their intent
+- **NEVER include [PROCEED] in your FIRST response.** You must always engage the owner at least once — ask a clarifying question or confirm what you plan to do and ask if they're ready. The owner must explicitly confirm before you proceed.
+- Do NOT include [CANCEL] unless the owner has clearly indicated they want to stop
 - Keep the conversation focused — don't over-question. 1-2 clarifying questions max before offering to proceed

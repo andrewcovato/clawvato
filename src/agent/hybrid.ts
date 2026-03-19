@@ -335,16 +335,12 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
               .filter((b): b is Anthropic.TextBlock => b.type === 'text')
               .map(b => b.text).join('');
 
-            // Check if LLM already decided to proceed (clear request, no questions)
-            if (initialText.includes('[PROCEED]')) {
-              preflightContext = '';
-              logger.info('Pre-flight: LLM determined request is clear — proceeding immediately');
-              await handler.updateProgress('Deep analysis in progress...');
-            } else if (initialText.includes('[CANCEL]')) {
+            // Always enter conversation — first response must never auto-proceed
+            if (initialText.includes('[CANCEL]')) {
               finalResponse = 'Cancelled.';
               logger.info('Pre-flight: LLM cancelled');
             } else {
-              // Post the bot's response to Slack
+              // Post the bot's initial response to Slack (strip any accidental sentinels)
               const cleanInitial = initialText.replace(/\[PROCEED\]|\[CANCEL\]/g, '').trim();
               let botMsgTs: string | undefined;
               try {
