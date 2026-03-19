@@ -368,7 +368,7 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
                 const interrupt = handler.drainInterrupt();
 
                 if (!interrupt) {
-                  // Periodic reminder
+                  // Periodic reminder — only when truly idle (no message received this cycle)
                   if (Date.now() - lastActivityAt > REMINDER_INTERVAL_MS && botMsgTs) {
                     try {
                       await handler.getMessages().post(
@@ -382,6 +382,7 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
                   continue;
                 }
 
+                // Update activity timestamp immediately — prevents reminder race
                 lastActivityAt = Date.now();
 
                 // Skip duplicate of original message
@@ -423,9 +424,13 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
                       confirmTs = posted.ts;
                     } catch { /* */ }
                   }
-                  // Start a fresh processing cycle on the confirm message for progress updates
+                  // Start a fresh processing cycle for deep path progress updates
+                  // Complete the old pre-flight activeTask first to avoid stale state
+                  await handler.completeProcessing();
                   const progressTs = confirmTs ?? interrupt.ts;
                   await handler.startProcessing('Deep analysis...', batch.channel, [progressTs], batch.threadTs);
+                  // Post progress immediately (don't wait 20s — user already waited through pre-flight)
+                  await handler.updateProgress('Deep analysis in progress...');
 
                   // Collect all user messages from the conversation as additional context
                   preflightContext = preflightMessages
