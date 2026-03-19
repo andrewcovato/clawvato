@@ -80,12 +80,16 @@ const ConfigSchema = z.object({
     shortTermTokenBudget: z.number().int().default(8000),
     longTermTokenBudget: z.number().int().default(1500),
     workingContextTokenBudget: z.number().int().default(1000),
+    deepPathLongTermTokenBudget: z.number().int().default(50000),
+    deepPathWorkingContextTokenBudget: z.number().int().default(10000),
   }).default(() => ({
     shortTermMessageLimit: 50,
     shortTermMsgCharLimit: 1000,
     shortTermTokenBudget: 8000,
     longTermTokenBudget: 1500,
     workingContextTokenBudget: 1000,
+    deepPathLongTermTokenBudget: 50000,
+    deepPathWorkingContextTokenBudget: 10000,
   })),
 
   slack: z.object({
@@ -209,6 +213,8 @@ function getDefaultConfig(): Partial<ClawvatoConfig> {
       shortTermTokenBudget: 8000,
       longTermTokenBudget: 1500,
       workingContextTokenBudget: 1000,
+      deepPathLongTermTokenBudget: 50000,
+      deepPathWorkingContextTokenBudget: 10000,
     },
     slack: {
       accumulationWindows: { snappy: 2000, patient: 4000, waitForMe: 15_000 },

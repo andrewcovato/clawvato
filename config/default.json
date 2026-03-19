@@ -27,7 +27,9 @@
     "shortTermMsgCharLimit": 1000,
     "shortTermTokenBudget": 8000,
     "longTermTokenBudget": 1500,
-    "workingContextTokenBudget": 1000
+    "workingContextTokenBudget": 1000,
+    "deepPathLongTermTokenBudget": 50000,
+    "deepPathWorkingContextTokenBudget": 10000
   },
   "slack": {
     "accumulationWindows": {

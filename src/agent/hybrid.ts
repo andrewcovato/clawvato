@@ -27,6 +27,7 @@ import { createSlackTools, type SlackTool, type ToolHandlerResult } from '../mcp
 import { FirefliesClient } from '../fireflies/api.js';
 import { createFirefliesTools } from '../fireflies/tools.js';
 import { assembleContext, loadWorkingContext } from './context.js';
+import { retrieveContext } from '../memory/retriever.js';
 import { routeMessage, type RouterResult } from './router.js';
 import { executeFastPath, createFastPathMemoryTools } from './fast-path.js';
 import { executeDeepPath } from './deep-path.js';
@@ -174,7 +175,24 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
         logger.info({ decision: routing.decision, confidence: routing.confidence }, 'Routing decision');
 
         if (routing.decision === 'deep') {
-          // ── Deep Path: Pre-flight confirmation, then Claude Code SDK ──
+          // ── Deep Path: Re-retrieve with generous budget, then pre-flight + SDK ──
+
+          // Re-retrieve memory with deep-path budget ($0 on Max — no cost reason to limit)
+          const deepMemory = await retrieveContext(db, message, {
+            tokenBudget: config.context.deepPathLongTermTokenBudget,
+          });
+          const deepWorkingContext = loadWorkingContext(db, config.context.deepPathWorkingContextTokenBudget);
+
+          // Rebuild userPrompt with richer context
+          const deepParts: string[] = [];
+          if (deepWorkingContext) deepParts.push(deepWorkingContext);
+          if (deepMemory.context) deepParts.push(deepMemory.context);
+          if (context.conversationHistory) {
+            deepParts.push(`## Recent conversation (in #${context.channelLabel})\n${context.conversationHistory}`);
+          }
+          deepParts.push(`## New message (in #${context.channelLabel})\n${message}`);
+          context.userPrompt = deepParts.join('\n\n---\n\n');
+          context.memoryResult = deepMemory;
 
           // Pre-flight: ask user if they want to add context before we start
           // (can't inject context mid-subprocess, so gather everything upfront)

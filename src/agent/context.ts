@@ -85,8 +85,9 @@ export async function buildConversationContext(
 /**
  * Load working context from agent_state (token-budgeted).
  */
-export function loadWorkingContext(db: DatabaseSync): string {
+export function loadWorkingContext(db: DatabaseSync, budgetOverride?: number): string {
   const config = getConfig();
+  const budget = budgetOverride ?? config.context.workingContextTokenBudget;
   try {
     const rows = db.prepare(
       "SELECT key, value FROM agent_state WHERE key LIKE 'wctx:%' AND status = 'active' ORDER BY updated_at DESC LIMIT 20"
@@ -99,7 +100,7 @@ export function loadWorkingContext(db: DatabaseSync): string {
     for (const r of rows) {
       const line = `- ${r.value}`;
       const t = estimateTokens(line);
-      if (tokens + t > config.context.workingContextTokenBudget) break;
+      if (tokens + t > budget) break;
       lines.push(line);
       tokens += t;
     }

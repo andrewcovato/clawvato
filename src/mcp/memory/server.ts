@@ -9,6 +9,7 @@
  */
 
 import { createInterface } from 'node:readline';
+import { getConfig } from '../../config.js';
 import type { DatabaseSync } from 'node:sqlite';
 import {
   searchMemories,
@@ -173,7 +174,8 @@ function handleSearchMemory(db: DatabaseSync, args: Record<string, unknown>): st
 
 async function handleRetrieveContext(db: DatabaseSync, args: Record<string, unknown>): Promise<string> {
   const message = args.message as string;
-  const tokenBudget = args.token_budget as number | undefined;
+  // MCP server is used by deep path / interactive sessions — default to deep budget
+  const tokenBudget = (args.token_budget as number | undefined) ?? getConfig().context.deepPathLongTermTokenBudget;
 
   const result = await retrieveContext(db, message, { tokenBudget });
 
