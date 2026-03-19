@@ -22,17 +22,22 @@ fi
 
 # ── gws (Google Workspace CLI) auth ──
 # gws uses encrypted credentials + encryption key + token cache.
-# GWS_CONFIG_B64 = base64 of tar.gz of ~/.config/gws/ directory.
-# Generate with: cd ~/.config/gws && tar czf - . | base64 | pbcopy
+# On first deploy: GWS_CONFIG_B64 env var → unpacked to /data/gws-config/ (persistent)
+# On subsequent deploys: reads from /data/gws-config/ (env var no longer needed)
+# Generate with: cd ~/.config/gws && tar czf - --exclude=cache . | base64 | pbcopy
+GWS_PERSIST_DIR="/data/gws-config"
 if [ -n "$GWS_CONFIG_B64" ]; then
+  # Env var present — unpack and persist to volume
+  mkdir -p "$GWS_PERSIST_DIR"
+  echo "$GWS_CONFIG_B64" | base64 -d | tar xzf - -C "$GWS_PERSIST_DIR"
   mkdir -p /root/.config/gws
-  echo "$GWS_CONFIG_B64" | base64 -d | tar xzf - -C /root/.config/gws
-  echo "[entrypoint] gws config restored from GWS_CONFIG_B64"
-elif [ -n "$GWS_CREDENTIALS_JSON" ]; then
-  # Fallback: plain JSON credentials (may not work with encrypted gws)
+  cp -r "$GWS_PERSIST_DIR"/. /root/.config/gws/
+  echo "[entrypoint] gws config restored from GWS_CONFIG_B64 and persisted to $GWS_PERSIST_DIR"
+elif [ -d "$GWS_PERSIST_DIR" ] && [ -f "$GWS_PERSIST_DIR/credentials" ]; then
+  # No env var but persisted config exists on volume — use it
   mkdir -p /root/.config/gws
-  echo "$GWS_CREDENTIALS_JSON" > /root/.config/gws/credentials.json
-  echo "[entrypoint] gws credentials written from GWS_CREDENTIALS_JSON (may not work — prefer GWS_CONFIG_B64)"
+  cp -r "$GWS_PERSIST_DIR"/. /root/.config/gws/
+  echo "[entrypoint] gws config restored from persistent volume ($GWS_PERSIST_DIR)"
 else
   echo "[entrypoint] WARNING: No gws auth configured — gws CLI won't have Google access"
 fi
