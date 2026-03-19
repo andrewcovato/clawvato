@@ -1,5 +1,8 @@
 FROM node:22-slim
 
+# CA certificates — node:22-slim strips them, causing TLS UnknownIssuer errors
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Install all deps (need typescript for build)
