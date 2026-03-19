@@ -16,6 +16,7 @@ import {
   getAllPeople,
   insertMemory,
   findMemoriesByType,
+  findOrCreateCategory,
   type MemoryType,
 } from '../../memory/store.js';
 import { retrieveContext } from '../../memory/retriever.js';
@@ -27,21 +28,20 @@ const TOOLS = [
   {
     name: 'search_memory',
     description:
-      'Search long-term memory for facts, decisions, preferences, commitments, or people. ' +
-      'Supports filtering by type, source, and importance. Use for any knowledge retrieval.',
+      'Search long-term memory for any stored knowledge — facts, decisions, technical insights, ' +
+      'research findings, project context, preferences, commitments, and more. ' +
+      'Supports filtering by category, source, and importance.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         query: { type: 'string', description: 'What to search for' },
         type: {
           type: 'string',
-          enum: ['fact', 'preference', 'decision', 'observation', 'reflection', 'strategy', 'conclusion', 'commitment'],
-          description: 'Filter by memory type (optional)',
+          description: 'Filter by category (e.g., "fact", "technical", "research", "decision", "project"). Optional.',
         },
         source_filter: {
           type: 'string',
-          enum: ['gmail', 'fireflies', 'drive', 'slack', 'scan'],
-          description: 'Filter by source (optional)',
+          description: 'Filter by source prefix (e.g., "gmail", "fireflies", "slack", "cc-session"). Optional.',
         },
         limit: { type: 'number', description: 'Max results (default 10, max 50)' },
         min_importance: { type: 'number', description: 'Minimum importance 1-10 (default 1)' },
@@ -67,17 +67,17 @@ const TOOLS = [
   {
     name: 'store_fact',
     description:
-      'Store a new fact, decision, preference, or other memory. ' +
-      'Use after discovering something worth remembering across sessions.',
+      'Store any knowledge worth remembering: facts, technical discoveries, research findings, ' +
+      'decisions, project context, creative ideas, preferences, commitments, and more. ' +
+      'Use after learning something valuable that should persist across sessions.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         type: {
           type: 'string',
-          enum: ['fact', 'preference', 'decision', 'observation', 'strategy', 'conclusion', 'commitment'],
-          description: 'Memory type',
+          description: 'Category (e.g., "fact", "technical", "research", "decision", "project", "learning", "artifact"). Use an existing category or suggest a new one.',
         },
-        content: { type: 'string', description: 'The fact or decision to remember (include WHY when relevant)' },
+        content: { type: 'string', description: 'What to remember — include context and WHY so this is useful months later' },
         source: { type: 'string', description: 'Where this came from (e.g., "gmail:thread123", "meeting:acme-sync")' },
         importance: { type: 'number', description: 'Importance 1-10 (default 5)' },
         confidence: { type: 'number', description: 'Confidence 0-1 (default 0.8)' },
@@ -185,8 +185,11 @@ async function handleRetrieveContext(db: DatabaseSync, args: Record<string, unkn
 }
 
 function handleStoreFact(db: DatabaseSync, args: Record<string, unknown>): string {
+  // Normalize category via findOrCreateCategory (handles fuzzy matching)
+  const category = findOrCreateCategory(db, args.type as string);
+
   const id = insertMemory(db, {
-    type: args.type as MemoryType,
+    type: category,
     content: args.content as string,
     source: args.source as string,
     importance: args.importance as number | undefined,
@@ -194,7 +197,7 @@ function handleStoreFact(db: DatabaseSync, args: Record<string, unknown>): strin
     entities: args.entities as string[] | undefined,
   });
 
-  return `Stored memory ${id} (${args.type}: "${(args.content as string).slice(0, 60)}...")`;
+  return `Stored memory ${id} (${category}: "${(args.content as string).slice(0, 60)}...")`;
 }
 
 function handleUpdateWorkingContext(db: DatabaseSync, args: Record<string, unknown>): string {

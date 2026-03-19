@@ -125,19 +125,20 @@ describe('extractFacts', () => {
     expect(result.facts[1].importance).toBe(1);
   });
 
-  it('filters invalid memory types', async () => {
+  it('accepts any string as memory type (dynamic categories)', async () => {
     const client = createMockClient({
       facts: [
-        { type: 'invalid_type', content: 'Bad type', confidence: 0.5, importance: 5, entities: [] },
-        { type: 'fact', content: 'Good type', confidence: 0.5, importance: 5, entities: [] },
+        { type: 'custom_dynamic_type', content: 'Custom category', confidence: 0.5, importance: 5, entities: [] },
+        { type: 'fact', content: 'Standard category', confidence: 0.5, importance: 5, entities: [] },
       ],
       people: [],
     });
 
     const result = await extractFacts(client, 'haiku', 'test', 'test');
 
-    expect(result.facts).toHaveLength(1);
-    expect(result.facts[0].content).toBe('Good type');
+    expect(result.facts).toHaveLength(2);
+    expect(result.facts[0].type).toBe('custom_dynamic_type');
+    expect(result.facts[1].type).toBe('fact');
   });
 
   it('strips markdown code fences from response', async () => {

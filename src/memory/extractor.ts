@@ -22,6 +22,8 @@ import {
   insertEmbedding,
   deleteEmbedding,
   hasVectorSupport,
+  getCategoryList,
+  findOrCreateCategory,
   type MemoryType,
   type NewMemory,
 } from './store.js';
@@ -56,19 +58,32 @@ export interface ExtractionResult {
 
 /**
  * Extract facts from a conversation using Haiku.
+ * Pass db to enable dynamic category injection and auto-discovery.
  */
 export async function extractFacts(
   client: Anthropic,
   model: string,
   conversation: string,
   source: string,
+  db?: DatabaseSync,
 ): Promise<ExtractionResult> {
   try {
     const config = getConfig();
+
+    // Inject dynamic categories into the extraction prompt
+    let systemPrompt = getPrompts().extraction;
+    if (db) {
+      const categoryList = getCategoryList(db);
+      systemPrompt = systemPrompt.replace('{{CATEGORIES}}', categoryList);
+    } else {
+      // Fallback: no DB available, use a static list
+      systemPrompt = systemPrompt.replace('{{CATEGORIES}}', '- "fact", "preference", "decision", "observation", "strategy", "conclusion", "commitment", "technical", "research", "project"');
+    }
+
     const response = await client.messages.create({
       model,
       max_tokens: config.memory.extractionMaxTokens,
-      system: getPrompts().extraction,
+      system: systemPrompt,
       messages: [{ role: 'user', content: conversation }],
     });
 
@@ -81,18 +96,28 @@ export async function extractFacts(
     const jsonStr = text.replace(/^```json?\s*/i, '').replace(/\s*```$/, '').trim();
     const parsed = JSON.parse(jsonStr);
 
+    // Content cap: 0 = unlimited, otherwise truncate
+    const maxChars = config.memory.extractionContentMaxChars;
+
     const facts: ExtractedFact[] = (parsed.facts ?? [])
       .filter((f: Record<string, unknown>) =>
         f.content && typeof f.content === 'string' &&
-        f.type && ['fact', 'preference', 'decision', 'observation', 'strategy', 'conclusion', 'commitment'].includes(f.type as string)
+        f.type && typeof f.type === 'string'
       )
       .map((f: Record<string, unknown>) => ({
         type: f.type as MemoryType,
-        content: String(f.content).slice(0, 500),
+        content: maxChars > 0 ? String(f.content).slice(0, maxChars) : String(f.content),
         confidence: Math.max(0, Math.min(1, Number(f.confidence) || 0.5)),
         importance: Math.max(1, Math.min(10, Math.round(Number(f.importance) || 5))),
         entities: Array.isArray(f.entities) ? f.entities.map(String) : [],
       }));
+
+    // Auto-discover new categories via normalize-on-add
+    if (db) {
+      for (const fact of facts) {
+        fact.type = findOrCreateCategory(db, fact.type);
+      }
+    }
 
     const people: ExtractedPerson[] = (parsed.people ?? [])
       .filter((p: Record<string, unknown>) => p.name && typeof p.name === 'string')

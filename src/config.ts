@@ -119,8 +119,10 @@ const ConfigSchema = z.object({
     archiveThreshold: z.number().default(1),
     mergeSimilarityThreshold: z.number().default(0.85),
     reflectionThreshold: z.number().int().default(50),
-    extractionMaxTokens: z.number().int().default(1000),
+    extractionMaxTokens: z.number().int().default(2000),
     reflectionMaxTokens: z.number().int().default(1000),
+    extractionContentMaxChars: z.number().int().min(0).default(2000),
+    categoryFuzzyThreshold: z.number().min(0).max(1).default(0.8),
   }).default(() => ({
     consolidationIntervalHours: 24,
     workingContextArchiveDays: 14,
@@ -129,8 +131,10 @@ const ConfigSchema = z.object({
     archiveThreshold: 1,
     mergeSimilarityThreshold: 0.85,
     reflectionThreshold: 50,
-    extractionMaxTokens: 1000,
+    extractionMaxTokens: 2000,
     reflectionMaxTokens: 1000,
+    extractionContentMaxChars: 2000,
+    categoryFuzzyThreshold: 0.8,
   })),
 
   drive: z.object({
@@ -222,8 +226,10 @@ function getDefaultConfig(): Partial<ClawvatoConfig> {
       archiveThreshold: 1,
       mergeSimilarityThreshold: 0.85,
       reflectionThreshold: 50,
-      extractionMaxTokens: 1000,
+      extractionMaxTokens: 2000,
       reflectionMaxTokens: 1000,
+      extractionContentMaxChars: 2000,
+      categoryFuzzyThreshold: 0.8,
     },
     drive: {
       syncBatchSize: 10,

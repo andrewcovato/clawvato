@@ -49,7 +49,7 @@ function getPromptsDir(): string {
 // ── Template resolution ──
 
 /** Placeholders that are resolved at call time, not at load time */
-const RUNTIME_VARIABLES = new Set(['SOURCE_TYPE']);
+const RUNTIME_VARIABLES = new Set(['SOURCE_TYPE', 'CATEGORIES']);
 
 /**
  * Replace all {{VARIABLE}} placeholders with their values.

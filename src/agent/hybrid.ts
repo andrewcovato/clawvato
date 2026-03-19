@@ -362,7 +362,7 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
         // Extract facts from the owner's message
         if (isRealSlackMessage && message.length > 10) {
           const extractionSource = `slack:${batch.channel}:${lastMsg.ts}`;
-          extractFacts(anthropicClient, config.models.classifier, message, extractionSource)
+          extractFacts(anthropicClient, config.models.classifier, message, extractionSource, db)
             .then(async result => {
               if (result.facts.length > 0 || result.people.length > 0) {
                 await storeExtractionResult(db, result, extractionSource);
@@ -379,7 +379,7 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
         // This is actually better: the SDK already synthesized the content.
         if (finalResponse && finalResponse.length > 50 && routing?.decision === 'deep') {
           const responseSource = `sdk:${batch.channel}:${lastMsg.ts}`;
-          extractFacts(anthropicClient, config.models.classifier, finalResponse, responseSource)
+          extractFacts(anthropicClient, config.models.classifier, finalResponse, responseSource, db)
             .then(async result => {
               if (result.facts.length > 0 || result.people.length > 0) {
                 const stored = await storeExtractionResult(db, result, responseSource);

@@ -49,8 +49,10 @@
     "archiveThreshold": 1,
     "mergeSimilarityThreshold": 0.85,
     "reflectionThreshold": 50,
-    "extractionMaxTokens": 1000,
-    "reflectionMaxTokens": 1000
+    "extractionMaxTokens": 2000,
+    "reflectionMaxTokens": 1000,
+    "extractionContentMaxChars": 2000,
+    "categoryFuzzyThreshold": 0.8
   },
   "drive": {
     "syncBatchSize": 10,
