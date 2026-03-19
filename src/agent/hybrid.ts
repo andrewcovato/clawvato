@@ -152,8 +152,13 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
       let finalResponse = '';
 
       try {
-        // ── Route: fast or heavy? Router sees full context (same as both paths) ──
-        routing = await routeMessage(anthropicClient, context.userPrompt);
+        // ── Startup crawl: always fast path, bias toward silence ──
+        if (!isRealSlackMessage) {
+          routing = { decision: 'fast', confidence: 100, reasoning: 'Startup crawl — fast path only' };
+        } else {
+          // ── Route: fast or heavy? Router sees full context (same as both paths) ──
+          routing = await routeMessage(anthropicClient, context.userPrompt);
+        }
         logger.info({ decision: routing.decision, confidence: routing.confidence }, 'Routing decision');
 
         if (routing.decision === 'heavy') {
