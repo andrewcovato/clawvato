@@ -204,7 +204,8 @@ function spawnClaude(
     const { ANTHROPIC_API_KEY: _, ...cleanEnv } = process.env;
 
     const hasOAuth = !!cleanEnv.CLAUDE_CODE_OAUTH_TOKEN;
-    logger.info({ hasOAuth, HOME: cleanEnv.HOME ?? '(unset)' }, 'Spawning claude CLI');
+    const oauthPrefix = cleanEnv.CLAUDE_CODE_OAUTH_TOKEN?.slice(0, 15) ?? '(none)';
+    logger.info({ hasOAuth, oauthPrefix, HOME: cleanEnv.HOME ?? '(unset)', cwd: process.cwd() }, 'Spawning claude CLI');
 
     const proc: ChildProcess = spawn('claude', args, {
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -215,6 +216,11 @@ function spawnClaude(
     // Log spawn success/failure
     proc.on('spawn', () => {
       logger.info({ pid: proc.pid }, 'Claude CLI process spawned');
+    });
+
+    // Detect early exit (e.g., auth failure, crash)
+    proc.on('exit', (code, signal) => {
+      logger.info({ pid: proc.pid, code, signal, stdoutLen: stdout.length, stderrLen: stderr.length }, 'Claude CLI process exited');
     });
 
     let stdout = '';
