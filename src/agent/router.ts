@@ -19,9 +19,9 @@ export interface RouterResult {
   reasoning: string;
 }
 
-const CLASSIFIER_PROMPT = `You are a complexity classifier for a personal AI assistant. You will see the user's NEW MESSAGE and recent CONVERSATION HISTORY for context.
+const CLASSIFIER_PROMPT = `You are a complexity classifier for a personal AI assistant. You will see the full context the assistant receives: working memory, long-term memory, recent conversation history, and the new message.
 
-Decide whether the new message needs the FAST path or HEAVY path.
+Focus on the "New message" section — that is what needs to be routed. Use everything else as context to understand what the user is asking for.
 
 FAST — can be answered from memory or a single API call:
 - Memory lookups: "who is Sarah?", "what's my preference for X?"
@@ -38,9 +38,7 @@ HEAVY — needs reasoning, multiple sources, or multi-step work:
 - Multi-step tasks: "draft a follow-up email based on the meeting"
 - Synthesis: "cross-reference X with Y", "give me a status report"
 - Ambiguous requests that need investigation: "what's going on with Project X?"
-- Follow-ups to a previous HEAVY task: "try again", "continue", "do it"
-
-IMPORTANT: If the conversation history shows the user was previously asking for something complex (cross-source search, comprehensive analysis, etc.) and the new message is a follow-up ("try again", "yes do it", "continue", "approved", "go ahead"), classify as HEAVY.
+- Follow-ups or retries of previous complex tasks visible in conversation history
 
 Output exactly one line: FAST or HEAVY
 Then a confidence score 0-100.
@@ -53,28 +51,24 @@ REASON: <explanation>`;
 
 /**
  * Classify a message as fast or heavy path.
- * Includes conversation history so follow-ups route correctly.
+ *
+ * Receives the full assembled context (same thing both paths see):
+ * working context, memory, conversation history, and new message.
+ * This ensures the router makes the same decision a human would
+ * after reading the full Slack thread.
  */
 export async function routeMessage(
   client: Anthropic,
-  message: string,
-  conversationHistory?: string,
+  fullContext: string,
 ): Promise<RouterResult> {
   const config = getConfig();
-
-  // Build the classifier input with context
-  let classifierInput = '';
-  if (conversationHistory) {
-    classifierInput += `CONVERSATION HISTORY:\n${conversationHistory}\n\n`;
-  }
-  classifierInput += `NEW MESSAGE: ${message}`;
 
   try {
     const response = await client.messages.create({
       model: config.models.classifier,
       max_tokens: 100,
       system: CLASSIFIER_PROMPT,
-      messages: [{ role: 'user', content: classifierInput }],
+      messages: [{ role: 'user', content: fullContext }],
     });
 
     const text = response.content
