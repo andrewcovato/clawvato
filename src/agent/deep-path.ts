@@ -82,7 +82,7 @@ function buildSdkSystemPrompt(opts: DeepPathOptions): string {
   const parts: string[] = [];
 
   // Base prompt from external file — inject findings file path
-  const basePrompt = getPrompts().deepPath.replace('{{FINDINGS_FILE}}', opts.findingsFile);
+  const basePrompt = getPrompts().deepPath.replaceAll('{{FINDINGS_FILE}}', opts.findingsFile);
   parts.push(basePrompt);
 
   if (opts.memoryContext) {
