@@ -90,24 +90,10 @@ export function initDb(): DatabaseSync {
     logger.info('Memories table migrated successfully');
   }
 
-  // One-time migration: reset documents + drive memories for re-sync with improved prompts
-  // Safe to remove this block after it has run once on Railway (2026-03-18)
-  try {
-    const needsReset = db.prepare(
-      "SELECT 1 FROM agent_state WHERE key = 'drive_reset_v5'"
-    ).get();
-    if (!needsReset) {
-      logger.info('One-time reset: full memory clean slate (v5 — rebuild with better prompts)');
-      db.exec("DELETE FROM documents");
-      db.exec("UPDATE memories SET valid_until = datetime('now')");
-      db.exec("DELETE FROM agent_state WHERE key LIKE 'wctx:%'");
-      db.prepare(
-        "INSERT OR REPLACE INTO agent_state (key, value, status) VALUES ('drive_reset_v5', ?, 'active')"
-      ).run(new Date().toISOString());
-    }
-  } catch {
-    // agent_state table may not exist yet on first run — that's fine
-  }
+  // v5 reset migration REMOVED — it was firing on every deploy and wiping all memories.
+  // The guard key wasn't persisting (likely schema recreation or race condition).
+  // Original purpose: one-time reset for improved extraction prompts (2026-03-18).
+  // That's done — memories will now accumulate properly.
 
   // Create vector table (requires sqlite-vec extension)
   try {
