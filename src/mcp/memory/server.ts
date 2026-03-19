@@ -29,25 +29,25 @@ const TOOLS = [
   {
     name: 'search_memory',
     description:
-      'Search long-term memory for any stored knowledge — facts, decisions, technical insights, ' +
-      'research findings, project context, preferences, commitments, and more. ' +
-      'Supports filtering by category, source, and importance.',
+      'Search and browse stored memories. With a query: keyword search ranked by relevance. ' +
+      'Without a query: returns most important/recent memories. ' +
+      'Use filters to narrow by category, source, or importance.',
     inputSchema: {
       type: 'object' as const,
       properties: {
-        query: { type: 'string', description: 'What to search for' },
+        query: { type: 'string', description: 'Search keywords (optional — omit to browse by importance/recency)' },
         type: {
           type: 'string',
           description: 'Filter by category (e.g., "fact", "technical", "research", "decision", "project"). Optional.',
         },
         source_filter: {
           type: 'string',
-          description: 'Filter by source prefix (e.g., "gmail", "fireflies", "slack", "cc-session"). Optional.',
+          description: 'Filter by source prefix (e.g., "gmail", "fireflies", "deep", "cc-session"). Optional.',
         },
-        limit: { type: 'number', description: 'Max results (default 10, max 50)' },
+        limit: { type: 'number', description: 'Max results (default 20, max 50)' },
         min_importance: { type: 'number', description: 'Minimum importance 1-10 (default 1)' },
       },
-      required: ['query'],
+      required: [],
     },
   },
   {
@@ -137,10 +137,10 @@ const TOOLS = [
 // ── Tool Handlers ──
 
 function handleSearchMemory(db: DatabaseSync, args: Record<string, unknown>): string {
-  const query = args.query as string;
+  const query = (args.query as string | undefined) ?? '';
   const type = args.type as MemoryType | undefined;
   const sourceFilter = args.source_filter as string | undefined;
-  const limit = Math.min((args.limit as number) ?? 10, 50);
+  const limit = Math.min((args.limit as number) ?? 20, 50);
   const minImportance = args.min_importance as number | undefined;
 
   const results = searchMemories(db, query, {

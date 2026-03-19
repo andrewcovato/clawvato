@@ -155,8 +155,8 @@ export function findMemoriesByType(
 }
 
 /**
- * Search memories using FTS5 keyword search.
- * Returns currently-valid memories ranked by FTS5 relevance.
+ * Search memories. When a query is provided, uses FTS5 keyword search ranked by relevance.
+ * When no query is provided (or empty), returns memories by importance + recency.
  * Supports optional filtering by type, source prefix, and minimum importance.
  */
 export function searchMemories(
@@ -169,41 +169,69 @@ export function searchMemories(
     minImportance?: number;
   },
 ): Memory[] {
-  const limit = opts?.limit ?? 10;
+  const limit = opts?.limit ?? 20;
+  const hasQuery = query && query.trim().length > 0;
 
-  // Dynamic WHERE builder — all params use ? placeholders
-  const conditions: string[] = ['memories_fts MATCH ?', 'm.valid_until IS NULL'];
-  const params: Array<string | number> = [query];
+  if (hasQuery) {
+    // FTS5 keyword search — ranked by relevance
+    const conditions: string[] = ['memories_fts MATCH ?', 'm.valid_until IS NULL'];
+    const params: Array<string | number> = [query];
+
+    if (opts?.type) {
+      conditions.push('m.type = ?');
+      params.push(opts.type);
+    }
+    if (opts?.sourcePrefix) {
+      conditions.push('m.source LIKE ?');
+      params.push(`${opts.sourcePrefix}:%`);
+    }
+    if (opts?.minImportance) {
+      conditions.push('m.importance >= ?');
+      params.push(opts.minImportance);
+    }
+
+    params.push(limit);
+
+    const sql = `SELECT m.* FROM memories m
+      JOIN memories_fts f ON m.rowid = f.rowid
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY f.rank
+      LIMIT ?`;
+
+    try {
+      const rows = db.prepare(sql).all(...params);
+      return rows as unknown as Memory[];
+    } catch {
+      logger.debug({ query }, 'FTS5 search failed — falling back to recency');
+      // Fall through to recency-based search below
+    }
+  }
+
+  // No query or FTS5 failed — return by importance + recency
+  const conditions: string[] = ['valid_until IS NULL'];
+  const params: Array<string | number> = [];
 
   if (opts?.type) {
-    conditions.push('m.type = ?');
+    conditions.push('type = ?');
     params.push(opts.type);
   }
   if (opts?.sourcePrefix) {
-    conditions.push('m.source LIKE ?');
+    conditions.push('source LIKE ?');
     params.push(`${opts.sourcePrefix}:%`);
   }
   if (opts?.minImportance) {
-    conditions.push('m.importance >= ?');
+    conditions.push('importance >= ?');
     params.push(opts.minImportance);
   }
 
   params.push(limit);
 
-  const sql = `SELECT m.* FROM memories m
-    JOIN memories_fts f ON m.rowid = f.rowid
+  const sql = `SELECT * FROM memories
     WHERE ${conditions.join(' AND ')}
-    ORDER BY f.rank
+    ORDER BY importance DESC, created_at DESC
     LIMIT ?`;
 
-  try {
-    const rows = db.prepare(sql).all(...params);
-    return rows as unknown as Memory[];
-  } catch {
-    // FTS5 can throw on malformed queries — return empty
-    logger.debug({ query }, 'FTS5 search failed — returning empty');
-    return [];
-  }
+  return db.prepare(sql).all(...params) as unknown as Memory[];
 }
 
 /**

@@ -66,48 +66,50 @@ export function createFastPathMemoryTools(db: DatabaseSync): Array<{ definition:
       definition: {
         name: 'search_memory',
         description:
-          'Search memory for facts, decisions, preferences, commitments, or people. ' +
-          'Supports filtering by type, source, and importance.',
+          'Search and browse stored memories — facts, decisions, technical insights, research findings, ' +
+          'commitments, and more. With a query: keyword search ranked by relevance. Without a query: ' +
+          'returns most important/recent memories. Use filters to narrow by category, source, or importance.',
         input_schema: {
           type: 'object' as const,
           properties: {
-            query: { type: 'string', description: 'What to search for' },
+            query: { type: 'string', description: 'Search keywords (optional — omit to browse by importance/recency)' },
             type: {
               type: 'string',
-              enum: ['fact', 'preference', 'decision', 'observation', 'reflection', 'strategy', 'conclusion', 'commitment'],
-              description: 'Filter by memory type (optional)',
+              description: 'Filter by category (e.g., "fact", "technical", "commitment", "project"). Optional.',
             },
             source_filter: {
               type: 'string',
-              enum: ['gmail', 'fireflies', 'drive', 'slack', 'scan'],
-              description: 'Filter by source (optional)',
+              description: 'Filter by source prefix (e.g., "gmail", "fireflies", "deep"). Optional.',
             },
-            limit: { type: 'number', description: 'Max results (default 10, max 50)' },
+            limit: { type: 'number', description: 'Max results (default 20, max 50)' },
             min_importance: { type: 'number', description: 'Min importance 1-10 (default 1)' },
           },
-          required: ['query'],
+          required: [],
         },
       },
       handler: async (args) => {
-        const query = args.query as string;
+        const query = (args.query as string | undefined) ?? '';
         const type = args.type as MemoryType | undefined;
         const sourceFilter = args.source_filter as string | undefined;
-        const limit = Math.min((args.limit as number) ?? 10, 50);
+        const limit = Math.min((args.limit as number) ?? 20, 50);
         const minImportance = args.min_importance as number | undefined;
 
         const results = searchMemories(db, query, { limit, type, sourcePrefix: sourceFilter, minImportance });
 
         if (results.length === 0) {
-          const person = findPersonByName(db, query);
-          if (person) {
-            const parts = [person.name];
-            if (person.role) parts.push(person.role);
-            if (person.organization) parts.push(`at ${person.organization}`);
-            if (person.email) parts.push(`(${person.email})`);
-            if (person.notes) parts.push(`— ${person.notes}`);
-            return { content: `Person: ${parts.join(', ')}` };
+          // Try person lookup if query was provided
+          if (query) {
+            const person = findPersonByName(db, query);
+            if (person) {
+              const parts = [person.name];
+              if (person.role) parts.push(person.role);
+              if (person.organization) parts.push(`at ${person.organization}`);
+              if (person.email) parts.push(`(${person.email})`);
+              if (person.notes) parts.push(`— ${person.notes}`);
+              return { content: `Person: ${parts.join(', ')}` };
+            }
           }
-          return { content: `No memories found for "${query}".` };
+          return { content: query ? `No memories found for "${query}".` : 'No memories stored yet.' };
         }
 
         const lines = results.map(m => {
