@@ -15,18 +15,20 @@ if [ ! -f /root/.claude.json ]; then
 fi
 
 # ── gws (Google Workspace CLI) auth ──
-# Set GWS_CREDENTIALS_JSON env var on Railway with output of `gws auth export`
-if [ -n "$GWS_CREDENTIALS_JSON" ]; then
+# gws uses encrypted credentials + encryption key + token cache.
+# GWS_CONFIG_B64 = base64 of tar.gz of ~/.config/gws/ directory.
+# Generate with: cd ~/.config/gws && tar czf - . | base64 | pbcopy
+if [ -n "$GWS_CONFIG_B64" ]; then
+  mkdir -p /root/.config/gws
+  echo "$GWS_CONFIG_B64" | base64 -d | tar xzf - -C /root/.config/gws
+  echo "[entrypoint] gws config restored from GWS_CONFIG_B64"
+elif [ -n "$GWS_CREDENTIALS_JSON" ]; then
+  # Fallback: plain JSON credentials (may not work with encrypted gws)
   mkdir -p /root/.config/gws
   echo "$GWS_CREDENTIALS_JSON" > /root/.config/gws/credentials.json
-
-  # gws looks for either credentials.json or token_cache.json with the OAuth tokens
-  # Write as application default credentials format
-  echo "$GWS_CREDENTIALS_JSON" > /root/.config/gws/token_cache.json
-
-  echo "[entrypoint] gws credentials written from GWS_CREDENTIALS_JSON"
+  echo "[entrypoint] gws credentials written from GWS_CREDENTIALS_JSON (may not work — prefer GWS_CONFIG_B64)"
 else
-  echo "[entrypoint] WARNING: GWS_CREDENTIALS_JSON not set — gws CLI won't have Google access"
+  echo "[entrypoint] WARNING: No gws auth configured — gws CLI won't have Google access"
 fi
 
 # ── Start the agent ──
