@@ -25,9 +25,11 @@ RUN npm install -g @anthropic-ai/claude-code || true
 
 # Data directory — mount a Railway volume here for persistence
 ENV DATA_DIR=/data
-RUN mkdir -p /data /data/claude-config
+RUN mkdir -p /data
 
-# Symlink ~/.claude to persistent volume so auth tokens survive redeploys
-RUN ln -sf /data/claude-config /root/.claude
-
-CMD ["node", "dist/cli/index.js", "start"]
+# Startup: ensure /data/claude-config exists (volume mounted at runtime, not build time)
+# then symlink ~/.claude to it so auth tokens persist across redeploys
+CMD mkdir -p /data/claude-config && \
+    rm -f /root/.claude && \
+    ln -sf /data/claude-config /root/.claude && \
+    node dist/cli/index.js start
