@@ -96,6 +96,15 @@ function buildSdkSystemPrompt(opts: HeavyPathOptions): string {
   parts.push(`- Cite sources: "From email:", "From meeting:", "From memory:"`);
   parts.push(`- Store important discoveries in memory (store_fact) so they persist across sessions.`);
   parts.push(`- If you read emails or meeting transcripts, the extraction pipeline will pick up facts automatically.`);
+  parts.push(`\n## CRITICAL: Data Fidelity\n`);
+  parts.push(`- **Use exact names from source data.** Never "correct" or normalize names. If the email says "Coles", report "Coles" — not "Kohl's", not "Cole's". The owner's data is authoritative.`);
+  parts.push(`- When names seem unusual, trust the source. The owner's contacts may not match well-known brands.`);
+  parts.push(`\n## Search Thoroughness\n`);
+  parts.push(`- For comprehensive requests, cast a WIDE net. Run multiple searches with different terms.`);
+  parts.push(`- Don't just search for the obvious keyword. For "find all clients", also search for: company names you already know, "proposal", "SOW", "contract", "agreement", "invoice", "onboard", "kickoff", "engagement".`);
+  parts.push(`- Search sent mail too — the owner's outbound emails reveal who they're working with.`);
+  parts.push(`- Check multiple sources: Gmail threads, Drive files (SOWs, proposals), Fireflies meetings, and memory.`);
+  parts.push(`- When in doubt, include more rather than less. The owner can always trim the list.`);
 
   if (opts.memoryContext) {
     parts.push(`\n## Memory Context\n${opts.memoryContext}`);
