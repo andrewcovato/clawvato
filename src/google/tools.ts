@@ -423,6 +423,7 @@ export function createGoogleTools(
       handler: async (args) => {
         const query = args.query as string;
         const maxResults = Math.min((args.max_results as number) ?? 50, 150);
+        logger.info({ query, maxResults }, 'Gmail search executing');
 
         try {
           // Paginate through THREADS — each result is a unique conversation
@@ -449,6 +450,8 @@ export function createGoogleTools(
             pageToken = result.data.nextPageToken ?? undefined;
             if (!pageToken) break;
           }
+
+          logger.info({ query, threadsFound: allThreads.length }, 'Gmail search complete');
 
           if (allThreads.length === 0) {
             return { content: `No email threads found for "${query}".` };
