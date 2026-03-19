@@ -194,55 +194,81 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
           context.userPrompt = deepParts.join('\n\n---\n\n');
           context.memoryResult = deepMemory;
 
-          // Pre-flight: ask user if they want to add context before we start
+          // Pre-flight: collect context until user explicitly says "go"
           // (can't inject context mid-subprocess, so gather everything upfront)
           let additionalContext = '';
           if (isRealSlackMessage) {
             const confirmMsg = await handler.getMessages().post(
               batch.channel,
-              `\u{1f9e0} This needs deep analysis — it may take a few minutes and I won't be able to change direction mid-way.\n\nAnything you want to add before I start? Say *go* when ready.`,
+              `\u{1f9e0} This needs deep analysis — it may take a few minutes and I won't be able to change direction mid-way.\n\nAnything you want to add before I start? Say *go* when ready, or *cancel* to stop.`,
               batch.threadTs,
             );
 
-            // Poll interrupt buffer for user's pre-flight response
+            // Wait indefinitely for explicit "go" or "cancel" — never auto-proceed
             let ready = false;
-            const PREFLIGHT_TIMEOUT_MS = 120_000; // 2 min to respond
             const PREFLIGHT_POLL_MS = 1000;
-            const preflightStart = Date.now();
+            const REMINDER_INTERVAL_MS = 120_000; // Nudge every 2 min of silence
+            let lastActivityAt = Date.now();
+            const originalText = message.toLowerCase().trim(); // For dedup
 
-            while (!ready && (Date.now() - preflightStart) < PREFLIGHT_TIMEOUT_MS) {
+            while (!ready && !finalResponse) {
               await new Promise(r => setTimeout(r, PREFLIGHT_POLL_MS));
               const interrupt = handler.drainInterrupt();
-              if (!interrupt) continue;
 
+              if (!interrupt) {
+                // No message — check if we should send a reminder
+                if (Date.now() - lastActivityAt > REMINDER_INTERVAL_MS) {
+                  try {
+                    await handler.getMessages().update(
+                      batch.channel,
+                      confirmMsg.ts,
+                      `\u{1f9e0} Still waiting — say *go* to start deep analysis, or *cancel* to stop.${additionalContext ? `\n\n_Additional context collected so far: ${additionalContext.trim().slice(0, 100)}..._` : ''}`,
+                    );
+                  } catch { /* */ }
+                  lastActivityAt = Date.now();
+                }
+                continue;
+              }
+
+              lastActivityAt = Date.now();
               const text = interrupt.text.toLowerCase().trim();
-              const isGoSignal = /^(go|yes|do it|proceed|start|ok|yep|yeah|y|sure|ready|let'?s go|send it|ship it)\s*[.!]?$/i.test(text);
-              const isCancelSignal = /^(stop|cancel|nevermind|never mind|scratch that|abort|nvm|nah|no)\s*[.!]?$/i.test(text);
+
+              // Skip duplicate of the original message (Slack can re-deliver events)
+              if (text === originalText) {
+                logger.debug('Pre-flight: skipping duplicate of original message');
+                try { await handler.ackInterrupt(batch.channel, interrupt.ts); } catch { /* */ }
+                continue;
+              }
+
+              const isGoSignal = /^(go|yes|do it|proceed|start|ok|yep|yeah|y|sure|ready|let'?s go|send it|ship it|run it|go ahead)\s*[.!]?$/i.test(text);
+              const isCancelSignal = /^(stop|cancel|nevermind|never mind|scratch that|abort|nvm|nah|no|forget it)\s*[.!]?$/i.test(text);
 
               if (isGoSignal) {
                 ready = true;
                 try { await handler.ackInterrupt(batch.channel, interrupt.ts); } catch { /* */ }
+                logger.info('Pre-flight: user said go');
               } else if (isCancelSignal) {
                 try { await handler.ackInterrupt(batch.channel, interrupt.ts); } catch { /* */ }
                 try { await handler.getMessages().delete(batch.channel, confirmMsg.ts); } catch { /* */ }
                 finalResponse = 'Cancelled.';
                 logger.info('Deep path cancelled during pre-flight');
-                break;
               } else {
-                // Additive context — accumulate it
+                // Additive context — accumulate and acknowledge
                 additionalContext += `\n${interrupt.text}`;
                 try { await handler.ackInterrupt(batch.channel, interrupt.ts); } catch { /* */ }
+                try {
+                  await handler.getMessages().update(
+                    batch.channel,
+                    confirmMsg.ts,
+                    `\u{1f9e0} Got it, added to context. Say *go* when ready, or *cancel* to stop.\n\n_Context so far: ${additionalContext.trim().slice(0, 200)}${additionalContext.trim().length > 200 ? '...' : ''}_`,
+                  );
+                } catch { /* */ }
                 logger.info({ text: interrupt.text.slice(0, 80) }, 'Pre-flight additive context received');
               }
             }
 
             // Clean up confirmation message
             try { await handler.getMessages().delete(batch.channel, confirmMsg.ts); } catch { /* */ }
-
-            if (!ready && !finalResponse) {
-              // Timed out waiting — proceed anyway
-              logger.info('Pre-flight timed out — proceeding with deep path');
-            }
 
             if (finalResponse) {
               // Cancelled during pre-flight — skip deep path
