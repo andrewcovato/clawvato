@@ -174,10 +174,70 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
         logger.info({ decision: routing.decision, confidence: routing.confidence }, 'Routing decision');
 
         if (routing.decision === 'deep') {
-          // ── Deep Path: Claude Code SDK ──
+          // ── Deep Path: Pre-flight confirmation, then Claude Code SDK ──
+
+          // Pre-flight: ask user if they want to add context before we start
+          // (can't inject context mid-subprocess, so gather everything upfront)
+          let additionalContext = '';
           if (isRealSlackMessage) {
-            await handler.updateProgress('Deep analysis in progress...');
+            const confirmMsg = await handler.getMessages().post(
+              batch.channel,
+              `\u{1f9e0} This needs deep analysis — it may take a few minutes and I won't be able to change direction mid-way.\n\nAnything you want to add before I start? Say *go* when ready.`,
+              batch.threadTs,
+            );
+
+            // Poll interrupt buffer for user's pre-flight response
+            let ready = false;
+            const PREFLIGHT_TIMEOUT_MS = 120_000; // 2 min to respond
+            const PREFLIGHT_POLL_MS = 1000;
+            const preflightStart = Date.now();
+
+            while (!ready && (Date.now() - preflightStart) < PREFLIGHT_TIMEOUT_MS) {
+              await new Promise(r => setTimeout(r, PREFLIGHT_POLL_MS));
+              const interrupt = handler.drainInterrupt();
+              if (!interrupt) continue;
+
+              const text = interrupt.text.toLowerCase().trim();
+              const isGoSignal = /^(go|yes|do it|proceed|start|ok|yep|yeah|y|sure|ready|let'?s go|send it|ship it)\s*[.!]?$/i.test(text);
+              const isCancelSignal = /^(stop|cancel|nevermind|never mind|scratch that|abort|nvm|nah|no)\s*[.!]?$/i.test(text);
+
+              if (isGoSignal) {
+                ready = true;
+                try { await handler.ackInterrupt(batch.channel, interrupt.ts); } catch { /* */ }
+              } else if (isCancelSignal) {
+                try { await handler.ackInterrupt(batch.channel, interrupt.ts); } catch { /* */ }
+                try { await handler.getMessages().delete(batch.channel, confirmMsg.ts); } catch { /* */ }
+                finalResponse = 'Cancelled.';
+                logger.info('Deep path cancelled during pre-flight');
+                break;
+              } else {
+                // Additive context — accumulate it
+                additionalContext += `\n${interrupt.text}`;
+                try { await handler.ackInterrupt(batch.channel, interrupt.ts); } catch { /* */ }
+                logger.info({ text: interrupt.text.slice(0, 80) }, 'Pre-flight additive context received');
+              }
+            }
+
+            // Clean up confirmation message
+            try { await handler.getMessages().delete(batch.channel, confirmMsg.ts); } catch { /* */ }
+
+            if (!ready && !finalResponse) {
+              // Timed out waiting — proceed anyway
+              logger.info('Pre-flight timed out — proceeding with deep path');
+            }
+
+            if (finalResponse) {
+              // Cancelled during pre-flight — skip deep path
+            } else {
+              await handler.updateProgress('Deep analysis in progress...');
+            }
           }
+
+          if (!finalResponse) {
+          // Append any additional context from pre-flight to the user prompt
+          const deepUserPrompt = additionalContext
+            ? `${context.userPrompt}\n\n## Additional context from user\n${additionalContext.trim()}`
+            : context.userPrompt;
 
           // Set up abort controller so interrupts can kill the SDK subprocess
           const deepAbort = new AbortController();
@@ -208,7 +268,7 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
           let result;
           try {
             result = await executeDeepPath(
-              context.userPrompt,
+              deepUserPrompt,
               {
                 dataDir: config.dataDir,
                 systemPrompt: context.systemPrompt,
@@ -250,7 +310,8 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
               // Both paths failed — tell the user
               finalResponse = `Sorry, I hit an error on the deep analysis path and couldn't recover.\n\n*Error:* ${errorDetail}\n\nThis usually means the Claude CLI subprocess failed. Check the logs for details.`;
             }
-          }
+          } // end if (!finalResponse) — deep path execution
+          } // end if (routing.decision === 'deep')
         } else {
           // ── Fast Path: direct API ──
           const fastResult = await executeFastPath(
