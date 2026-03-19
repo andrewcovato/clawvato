@@ -202,10 +202,19 @@ function spawnClaude(
   return new Promise((resolve, reject) => {
     // Strip ANTHROPIC_API_KEY so Claude CLI uses Max plan OAuth instead of API billing
     const { ANTHROPIC_API_KEY: _, ...cleanEnv } = process.env;
+
+    const hasOAuth = !!cleanEnv.CLAUDE_CODE_OAUTH_TOKEN;
+    logger.info({ hasOAuth, HOME: cleanEnv.HOME ?? '(unset)' }, 'Spawning claude CLI');
+
     const proc: ChildProcess = spawn('claude', args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: cleanEnv,
       cwd: process.cwd(),
+    });
+
+    // Log spawn success/failure
+    proc.on('spawn', () => {
+      logger.info({ pid: proc.pid }, 'Claude CLI process spawned');
     });
 
     let stdout = '';
@@ -234,10 +243,13 @@ function spawnClaude(
     proc.stdin?.write(stdinInput);
     proc.stdin?.end();
 
+    // 2 min timeout for heavy path (not the full 5 min agent timeout)
+    const heavyTimeoutMs = Math.min(opts.timeoutMs, 120_000);
     const timeout = setTimeout(() => {
+      logger.error({ pid: proc.pid, stdout: stdout.slice(0, 200), stderr: stderr.slice(0, 500) }, 'SDK call timed out — killing process');
       proc.kill('SIGTERM');
-      reject(new Error(`SDK call timed out after ${opts.timeoutMs}ms`));
-    }, opts.timeoutMs);
+      resolve({ stdout, stderr: stderr || 'Timed out with no output', exitCode: 124 });
+    }, heavyTimeoutMs);
 
     proc.on('close', (code) => {
       clearTimeout(timeout);
