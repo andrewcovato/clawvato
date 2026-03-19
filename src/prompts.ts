@@ -86,6 +86,7 @@ interface LoadedPrompts {
   interruptClassification: string;
   meetingExtraction: string;
   emailExtraction: string;
+  heavyPath: string;
   /** @deprecated Will be removed in SDK pivot cleanup */
   searchPlanning: string;
   /** @deprecated Will be removed in SDK pivot cleanup */
@@ -114,6 +115,7 @@ export function loadPrompts(): LoadedPrompts {
     interruptClassification: 'interrupt-classification.md',
     meetingExtraction: 'meeting-extraction.md',
     emailExtraction: 'email-extraction.md',
+    heavyPath: 'heavy-path.md',
     searchPlanning: 'search-planning.md',
     searchRelevance: 'search-relevance.md',
   };

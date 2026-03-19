@@ -106,6 +106,14 @@ Graduation: 10+ approvals with <5% rejection rate and zero rejections in last 5.
 
 ## Coding Conventions
 
+### Prompts
+- **All prompts MUST live in `config/prompts/*.md`** — never hardcode prompt text in TypeScript source files.
+- Prompts are loaded at startup via `src/prompts.ts` (`loadPrompts()` / `getPrompts()`).
+- Use `{{VARIABLE}}` placeholders for dynamic values (resolved at load time from `TEMPLATE_VARIABLES`).
+- Dynamic context (memory, working context, conversation history) is appended at runtime — the prompt file contains only the static instructions.
+- To add a new prompt: create the `.md` file, add the key to `LoadedPrompts` interface and `files` map in `src/prompts.ts`.
+- This makes prompts tunable without code changes and keeps behavior visible in version control.
+
 ### TypeScript
 - ESM modules (`"type": "module"` in package.json)
 - `.js` extensions in import paths (TypeScript resolves `.ts` to `.js`)

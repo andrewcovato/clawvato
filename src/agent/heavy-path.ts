@@ -19,6 +19,7 @@ import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { getConfig } from '../config.js';
+import { getPrompts } from '../prompts.js';
 import { logger } from '../logger.js';
 import type { SlackHandler } from '../slack/handler.js';
 
@@ -72,39 +73,14 @@ function buildMcpConfig(dataDir: string): { configPath: string; cleanup: () => v
 
 /**
  * Build the system prompt addendum for the SDK.
+ * Loads the base prompt from config/prompts/heavy-path.md and appends
+ * dynamic context (memory, working context).
  */
 function buildSdkSystemPrompt(opts: HeavyPathOptions): string {
   const parts: string[] = [];
 
-  parts.push(`You are Clawvato, a personal AI chief of staff. You're handling a complex request that requires multi-source reasoning.`);
-
-  parts.push(`\n## Available Data Sources\n`);
-  parts.push(`- **Memory**: Use the memory MCP tools (search_memory, retrieve_context, store_fact, etc.) for cross-session knowledge.`);
-  parts.push(`- **Google (Gmail, Calendar, Drive)**: Use bash to run \`gws\` CLI commands. Examples:`);
-  parts.push(`  - \`gws gmail users threads list --params '{"userId":"me","q":"after:2026/02/15 from:sarah"}'\``);
-  parts.push(`  - \`gws gmail users threads get --params '{"userId":"me","id":"THREAD_ID"}'\``);
-  parts.push(`  - \`gws calendar events list --params '{"calendarId":"primary","timeMin":"2026-03-18T00:00:00Z","timeMax":"2026-03-19T23:59:59Z"}'\``);
-  parts.push(`  - \`gws drive files list --params '{"q":"name contains \\'budget\\' and trashed = false","pageSize":20}'\``);
-  parts.push(`- **Fireflies (meeting transcripts)**: Use bash to run the Fireflies CLI. Examples:`);
-  parts.push(`  - \`npx tsx tools/fireflies.ts search --query "budget" --days-back 60\``);
-  parts.push(`  - \`npx tsx tools/fireflies.ts summary --id "TRANSCRIPT_ID"\``);
-  parts.push(`  - \`npx tsx tools/fireflies.ts transcript --id "TRANSCRIPT_ID"\``);
-
-  parts.push(`\n## Guidelines\n`);
-  parts.push(`- Be concise. The response will be posted to Slack.`);
-  parts.push(`- Do NOT use Markdown tables — Slack doesn't render them. Use bulleted lists with bold labels.`);
-  parts.push(`- Cite sources: "From email:", "From meeting:", "From memory:"`);
-  parts.push(`- Store important discoveries in memory (store_fact) so they persist across sessions.`);
-  parts.push(`- If you read emails or meeting transcripts, the extraction pipeline will pick up facts automatically.`);
-  parts.push(`\n## CRITICAL: Data Fidelity\n`);
-  parts.push(`- **Use exact names from source data.** Never "correct" or normalize names. If the email says "Coles", report "Coles" — not "Kohl's", not "Cole's". The owner's data is authoritative.`);
-  parts.push(`- When names seem unusual, trust the source. The owner's contacts may not match well-known brands.`);
-  parts.push(`\n## Search Thoroughness\n`);
-  parts.push(`- For comprehensive requests, cast a WIDE net. Run multiple searches with different terms.`);
-  parts.push(`- Don't just search for the obvious keyword. For "find all clients", also search for: company names you already know, "proposal", "SOW", "contract", "agreement", "invoice", "onboard", "kickoff", "engagement".`);
-  parts.push(`- Search sent mail too — the owner's outbound emails reveal who they're working with.`);
-  parts.push(`- Check multiple sources: Gmail threads, Drive files (SOWs, proposals), Fireflies meetings, and memory.`);
-  parts.push(`- When in doubt, include more rather than less. The owner can always trim the list.`);
+  // Base prompt from external file — edit config/prompts/heavy-path.md to tune behavior
+  parts.push(getPrompts().heavyPath);
 
   if (opts.memoryContext) {
     parts.push(`\n## Memory Context\n${opts.memoryContext}`);
