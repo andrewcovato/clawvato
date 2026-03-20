@@ -84,7 +84,6 @@
   "sweeps": {
     "enabled": true,
     "cron": "every 6 hours",
-    "maxChunksPerSource": 20,
     "slack": {
       "enabled": true,
       "excludeChannels": [],

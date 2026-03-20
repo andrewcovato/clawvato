@@ -39,10 +39,22 @@ export function createFirefliesCollector(
       try {
         // Fetch meetings since HWM (or last 7 days for first sweep)
         const fromDate = lastDate ?? new Date(Date.now() - 7 * 86_400_000).toISOString();
-        const transcripts = await client.listTranscripts({
-          fromDate,
-          limit: config.maxMeetings,
-        });
+
+        // Paginate — Fireflies API caps at ~50 per page
+        const PAGE_SIZE = 50;
+        const transcripts: Awaited<ReturnType<typeof client.listTranscripts>> = [];
+        let skip = 0;
+        while (transcripts.length < config.maxMeetings) {
+          const batch = await client.listTranscripts({
+            fromDate,
+            limit: Math.min(PAGE_SIZE, config.maxMeetings - transcripts.length),
+            skip,
+          });
+          if (batch.length === 0) break;
+          transcripts.push(...batch);
+          skip += batch.length;
+          if (batch.length < PAGE_SIZE) break; // last page
+        }
 
         itemsScanned = transcripts.length;
 

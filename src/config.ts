@@ -195,7 +195,6 @@ const ConfigSchema = z.object({
   sweeps: z.object({
     enabled: z.boolean().default(true),
     cron: z.string().default('every 6 hours'),
-    maxChunksPerSource: z.number().int().default(20),
     slack: z.object({
       enabled: z.boolean().default(true),
       excludeChannels: z.array(z.string()).default([]),
@@ -222,7 +221,6 @@ const ConfigSchema = z.object({
   }).default(() => ({
     enabled: true,
     cron: 'every 6 hours',
-    maxChunksPerSource: 20,
     slack: { enabled: true, excludeChannels: [], maxMessagesPerChannel: 500 },
     gmail: { enabled: true, maxThreads: 500 },
     fireflies: { enabled: true, maxMeetings: 100 },

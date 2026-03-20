@@ -52,11 +52,10 @@ export async function executeSweep(
       itemsCollected += result.itemsNew;
 
       // Respect per-source chunk limit
-      const chunks = result.contentChunks.slice(0, config.sweeps.maxChunksPerSource);
-      allChunks.push(...chunks);
+      allChunks.push(...result.contentChunks);
 
       logger.info(
-        { collector: collector.name, scanned: result.itemsScanned, new: result.itemsNew, chunks: chunks.length },
+        { collector: collector.name, scanned: result.itemsScanned, new: result.itemsNew, chunks: result.contentChunks.length },
         'Sweep: collector complete',
       );
     } catch (err) {
