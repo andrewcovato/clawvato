@@ -26,11 +26,18 @@ DEEP — needs extended multi-source research, document analysis, or actions req
 - Bulk operations: "sync all meetings from last month", "scan all recent emails"
 - Web research requiring multiple searches and synthesis
 
-Output exactly one line: FAST, MEDIUM, or DEEP
+DEEP_ANALYSIS — reasoning over knowledge already in memory, no live data fetching needed:
+- "Based on everything you know about our clients, what patterns do you see?"
+- "Compare our Q1 and Q2 strategy"
+- "What are the biggest risks across all our active projects?"
+- "Give me an analysis of where we went right or wrong last quarter"
+- Synthesis, analysis, and strategic reasoning over existing knowledge
+
+Output exactly one line: FAST, MEDIUM, DEEP, or DEEP_ANALYSIS
 Then a confidence score 0-100.
 Then one sentence explaining why.
 
 Format:
-DECISION: <FAST|MEDIUM|DEEP>
+DECISION: <FAST|MEDIUM|DEEP|DEEP_ANALYSIS>
 CONFIDENCE: <0-100>
 REASON: <explanation>

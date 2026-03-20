@@ -95,6 +95,7 @@ interface LoadedPrompts {
   preflight: string;
   rerank: string;
   sweepSynthesis: string;
+  contextPlanner: string;
 }
 
 let cachedPrompts: LoadedPrompts | null = null;
@@ -124,6 +125,7 @@ export function loadPrompts(): LoadedPrompts {
     preflight: 'preflight.md',
     rerank: 'rerank.md',
     sweepSynthesis: 'sweep-synthesis.md',
+    contextPlanner: 'context-planner.md',
   };
 
   const loaded: Partial<LoadedPrompts> = {};

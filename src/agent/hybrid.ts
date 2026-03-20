@@ -15,7 +15,7 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import type { WebClient } from '@slack/web-api';
-import { readFileSync, existsSync, unlinkSync, mkdtempSync, mkdirSync, readdirSync, rmSync, cpSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, unlinkSync, mkdtempSync, mkdirSync, readdirSync, rmSync, cpSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { Sql } from '../db/index.js';
@@ -35,6 +35,7 @@ import { retrieveContext } from '../memory/retriever.js';
 import { routeMessage, type RouterResult } from './router.js';
 import { executeFastPath, createFastPathMemoryTools } from './fast-path.js';
 import { executeDeepPath, seedWorkspace } from './deep-path.js';
+import { planContext } from './context-planner.js';
 import { extractFacts, storeExtractionResult, type ExtractedFact } from '../memory/extractor.js';
 import { maybeReflect } from '../memory/reflection.js';
 import { findOrCreateCategory, insertMemory, findDuplicates, supersedeMemory, deleteEmbedding, hasVectorSupport, insertEmbedding } from '../memory/store.js';
@@ -393,7 +394,7 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
         }
         logger.info({ decision: routing.decision, confidence: routing.confidence }, 'Routing decision');
 
-        if (routing.decision === 'deep') {
+        if (routing.decision === 'deep' || routing.decision === 'deep_analysis') {
           // ── Deep Path: Re-retrieve with generous budget, then pre-flight + SDK ──
 
           // Re-retrieve memory with deep-path budget ($0 on Max — no cost reason to limit)
@@ -413,161 +414,41 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
           context.userPrompt = deepParts.join('\n\n---\n\n');
           context.memoryResult = deepMemory;
 
-          // Pre-flight: LLM-driven conversation to refine the request
-          // (can't inject context mid-subprocess, so gather everything upfront)
-          let preflightContext = '';
+          // Context planner: Opus-powered pre-step that replaces preflight.
+          // Gathers context from memory + tools while conversing with the user.
+          let contextPlan: Awaited<ReturnType<typeof planContext>> | undefined;
           if (isRealSlackMessage) {
-            const PREFLIGHT_POLL_MS = 1000;
-            const REMINDER_INTERVAL_MS = config.agent.preflightReminderMs;
-            let lastActivityAt = Date.now();
-            const originalText = message.toLowerCase().trim();
+            contextPlan = await planContext(
+              message,
+              context.userPrompt,
+              handler,
+              batch.channel,
+              batch.threadTs,
+              {
+                anthropicClient,
+                sql: db,
+                tools: fastPathTools,
+              },
+            );
 
-            // Build pre-flight conversation with Sonnet
-            const preflightMessages: Anthropic.MessageParam[] = [
-              { role: 'user', content: `The owner's request:\n${message}\n\nAssembled context:\n${context.userPrompt}` },
-            ];
-
-            // Get initial bot response (offer to clarify / ask if ready)
-            const initialResponse = await anthropicClient.messages.create({
-              model: config.models.executor,
-              max_tokens: 500,
-              system: getPrompts().preflight,
-              messages: preflightMessages,
-            });
-            const initialText = initialResponse.content
-              .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-              .map(b => b.text).join('');
-
-            // Always enter conversation — first response must never auto-proceed
-            if (initialText.includes('[CANCEL]')) {
-              finalResponse = 'Cancelled.';
-              logger.info('Pre-flight: LLM cancelled');
+            if (contextPlan.cancelled) {
+              finalResponse = ' '; // non-empty but blank — prevents main response from posting
+              logger.info('Context planner: cancelled by user');
             } else {
-              // Post the bot's initial response to Slack (strip any accidental sentinels)
-              const cleanInitial = initialText.replace(/\[PROCEED\]|\[CANCEL\]/g, '').trim();
-              let botMsgTs: string | undefined;
-              try {
-                const posted = await handler.getMessages().post(batch.channel, cleanInitial, batch.threadTs);
-                botMsgTs = posted.ts;
-              } catch { /* */ }
-
-              // Clear :brain: + progress timer from the initial message
-              // (pre-flight conversation handles its own per-message reactions)
-              // Keep activeTask set so incoming messages route to interrupt buffer
-              await handler.clearReactionsOnly();
-
-              preflightMessages.push({ role: 'assistant', content: initialText });
-
-              // Conversation loop — wait for user messages, respond via LLM
-              let proceed = false;
-              while (!proceed && !finalResponse) {
-                await new Promise(r => setTimeout(r, PREFLIGHT_POLL_MS));
-                const interrupt = handler.drainInterrupt();
-
-                if (!interrupt) {
-                  // Periodic reminder — only when truly idle (no message received this cycle)
-                  if (Date.now() - lastActivityAt > REMINDER_INTERVAL_MS && botMsgTs) {
-                    try {
-                      await handler.getMessages().post(
-                        batch.channel,
-                        `Still here — let me know when you're ready to start, or if you have more to add.`,
-                        batch.threadTs,
-                      );
-                    } catch { /* */ }
-                    lastActivityAt = Date.now();
-                  }
-                  continue;
-                }
-
-                // Update activity timestamp immediately — prevents reminder race
-                lastActivityAt = Date.now();
-
-                // Skip duplicate of original message
-                if (interrupt.text.toLowerCase().trim() === originalText) {
-                  logger.debug('Pre-flight: skipping duplicate of original message');
-                  await handler.dismissEyes(batch.channel, interrupt.ts);
-                  continue;
-                }
-
-                // Normal reaction lifecycle: :eyes: → :brain: (thinking)
-                await handler.startThinking(batch.channel, interrupt.ts);
-
-                // Send user message to LLM
-                preflightMessages.push({ role: 'user', content: interrupt.text });
-
-                const llmResponse = await anthropicClient.messages.create({
-                  model: config.models.executor,
-                  max_tokens: 500,
-                  system: getPrompts().preflight,
-                  messages: preflightMessages,
-                });
-                const responseText = llmResponse.content
-                  .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-                  .map(b => b.text).join('');
-
-                preflightMessages.push({ role: 'assistant', content: responseText });
-
-                // Clear :brain: — done thinking
-                await handler.stopThinking(batch.channel, interrupt.ts);
-
-                if (responseText.includes('[PROCEED]')) {
-                  proceed = true;
-                  // Post confirmation (without the sentinel)
-                  const cleanResponse = responseText.replace(/\[PROCEED\]/g, '').trim();
-                  let confirmTs: string | undefined;
-                  if (cleanResponse) {
-                    try {
-                      const posted = await handler.getMessages().post(batch.channel, cleanResponse, batch.threadTs);
-                      confirmTs = posted.ts;
-                    } catch { /* */ }
-                  }
-                  // Start a fresh processing cycle for deep path progress updates
-                  // Complete the old pre-flight activeTask first to avoid stale state
-                  await handler.completeProcessing();
-                  // Don't pass message timestamps — the progress message is sufficient feedback.
-                  // Passing the user's ts would re-add 🧠 to their message after stopThinking already removed it.
-                  await handler.startProcessing('Deep analysis...', batch.channel, [], batch.threadTs);
-                  // Post progress immediately (don't wait 20s — user already waited through pre-flight)
-                  await handler.updateProgress('Deep analysis in progress...');
-
-                  // Collect all user messages from the conversation as additional context
-                  preflightContext = preflightMessages
-                    .filter(m => m.role === 'user')
-                    .slice(1) // skip the initial system context message
-                    .map(m => typeof m.content === 'string' ? m.content : '')
-                    .filter(Boolean)
-                    .join('\n');
-                  logger.info('Pre-flight: user confirmed — proceeding to deep path');
-                } else if (responseText.includes('[CANCEL]')) {
-                  // Let the LLM's cancel response be the only output
-                  finalResponse = ' '; // non-empty but blank — prevents the main response section from posting
-                  const cleanResponse = responseText.replace(/\[CANCEL\]/g, '').trim();
-                  if (cleanResponse) {
-                    try { await handler.getMessages().post(batch.channel, cleanResponse, batch.threadTs); } catch { /* */ }
-                  }
-                  logger.info('Pre-flight: cancelled by user');
-                } else {
-                  // Regular response — post to Slack, continue loop
-                  const cleanResponse = responseText.replace(/\[PROCEED\]|\[CANCEL\]/g, '').trim();
-                  try {
-                    const posted = await handler.getMessages().post(batch.channel, cleanResponse, batch.threadTs);
-                    botMsgTs = posted.ts;
-                  } catch { /* */ }
-                }
-              }
+              // Start fresh processing cycle for deep path progress updates
+              await handler.completeProcessing();
+              await handler.startProcessing('Deep analysis...', batch.channel, [], batch.threadTs);
+              await handler.updateProgress('Deep analysis in progress...');
+              logger.info('Context planner: user confirmed — proceeding to deep path');
             }
-
-            // Progress updates now start inside the [PROCEED] handler via startProcessing
           }
 
           if (!finalResponse) {
-          // Build the deep path user prompt — context is in workspace files,
-          // so stdin only needs the message + any preflight additions
+          // Build the deep path user prompt
           const deepPromptParts = [`## Request (in #${context.channelLabel})\n${message}`];
-          if (preflightContext) {
-            deepPromptParts.push(`## Additional context from pre-flight conversation\n${preflightContext.trim()}`);
+          if (contextPlan?.userClarifications) {
+            deepPromptParts.push(`## Additional context from user\n${contextPlan.userClarifications.trim()}`);
           }
-          deepPromptParts.push(`Context files are pre-loaded in your workspace — read ${workspaceDir}/context/ for memory, working context, and recent conversation.`);
           const deepUserPrompt = deepPromptParts.join('\n\n');
 
           // Set up abort controller so interrupts can kill the SDK subprocess
@@ -602,6 +483,19 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
             conversation: context.conversationHistory,
             channelLabel: context.channelLabel,
           });
+
+          // Write planner context to workspace if available
+          if (contextPlan?.gatheredContext) {
+            writeFileSync(
+              join(workspaceDir, 'context', 'planner-context.md'),
+              contextPlan.gatheredContext,
+            );
+          }
+
+          // Determine analysis mode: router said deep_analysis OR planner says sufficient
+          const isAnalysisMode = routing.decision === 'deep_analysis'
+            || (contextPlan?.sufficientForAnalysis ?? false);
+
           let result;
           try {
             result = await executeDeepPath(
@@ -609,6 +503,7 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
               {
                 dataDir: config.dataDir,
                 workspaceDir,
+                analysisMode: isAnalysisMode,
               },
               handler,
               deepAbort.signal,
@@ -646,7 +541,7 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
               finalResponse = `Sorry, I hit an error on the deep analysis path and couldn't recover.\n\n*Error:* ${errorDetail}\n\nThis usually means the Claude CLI subprocess failed. Check the logs for details.`;
             }
           } // end if (!finalResponse) — deep path execution
-          } // end if (routing.decision === 'deep')
+          } // end if (routing.decision === 'deep' || 'deep_analysis')
         } else {
           // ── Fast / Medium Path: direct API ──
           // Medium uses Opus for better reasoning; fast uses Sonnet for speed
@@ -683,7 +578,7 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
 
               // Fallback: if deep path response failed to post, save it to memory
               // so the work isn't lost entirely
-              if (routing?.decision === 'deep' && cleanResponse.length > 200) {
+              if ((routing?.decision === 'deep' || routing?.decision === 'deep_analysis') && cleanResponse.length > 200) {
                 try {
                   const truncated = cleanResponse.slice(0, 10_000);
                   await insertMemory(db, {
@@ -702,7 +597,7 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
 
               // Always tell the user something went wrong
               try {
-                const userMsg = routing?.decision === 'deep'
+                const userMsg = (routing?.decision === 'deep' || routing?.decision === 'deep_analysis')
                   ? `Sorry, I finished the analysis but hit an error posting the response (${errDetail.slice(0, 100)}). The response has been saved to my memory — ask me to retrieve it.`
                   : `Sorry, I hit an error posting my response: ${errDetail.slice(0, 100)}`;
                 await handler.getMessages().post(batch.channel, userMsg, batch.threadTs);
@@ -746,7 +641,7 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
         }
 
         // Process workspace files from deep path (unique dir per invocation)
-        if (routing?.decision === 'deep' && workspaceDir) {
+        if ((routing?.decision === 'deep' || routing?.decision === 'deep_analysis') && workspaceDir) {
           processWorkspaceFiles(db, anthropicClient, config.models.classifier, `deep:${batch.channel}:${lastMsg.ts}`, workspaceDir)
             .then(async result => {
               if (result.stored > 0 || result.filesProcessed > 0) {
