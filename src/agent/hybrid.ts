@@ -15,7 +15,9 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import type { WebClient } from '@slack/web-api';
-import { readFileSync, existsSync, unlinkSync } from 'node:fs';
+import { readFileSync, existsSync, unlinkSync, mkdtempSync, mkdirSync, readdirSync, rmSync, cpSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import type { Sql } from '../db/index.js';
 import { logger } from '../logger.js';
 import { getConfig } from '../config.js';
@@ -32,7 +34,7 @@ import { assembleContext, loadWorkingContext } from './context.js';
 import { retrieveContext } from '../memory/retriever.js';
 import { routeMessage, type RouterResult } from './router.js';
 import { executeFastPath, createFastPathMemoryTools } from './fast-path.js';
-import { executeDeepPath } from './deep-path.js';
+import { executeDeepPath, seedWorkspace } from './deep-path.js';
 import { extractFacts, storeExtractionResult, type ExtractedFact } from '../memory/extractor.js';
 import { maybeReflect } from '../memory/reflection.js';
 import { findOrCreateCategory, insertMemory, findDuplicates, supersedeMemory, deleteEmbedding, hasVectorSupport, insertEmbedding } from '../memory/store.js';
@@ -59,116 +61,192 @@ export interface HybridAgentOptions {
   taskChannelManager?: TaskChannelManager;
 }
 
-/** Generate a unique findings file path per deep-path invocation */
-function getFindingsFilePath(): string {
-  return `/tmp/clawvato-findings-${crypto.randomUUID()}.json`;
+/** Create a unique workspace directory per deep-path invocation */
+function createWorkspaceDir(): string {
+  return mkdtempSync(join(tmpdir(), 'clawvato-workspace-'));
 }
 
 /**
- * Process the findings file written by the deep path subprocess.
- * Parses JSON, deduplicates, normalizes categories, and stores to DB.
+ * Process all files written by the deep path to its workspace directory.
+ *
+ * The deep path model writes findings as files in any format — .md, .txt, .json, etc.
+ * This function reads each file and routes it through the appropriate pipeline:
+ * - .json files: parsed as structured findings (legacy findings file format)
+ * - Everything else (.md, .txt, etc.): fed through Haiku extraction to produce atomic facts
+ *
+ * All extracted facts go through dedup + embedding before storage.
  * Runs as a background task after deep path completes.
  */
-async function processDeepPathFindings(
+async function processWorkspaceFiles(
+  db: Sql,
+  anthropicClient: Anthropic,
+  classifierModel: string,
+  source: string,
+  workspaceDir: string,
+): Promise<{ stored: number; skipped: number; errors: number; filesProcessed: number }> {
+  let stored = 0;
+  let skipped = 0;
+  let errors = 0;
+  let filesProcessed = 0;
+
+  const findingsDir = join(workspaceDir, 'findings');
+
+  if (!existsSync(findingsDir)) {
+    logger.info('No findings directory in workspace — skipping');
+    return { stored, skipped, errors, filesProcessed };
+  }
+
+  try {
+    const files = readdirSync(findingsDir).filter(f => !f.startsWith('.'));
+
+    if (files.length === 0) {
+      logger.info('Workspace directory empty — no findings to process');
+      return { stored, skipped, errors, filesProcessed };
+    }
+
+    logger.info({ fileCount: files.length, files }, 'Processing deep path workspace files');
+
+    for (const fileName of files) {
+      const filePath = join(findingsDir, fileName);
+      try {
+        const content = readFileSync(filePath, 'utf-8').trim();
+        if (!content || content.length < 10) continue;
+
+        filesProcessed++;
+
+        if (fileName.endsWith('.json')) {
+          // Structured JSON — parse and store directly (legacy findings file path)
+          const result = await processStructuredFindings(db, source, content);
+          stored += result.stored;
+          skipped += result.skipped;
+          errors += result.errors;
+        } else {
+          // Unstructured text (.md, .txt, etc.) — extract via Haiku
+          const fileSource = `${source}:file:${fileName}`;
+          const result = await extractFacts(anthropicClient, classifierModel, content, fileSource, db);
+          if (result.facts.length > 0 || result.people.length > 0) {
+            const storeResult = await storeExtractionResult(db, result, fileSource);
+            stored += storeResult.memoriesStored;
+            skipped += storeResult.duplicatesSkipped;
+          }
+          logger.debug(
+            { fileName, facts: result.facts.length, people: result.people.length },
+            'Workspace file extracted',
+          );
+        }
+      } catch (err) {
+        errors++;
+        logger.debug({ error: err, fileName }, 'Failed to process workspace file');
+      }
+    }
+  } catch (err) {
+    logger.warn({ error: err }, 'Failed to process workspace directory');
+  } finally {
+    // Persist workspace for debugging if DEBUG_WORKSPACE is set
+    if (process.env.DEBUG_WORKSPACE) {
+      try {
+        const debugDir = join(process.env.DEBUG_WORKSPACE, `workspace-${new Date().toISOString().replace(/[:.]/g, '-')}`);
+        mkdirSync(debugDir, { recursive: true });
+        cpSync(workspaceDir, debugDir, { recursive: true });
+        logger.info({ debugDir }, 'Workspace persisted for debugging');
+      } catch (err) {
+        logger.debug({ error: err }, 'Failed to persist debug workspace');
+      }
+    }
+    // Clean up the temp workspace directory
+    try { rmSync(workspaceDir, { recursive: true }); } catch { /* best effort */ }
+  }
+
+  return { stored, skipped, errors, filesProcessed };
+}
+
+/**
+ * Process a structured JSON findings file (legacy format).
+ * Handles both JSON arrays and JSONL (one object per line).
+ */
+async function processStructuredFindings(
   db: Sql,
   source: string,
-  findingsFilePath: string,
+  raw: string,
 ): Promise<{ stored: number; skipped: number; errors: number }> {
   let stored = 0;
   let skipped = 0;
   let errors = 0;
 
-  if (!existsSync(findingsFilePath)) {
-    logger.info('No findings file from deep path — skipping');
+  const cleaned = raw
+    .replace(/^```json?\s*/gim, '')
+    .replace(/\s*```$/gm, '')
+    .trim();
+
+  let findings: Array<Record<string, unknown>>;
+  try {
+    findings = JSON.parse(cleaned);
+  } catch {
+    // Try parsing as JSONL (one JSON object per line)
+    findings = cleaned
+      .split('\n')
+      .filter(line => line.trim().startsWith('{'))
+      .map(line => {
+        try { return JSON.parse(line); } catch { return null; }
+      })
+      .filter((f): f is Record<string, unknown> => f !== null);
+  }
+
+  if (!Array.isArray(findings) || findings.length === 0) {
+    logger.warn({ rawLength: raw.length }, 'Structured findings empty or unparseable');
     return { stored, skipped, errors };
   }
 
-  try {
-    const raw = readFileSync(findingsFilePath, 'utf-8');
-    // Clean up: handle markdown wrapping, multiple JSON arrays, JSONL
-    const cleaned = raw
-      .replace(/^```json?\s*/gim, '')
-      .replace(/\s*```$/gm, '')
-      .trim();
+  logger.info({ findingsCount: findings.length }, 'Processing structured findings');
 
-    let findings: Array<Record<string, unknown>>;
+  const newMemoryIds: { id: string; content: string }[] = [];
+
+  for (const finding of findings) {
     try {
-      findings = JSON.parse(cleaned);
-    } catch {
-      // Try parsing as JSONL (one JSON object per line)
-      findings = cleaned
-        .split('\n')
-        .filter(line => line.trim().startsWith('{'))
-        .map(line => {
-          try { return JSON.parse(line); } catch { return null; }
-        })
-        .filter((f): f is Record<string, unknown> => f !== null);
-    }
+      const content = String(finding.content ?? '').slice(0, 10_000);
+      if (!content || content.length < 10) continue;
 
-    if (!Array.isArray(findings) || findings.length === 0) {
-      logger.warn({ rawLength: raw.length }, 'Findings file empty or unparseable');
-      return { stored, skipped, errors };
-    }
+      const type = await findOrCreateCategory(db, String(finding.type ?? 'fact'));
+      const entities = Array.isArray(finding.entities) ? finding.entities.map(String) : [];
+      const importance = Math.max(1, Math.min(10, Math.round(Number(finding.importance) || 5)));
+      const confidence = Math.max(0, Math.min(1, Number(finding.confidence) || 0.7));
+      const factSource = finding.source ? `${source}:${finding.source}` : source;
 
-    logger.info({ findingsCount: findings.length }, 'Processing deep path findings');
+      const duplicates = await findDuplicates(db, content, type);
+      const closeMatch = duplicates.find(d => contentSimilarity(d.content, content) > 0.8);
 
-    const newMemoryIds: { id: string; content: string }[] = [];
-
-    for (const finding of findings) {
-      try {
-        const content = String(finding.content ?? '').slice(0, 10_000);
-        if (!content || content.length < 10) continue;
-
-        const type = await findOrCreateCategory(db, String(finding.type ?? 'fact'));
-        const entities = Array.isArray(finding.entities) ? finding.entities.map(String) : [];
-        const importance = Math.max(1, Math.min(10, Math.round(Number(finding.importance) || 5)));
-        const confidence = Math.max(0, Math.min(1, Number(finding.confidence) || 0.7));
-        const factSource = finding.source ? `${source}:${finding.source}` : source;
-
-        // Dedup check
-        const duplicates = await findDuplicates(db, content, type);
-        const closeMatch = duplicates.find(d => contentSimilarity(d.content, content) > 0.8);
-
-        if (closeMatch) {
-          if (confidence > closeMatch.confidence) {
-            // Higher confidence — supersede
-            const newId = await insertMemory(db, { type, content, source: factSource, importance, confidence, entities });
-            await supersedeMemory(db, closeMatch.id, newId);
-            await deleteEmbedding(db, closeMatch.id);
-            newMemoryIds.push({ id: newId, content });
-            stored++;
-          } else {
-            skipped++;
-          }
-        } else {
+      if (closeMatch) {
+        if (confidence > closeMatch.confidence) {
           const newId = await insertMemory(db, { type, content, source: factSource, importance, confidence, entities });
+          await supersedeMemory(db, closeMatch.id, newId);
+          await deleteEmbedding(db, closeMatch.id);
           newMemoryIds.push({ id: newId, content });
           stored++;
+        } else {
+          skipped++;
         }
-      } catch (err) {
-        errors++;
-        logger.debug({ error: err, finding: JSON.stringify(finding).slice(0, 200) }, 'Failed to process finding');
+      } else {
+        const newId = await insertMemory(db, { type, content, source: factSource, importance, confidence, entities });
+        newMemoryIds.push({ id: newId, content });
+        stored++;
       }
+    } catch (err) {
+      errors++;
+      logger.debug({ error: err, finding: JSON.stringify(finding).slice(0, 200) }, 'Failed to process finding');
     }
+  }
 
-    // Batch embed all new memories
-    if (newMemoryIds.length > 0 && await hasVectorSupport(db)) {
-      try {
-        const texts = newMemoryIds.map(m => m.content);
-        const embeddings = await embedBatch(texts);
-        for (let i = 0; i < newMemoryIds.length; i++) {
-          await insertEmbedding(db, newMemoryIds[i].id, embeddings[i]);
-        }
-        logger.debug({ count: newMemoryIds.length }, 'Findings embeddings stored');
-      } catch (err) {
-        logger.debug({ error: err }, 'Findings embedding failed — stored without vectors');
+  if (newMemoryIds.length > 0 && await hasVectorSupport(db)) {
+    try {
+      const texts = newMemoryIds.map(m => m.content);
+      const embeddings = await embedBatch(texts);
+      for (let i = 0; i < newMemoryIds.length; i++) {
+        await insertEmbedding(db, newMemoryIds[i].id, embeddings[i]);
       }
+      logger.debug({ count: newMemoryIds.length }, 'Structured findings embeddings stored');
+    } catch (err) {
+      logger.debug({ error: err }, 'Findings embedding failed — stored without vectors');
     }
-  } catch (err) {
-    logger.warn({ error: err }, 'Failed to process findings file');
-  } finally {
-    // Clean up the findings file
-    try { unlinkSync(findingsFilePath); } catch { /* */ }
   }
 
   return { stored, skipped, errors };
@@ -300,7 +378,7 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
 
       let routing: RouterResult | undefined;
       let finalResponse = '';
-      let findingsFile: string | undefined;
+      let workspaceDir: string | undefined;
 
       try {
         // ── Startup crawl: always fast path, bias toward silence ──
@@ -480,10 +558,14 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
           }
 
           if (!finalResponse) {
-          // Append any additional context from pre-flight conversation to the user prompt
-          const deepUserPrompt = preflightContext
-            ? `${context.userPrompt}\n\n## Additional context from pre-flight conversation\n${preflightContext.trim()}`
-            : context.userPrompt;
+          // Build the deep path user prompt — context is in workspace files,
+          // so stdin only needs the message + any preflight additions
+          const deepPromptParts = [`## Request (in #${context.channelLabel})\n${message}`];
+          if (preflightContext) {
+            deepPromptParts.push(`## Additional context from pre-flight conversation\n${preflightContext.trim()}`);
+          }
+          deepPromptParts.push(`Context files are pre-loaded in your workspace — read ${workspaceDir}/context/ for memory, working context, and recent conversation.`);
+          const deepUserPrompt = deepPromptParts.join('\n\n');
 
           // Set up abort controller so interrupts can kill the SDK subprocess
           const deepAbort = new AbortController();
@@ -510,18 +592,20 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
             }
           }, config.agent.interruptPollMs);
 
-          const workingContext = deepWorkingContext;
-          findingsFile = getFindingsFilePath();
+          workspaceDir = createWorkspaceDir();
+          seedWorkspace(workspaceDir, {
+            memory: context.memoryResult.context,
+            workingContext: deepWorkingContext,
+            conversation: context.conversationHistory,
+            channelLabel: context.channelLabel,
+          });
           let result;
           try {
             result = await executeDeepPath(
               deepUserPrompt,
               {
                 dataDir: config.dataDir,
-                systemPrompt: context.systemPrompt,
-                memoryContext: context.memoryResult.context,
-                workingContext,
-                findingsFile,
+                workspaceDir,
               },
               handler,
               deepAbort.signal,
@@ -658,20 +742,22 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
             });
         }
 
-        // Process findings file from deep path (unique path per invocation)
-        if (routing?.decision === 'deep' && findingsFile) {
-          processDeepPathFindings(db, `deep:${batch.channel}:${lastMsg.ts}`, findingsFile)
+        // Process workspace files from deep path (unique dir per invocation)
+        if (routing?.decision === 'deep' && workspaceDir) {
+          processWorkspaceFiles(db, anthropicClient, config.models.classifier, `deep:${batch.channel}:${lastMsg.ts}`, workspaceDir)
             .then(async result => {
-              if (result.stored > 0) {
+              if (result.stored > 0 || result.filesProcessed > 0) {
                 logger.info(
-                  { stored: result.stored, skipped: result.skipped, errors: result.errors },
-                  'Deep path findings processed into memory',
+                  { stored: result.stored, skipped: result.skipped, errors: result.errors, filesProcessed: result.filesProcessed },
+                  'Deep path workspace files processed into memory',
                 );
                 await maybeReflect(db, anthropicClient, config.models.classifier);
+              } else {
+                logger.info('Deep path produced no workspace files — no findings captured');
               }
             })
             .catch(err => {
-              logger.debug({ error: err }, 'Deep path response extraction failed');
+              logger.debug({ error: err }, 'Deep path workspace processing failed');
             });
         }
 

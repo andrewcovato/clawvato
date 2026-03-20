@@ -15,7 +15,7 @@
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { writeFileSync, mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { getConfig } from '../config.js';
@@ -26,14 +26,8 @@ import type { SlackHandler } from '../slack/handler.js';
 export interface DeepPathOptions {
   /** Data directory for the memory MCP server */
   dataDir: string;
-  /** System prompt to append to SDK context */
-  systemPrompt: string;
-  /** Memory context string (pre-assembled) */
-  memoryContext: string;
-  /** Working context string */
-  workingContext: string;
-  /** Path for the findings file (unique per invocation) */
-  findingsFile: string;
+  /** Workspace directory (pre-seeded with context/, findings/ created empty) */
+  workspaceDir: string;
 }
 
 export interface DeepPathResult {
@@ -75,25 +69,55 @@ function buildMcpConfig(dataDir: string): { configPath: string; cleanup: () => v
 
 /**
  * Build the system prompt addendum for the SDK.
- * Loads the base prompt from config/prompts/deep-path.md and appends
- * dynamic context (memory, working context).
+ * Loads the base prompt from config/prompts/deep-path.md.
+ * Context (memory, working context, conversation) is pre-seeded as files
+ * in workspace/context/ — the model reads them as needed.
  */
 function buildSdkSystemPrompt(opts: DeepPathOptions): string {
-  const parts: string[] = [];
+  return getPrompts().deepPath.replaceAll('{{WORKSPACE_DIR}}', opts.workspaceDir);
+}
 
-  // Base prompt from external file — inject findings file path
-  const basePrompt = getPrompts().deepPath.replaceAll('{{FINDINGS_FILE}}', opts.findingsFile);
-  parts.push(basePrompt);
+// ── Workspace seeding ──
 
-  if (opts.memoryContext) {
-    parts.push(`\n## Memory Context\n${opts.memoryContext}`);
+export interface WorkspaceContext {
+  /** Retrieved long-term memory (relevance-ranked, all categories) */
+  memory: string;
+  /** Working context scratch pad */
+  workingContext: string;
+  /** Recent Slack conversation history */
+  conversation: string;
+  /** Channel label for attribution */
+  channelLabel: string;
+}
+
+/**
+ * Seed the workspace directory with context files and create findings dir.
+ * Context goes in workspace/context/ (read-only for the model).
+ * Model writes to workspace/findings/ (processed after deep path completes).
+ */
+export function seedWorkspace(workspaceDir: string, ctx: WorkspaceContext): void {
+  const contextDir = join(workspaceDir, 'context');
+  const findingsDir = join(workspaceDir, 'findings');
+  mkdirSync(contextDir, { recursive: true });
+  mkdirSync(findingsDir, { recursive: true });
+
+  if (ctx.memory) {
+    writeFileSync(join(contextDir, 'memory.md'), ctx.memory);
+  }
+  if (ctx.workingContext) {
+    writeFileSync(join(contextDir, 'working.md'), ctx.workingContext);
+  }
+  if (ctx.conversation) {
+    writeFileSync(
+      join(contextDir, 'conversation.md'),
+      `## Recent conversation (in #${ctx.channelLabel})\n\n${ctx.conversation}`,
+    );
   }
 
-  if (opts.workingContext) {
-    parts.push(`\n${opts.workingContext}`);
-  }
-
-  return parts.join('\n');
+  logger.debug(
+    { contextDir, findingsDir, hasMemory: !!ctx.memory, hasWorking: !!ctx.workingContext, hasConversation: !!ctx.conversation },
+    'Workspace seeded with context files',
+  );
 }
 
 // ── Progress descriptions for tool calls ──
@@ -156,10 +180,10 @@ export async function executeDeepPath(
       '--mcp-config', configPath,
       '--append-system-prompt', sdkSystemPrompt,
       '--max-turns', String(config.agent.deepPathMaxTurns),
-      // Pre-approve tools: bash for research + file writes, MCP for memory reads
-      // Memory writes happen via findings file (/tmp/clawvato-findings.json) + background processor
+      // Pre-approve tools: bash for research + workspace writes, MCP for memory reads
+      // Memory writes happen via workspace files → Haiku extraction → background processor
       '--allowedTools',
-      'Bash(gws:*)', 'Bash(npx:*)', 'Bash(cat:*)', 'Bash(ls:*)', 'Bash(echo:*)',
+      'Bash(gws:*)', 'Bash(npx:*)', 'Bash(cat:*)', 'Bash(ls:*)', 'Bash(echo:*)', 'Bash(mkdir:*)',
       'Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch',
       'mcp__memory__search_memory', 'mcp__memory__retrieve_context',
       'mcp__memory__list_people', 'mcp__memory__list_commitments',
