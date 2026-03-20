@@ -13,7 +13,7 @@ import { getConfig } from '../config.js';
 import { getPrompts } from '../prompts.js';
 import { logger } from '../logger.js';
 
-export type RoutingDecision = 'fast' | 'medium' | 'deep' | 'deep_analysis';
+export type RoutingDecision = 'fast' | 'medium' | 'deep';
 
 export interface RouterResult {
   decision: RoutingDecision;
@@ -68,9 +68,7 @@ function parseRouterResponse(text: string): RouterResult {
     const upper = line.toUpperCase().trim();
     if (upper.startsWith('DECISION:')) {
       const val = upper.replace('DECISION:', '').trim();
-      if (val.includes('DEEP_ANALYSIS') || val.includes('DEEP ANALYSIS')) {
-        decision = 'deep_analysis';
-      } else if (val.includes('DEEP') || val.includes('HEAVY')) {
+      if (val.includes('DEEP') || val.includes('HEAVY')) {
         decision = 'deep';
       } else if (val.includes('MEDIUM')) {
         decision = 'medium';

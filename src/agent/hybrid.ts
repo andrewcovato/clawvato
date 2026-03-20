@@ -394,7 +394,7 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
         }
         logger.info({ decision: routing.decision, confidence: routing.confidence }, 'Routing decision');
 
-        if (routing.decision === 'deep' || routing.decision === 'deep_analysis') {
+        if (routing.decision === 'deep') {
           // ── Deep Path: Re-retrieve with generous budget, then pre-flight + SDK ──
 
           // Re-retrieve memory with deep-path budget ($0 on Max — no cost reason to limit)
@@ -492,9 +492,8 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
             );
           }
 
-          // Determine analysis mode: router said deep_analysis OR planner says sufficient
-          const isAnalysisMode = routing.decision === 'deep_analysis'
-            || (contextPlan?.sufficientForAnalysis ?? false);
+          // Determine analysis mode: context planner says gathered context is sufficient
+          const isAnalysisMode = contextPlan?.sufficientForAnalysis ?? false;
 
           let result;
           try {
@@ -541,7 +540,7 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
               finalResponse = `Sorry, I hit an error on the deep analysis path and couldn't recover.\n\n*Error:* ${errorDetail}\n\nThis usually means the Claude CLI subprocess failed. Check the logs for details.`;
             }
           } // end if (!finalResponse) — deep path execution
-          } // end if (routing.decision === 'deep' || 'deep_analysis')
+          } // end if (routing.decision === 'deep')
         } else {
           // ── Fast / Medium Path: direct API ──
           // Medium uses Opus for better reasoning; fast uses Sonnet for speed
@@ -578,7 +577,7 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
 
               // Fallback: if deep path response failed to post, save it to memory
               // so the work isn't lost entirely
-              if ((routing?.decision === 'deep' || routing?.decision === 'deep_analysis') && cleanResponse.length > 200) {
+              if (routing?.decision === 'deep' && cleanResponse.length > 200) {
                 try {
                   const truncated = cleanResponse.slice(0, 10_000);
                   await insertMemory(db, {
@@ -597,7 +596,7 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
 
               // Always tell the user something went wrong
               try {
-                const userMsg = (routing?.decision === 'deep' || routing?.decision === 'deep_analysis')
+                const userMsg = routing?.decision === 'deep'
                   ? `Sorry, I finished the analysis but hit an error posting the response (${errDetail.slice(0, 100)}). The response has been saved to my memory — ask me to retrieve it.`
                   : `Sorry, I hit an error posting my response: ${errDetail.slice(0, 100)}`;
                 await handler.getMessages().post(batch.channel, userMsg, batch.threadTs);
@@ -641,7 +640,7 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
         }
 
         // Process workspace files from deep path (unique dir per invocation)
-        if ((routing?.decision === 'deep' || routing?.decision === 'deep_analysis') && workspaceDir) {
+        if (routing?.decision === 'deep' && workspaceDir) {
           processWorkspaceFiles(db, anthropicClient, config.models.classifier, `deep:${batch.channel}:${lastMsg.ts}`, workspaceDir)
             .then(async result => {
               if (result.stored > 0 || result.filesProcessed > 0) {
