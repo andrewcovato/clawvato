@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { logger } from '../logger.js';
 import { getConfig } from '../config.js';
 import { initDb, getDb, closeDb } from '../db/index.js';
-import { hasCredential, requireCredential } from '../credentials.js';
+import { hasCredential, requireCredential, getCredential } from '../credentials.js';
 import { createSlackConnection } from '../slack/socket-mode.js';
 import { createHybridAgent } from '../agent/hybrid.js';
 import { shouldConsolidate, consolidate } from '../memory/consolidation.js';
@@ -23,6 +23,13 @@ import { TaskChannelManager } from '../tasks/channel-manager.js';
 import { setTaskApprovalHandler, setTaskThreadResolver } from '../slack/socket-mode.js';
 import Anthropic from '@anthropic-ai/sdk';
 import type { WebClient } from '@slack/web-api';
+import { createSlackCollector } from '../sweeps/slack-collector.js';
+import { createGmailCollector } from '../sweeps/gmail-collector.js';
+import { createFirefliesCollector } from '../sweeps/fireflies-collector.js';
+import { registerSweepTask } from '../sweeps/executor.js';
+import type { Collector } from '../sweeps/types.js';
+import { getGoogleAuth } from '../google/auth.js';
+import { FirefliesClient } from '../fireflies/api.js';
 
 export async function startAgent(): Promise<void> {
   const config = getConfig();
@@ -133,6 +140,42 @@ export async function startAgent(): Promise<void> {
   const taskAnthropicClient = new Anthropic({ apiKey });
   const taskFastPathTools = agent.getFastPathTools();
 
+  // ── Register sweep collectors ──
+  const sweepCollectors: Collector[] = [];
+  if (config.sweeps.enabled) {
+    // Slack collector (requires user token for broad channel access)
+    if (config.sweeps.slack.enabled && slack.userClient) {
+      sweepCollectors.push(createSlackCollector(slack.userClient, db, {
+        excludeChannels: config.sweeps.slack.excludeChannels,
+        maxMessagesPerChannel: config.sweeps.slack.maxMessagesPerChannel,
+      }));
+    }
+
+    // Gmail collector
+    if (config.sweeps.gmail.enabled) {
+      const googleAuth = await getGoogleAuth();
+      if (googleAuth) {
+        sweepCollectors.push(createGmailCollector(googleAuth, db, {
+          maxThreads: config.sweeps.gmail.maxThreads,
+        }));
+      }
+    }
+
+    // Fireflies collector
+    if (config.sweeps.fireflies.enabled) {
+      const ffKey = process.env.FIREFLIES_API_KEY ?? await getCredential('fireflies-api-key').catch(() => undefined);
+      if (ffKey) {
+        sweepCollectors.push(createFirefliesCollector(new FirefliesClient(ffKey), db, {
+          maxMeetings: config.sweeps.fireflies.maxMeetings,
+        }));
+      }
+    }
+
+    // Register the recurring sweep task
+    await registerSweepTask(db, config.sweeps.cron);
+    logger.info({ collectors: sweepCollectors.map(c => c.name) }, 'Sweep collectors registered');
+  }
+
   // ── Task scheduler ──
   const scheduler = startScheduler({
     sql: db,
@@ -144,6 +187,7 @@ export async function startAgent(): Promise<void> {
         fastPathTools: taskFastPathTools,
         channelManager: taskChannelManager,
         botUserId,
+        sweepCollectors,
       });
     },
     postReminder: taskChannelManager ? async (task) => {

@@ -23,6 +23,8 @@ import { getTask, rescheduleRecurring, markCompleted, markFailed } from './store
 import type { ScheduledTask } from './store.js';
 import type { TaskExecutionResult } from './scheduler.js';
 import type { TaskChannelManager } from './channel-manager.js';
+import type { Collector } from '../sweeps/types.js';
+import { executeSweep } from '../sweeps/executor.js';
 
 export interface TaskExecutorDeps {
   sql: Sql;
@@ -32,6 +34,8 @@ export interface TaskExecutorDeps {
   channelManager?: TaskChannelManager;
   ownerDmChannel?: string; // fallback if no task channel
   botUserId?: string;
+  /** Registered sweep collectors (populated at startup if sweeps enabled) */
+  sweepCollectors?: Collector[];
 }
 
 /**
@@ -45,6 +49,11 @@ export async function executeScheduledTask(
   const isSpawned = task.spawned_by_task;
 
   logger.info({ taskId: task.id, title: task.title, spawned: isSpawned }, 'Executing scheduled task');
+
+  // ── Sweep task dispatch ──
+  if (task.title.startsWith('sweep:') && deps.sweepCollectors?.length) {
+    return executeSweepTask(task, deps);
+  }
 
   // Build the synthetic message
   let message = `[Scheduled Task] ${task.title}`;
@@ -141,6 +150,53 @@ export async function executeScheduledTask(
     if (deps.channelManager) {
       await deps.channelManager.postNotification(`⚠️ *Task failed: ${task.title}*\n\nError: ${errMsg.slice(0, 500)}`);
       await deps.channelManager.removeTaskPin(task, 'failed');
+    }
+
+    return { success: false, response: '', error: errMsg };
+  }
+}
+
+/**
+ * Execute a sweep task — collects from all sources and synthesizes.
+ */
+async function executeSweepTask(
+  task: ScheduledTask,
+  deps: TaskExecutorDeps,
+): Promise<TaskExecutionResult> {
+  const config = getConfig();
+
+  try {
+    const result = await executeSweep(deps.sweepCollectors!, {
+      sql: deps.sql,
+      dataDir: config.dataDir,
+    });
+
+    const summary = `Swept ${result.sourcesSwept} sources, collected ${result.itemsCollected} new items in ${Math.round(result.durationMs / 1000)}s.`;
+
+    // Post result to task channel
+    if (deps.channelManager && result.itemsCollected > 0) {
+      await deps.channelManager.postNotification(`🔄 *Background sweep complete*\n\n${summary}`);
+    }
+
+    // Reschedule if recurring
+    if (task.cron_expression) {
+      await rescheduleRecurring(deps.sql, task.id, summary, task.cron_expression);
+      const updatedTask = await getTask(deps.sql, task.id);
+      if (updatedTask && deps.channelManager) {
+        await deps.channelManager.updateTaskPin(updatedTask);
+      }
+    } else {
+      await markCompleted(deps.sql, task.id, summary);
+    }
+
+    return { success: true, response: summary };
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    logger.error({ error: errMsg, taskId: task.id }, 'Sweep task failed');
+    await markFailed(deps.sql, task.id, errMsg);
+
+    if (deps.channelManager) {
+      await deps.channelManager.postNotification(`⚠️ *Sweep failed*\n\nError: ${errMsg.slice(0, 500)}`);
     }
 
     return { success: false, response: '', error: errMsg };

@@ -94,6 +94,7 @@ interface LoadedPrompts {
   factSynthesis: string;
   preflight: string;
   rerank: string;
+  sweepSynthesis: string;
 }
 
 let cachedPrompts: LoadedPrompts | null = null;
@@ -122,6 +123,7 @@ export function loadPrompts(): LoadedPrompts {
     factSynthesis: 'fact-synthesis.md',
     preflight: 'preflight.md',
     rerank: 'rerank.md',
+    sweepSynthesis: 'sweep-synthesis.md',
   };
 
   const loaded: Partial<LoadedPrompts> = {};

@@ -192,6 +192,42 @@ const ConfigSchema = z.object({
     defaultDaysBack: 7,
   })),
 
+  sweeps: z.object({
+    enabled: z.boolean().default(true),
+    cron: z.string().default('every 6 hours'),
+    maxChunksPerSource: z.number().int().default(20),
+    slack: z.object({
+      enabled: z.boolean().default(true),
+      excludeChannels: z.array(z.string()).default([]),
+      maxMessagesPerChannel: z.number().int().default(200),
+    }).default(() => ({
+      enabled: true,
+      excludeChannels: [],
+      maxMessagesPerChannel: 200,
+    })),
+    gmail: z.object({
+      enabled: z.boolean().default(true),
+      maxThreads: z.number().int().default(50),
+    }).default(() => ({
+      enabled: true,
+      maxThreads: 50,
+    })),
+    fireflies: z.object({
+      enabled: z.boolean().default(true),
+      maxMeetings: z.number().int().default(10),
+    }).default(() => ({
+      enabled: true,
+      maxMeetings: 10,
+    })),
+  }).default(() => ({
+    enabled: true,
+    cron: 'every 6 hours',
+    maxChunksPerSource: 20,
+    slack: { enabled: true, excludeChannels: [], maxMessagesPerChannel: 200 },
+    gmail: { enabled: true, maxThreads: 50 },
+    fireflies: { enabled: true, maxMeetings: 10 },
+  })),
+
   trainingWheels: z.object({
     graduationThreshold: z.number().int().min(1).default(10),
     maxRejectionRate: z.number().min(0).max(1).default(0.05),

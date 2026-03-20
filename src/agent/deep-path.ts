@@ -28,6 +28,10 @@ export interface DeepPathOptions {
   dataDir: string;
   /** Workspace directory (pre-seeded with context/, findings/ created empty) */
   workspaceDir: string;
+  /** Override the system prompt (e.g., sweep synthesis uses a different prompt) */
+  promptOverride?: string;
+  /** Reduce tools for analysis-only mode */
+  analysisMode?: boolean;
 }
 
 export interface DeepPathResult {
@@ -74,7 +78,8 @@ function buildMcpConfig(dataDir: string): { configPath: string; cleanup: () => v
  * in workspace/context/ — the model reads them as needed.
  */
 function buildSdkSystemPrompt(opts: DeepPathOptions): string {
-  return getPrompts().deepPath.replaceAll('{{WORKSPACE_DIR}}', opts.workspaceDir);
+  const base = opts.promptOverride ?? getPrompts().deepPath;
+  return base.replaceAll('{{WORKSPACE_DIR}}', opts.workspaceDir);
 }
 
 // ── Workspace seeding ──
@@ -178,14 +183,23 @@ export async function executeDeepPath(
       '--mcp-config', configPath,
       '--append-system-prompt', sdkSystemPrompt,
       '--max-turns', String(config.agent.deepPathMaxTurns),
-      // Pre-approve tools: bash for research + workspace writes, MCP for memory reads
-      // Memory writes happen via workspace files → Haiku extraction → background processor
+      // Pre-approve tools based on mode
       '--allowedTools',
-      'Bash(gws:*)', 'Bash(npx:*)', 'Bash(cat:*)', 'Bash(ls:*)', 'Bash(echo:*)', 'Bash(mkdir:*)',
-      'Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch',
-      'mcp__memory__search_memory', 'mcp__memory__retrieve_context',
-      'mcp__memory__list_tasks', 'mcp__memory__create_task',
-      'mcp__memory__update_task', 'mcp__memory__delete_task',
+      ...(opts.analysisMode
+        ? [
+          // Analysis mode: read workspace + search memory only (no external research)
+          'Bash(cat:*)', 'Bash(ls:*)',
+          'Read', 'Glob', 'Grep',
+          'mcp__memory__search_memory', 'mcp__memory__retrieve_context',
+        ]
+        : [
+          // Research mode: full tool access for data gathering
+          'Bash(gws:*)', 'Bash(npx:*)', 'Bash(cat:*)', 'Bash(ls:*)', 'Bash(echo:*)', 'Bash(mkdir:*)',
+          'Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch',
+          'mcp__memory__search_memory', 'mcp__memory__retrieve_context',
+          'mcp__memory__list_tasks', 'mcp__memory__create_task',
+          'mcp__memory__update_task', 'mcp__memory__delete_task',
+        ]),
     ];
 
     logger.info({ promptLength: userPrompt.length }, 'Starting deep path SDK call');

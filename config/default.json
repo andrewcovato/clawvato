@@ -81,6 +81,24 @@
     "maxTranscriptsPerSync": 20,
     "defaultDaysBack": 7
   },
+  "sweeps": {
+    "enabled": true,
+    "cron": "every 6 hours",
+    "maxChunksPerSource": 20,
+    "slack": {
+      "enabled": true,
+      "excludeChannels": [],
+      "maxMessagesPerChannel": 200
+    },
+    "gmail": {
+      "enabled": true,
+      "maxThreads": 50
+    },
+    "fireflies": {
+      "enabled": true,
+      "maxMeetings": 10
+    }
+  },
   "trainingWheels": {
     "graduationThreshold": 10,
     "maxRejectionRate": 0.05,
