@@ -7,7 +7,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createTestDb, type TestSql } from '../helpers/pg-test.js';
-import { insertMemory, insertPerson, getMemory } from '../../src/memory/store.js';
+import { insertMemory, getMemory } from '../../src/memory/store.js';
 import { retrieveContext, extractEntities } from '../../src/memory/retriever.js';
 
 let sql: TestSql;
@@ -29,21 +29,21 @@ describe('retrieveContext', () => {
 
     expect(result.context).toBe('');
     expect(result.memoriesRetrieved).toBe(0);
-    expect(result.peopleRetrieved).toBe(0);
     expect(result.tokensUsed).toBe(0);
   });
 
-  it('retrieves people mentioned in the message', async () => {
-    await insertPerson(sql, {
-      name: 'Jake Wilson',
-      email: 'jake@corp.com',
-      role: 'Engineer',
-      organization: 'Acme',
+  it('retrieves memories about mentioned entities', async () => {
+    await insertMemory(sql, {
+      type: 'relationship',
+      content: 'Jake Wilson is an Engineer at Acme (jake@corp.com)',
+      source: 'test',
+      importance: 7,
+      entities: ['Jake Wilson'],
     });
 
     const result = await retrieveContext(sql, 'Can you schedule a meeting with Jake Wilson?');
 
-    expect(result.peopleRetrieved).toBe(1);
+    expect(result.memoriesRetrieved).toBeGreaterThanOrEqual(1);
     expect(result.context).toContain('Jake Wilson');
     expect(result.context).toContain('jake@corp.com');
     expect(result.context).toContain('Engineer');

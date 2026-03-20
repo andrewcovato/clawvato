@@ -8,7 +8,6 @@
  *   fireflies_search_meetings  — search meeting transcripts
  *   fireflies_get_summary      — get meeting overview + action items (Tier 2)
  *   fireflies_read_transcript  — deep read full transcript (Tier 3)
- *   fireflies_sync_meetings    — crawl recent meetings into memory
  */
 
 import type Anthropic from '@anthropic-ai/sdk';
@@ -196,28 +195,5 @@ export function createFirefliesTools(client: FirefliesClient): FirefliesToolDef[
       },
     },
 
-    // ── Sync Meetings ──
-    {
-      definition: {
-        name: 'fireflies_sync_meetings',
-        description:
-          'Sync recent meetings from Fireflies into long-term memory. ' +
-          'Fetches meeting summaries and action items, storing them as memories for future retrieval. ' +
-          'Use when asked to "sync meetings", "catch up on meetings", or "what meetings did I have". ' +
-          'For comprehensive historical sweeps, increase days_back and max_transcripts.',
-        input_schema: {
-          type: 'object' as const,
-          properties: {
-            days_back: { type: 'number', description: 'Sync meetings from the last N days (default from config). Use higher values for comprehensive sweeps.' },
-            max_transcripts: { type: 'number', description: 'Max meetings to sync (default 20, max 100)' },
-          },
-          required: [],
-        },
-      },
-      // Handler placeholder — sync is invoked via deep path CLI (tools/fireflies.ts)
-      handler: async () => {
-        return { content: 'Fireflies sync handler not configured.', isError: true };
-      },
-    },
   ];
 }

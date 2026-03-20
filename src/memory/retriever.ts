@@ -5,24 +5,21 @@
  * as context. Uses a token budget to prevent context bloat.
  *
  * Retrieval order (highest value first):
- * 1. People mentioned in the message (structured lookup, ~30-50 tokens each)
- * 2. Preferences relevant to the action type (structured, ~15-20 tokens each)
- * 3. Related documents from the file catalog (~20-40 tokens each)
- * 4. Keyword search for relevant facts/decisions (tsvector, ~15-20 tokens each)
+ * 1. Memories about mentioned entities (entity junction lookup)
+ * 2. Semantic + keyword search (hybrid tsvector + pgvector)
+ * 3. Wake sleeping working context if relevant
  */
 
 import type { Sql } from '../db/index.js';
 import { logger } from '../logger.js';
 // Document summaries are stored as memories — no special document search needed
 import {
-  findPersonByName,
   searchMemories,
   findMemoriesByEntity,
   touchMemory,
   vectorSearch,
   hasVectorSupport,
   type Memory,
-  type Person,
 } from './store.js';
 import { embed } from './embeddings.js';
 import { getConfig } from '../config.js';
@@ -38,21 +35,6 @@ export interface RetrievalResult {
   context: string;
   tokensUsed: number;
   memoriesRetrieved: number;
-  peopleRetrieved: number;
-}
-
-/**
- * Format a person record as a concise context line.
- */
-function formatPerson(p: Person): string {
-  const parts = [p.name];
-  if (p.role) parts.push(p.role);
-  if (p.organization) parts.push(`at ${p.organization}`);
-  if (p.email) parts.push(`(${p.email})`);
-  if (p.slack_id) parts.push(`Slack: ${p.slack_id}`);
-  if (p.timezone) parts.push(`TZ: ${p.timezone}`);
-  if (p.notes) parts.push(`— ${p.notes}`);
-  return parts.join(', ');
 }
 
 /**
@@ -216,27 +198,10 @@ export async function retrieveContext(
   const parts: string[] = [];
   let tokensUsed = 0;
   let memoriesRetrieved = 0;
-  let peopleRetrieved = 0;
 
   const { names, keywords } = extractEntities(message);
 
-  // ── 1. People lookup (highest value per token) ──
-  for (const name of names) {
-    if (tokensUsed >= budget) break;
-
-    const person = await findPersonByName(sql, name);
-    if (person) {
-      const line = formatPerson(person);
-      const tokens = estimateTokens(line);
-      if (tokensUsed + tokens <= budget) {
-        parts.push(`Person: ${line}`);
-        tokensUsed += tokens;
-        peopleRetrieved++;
-      }
-    }
-  }
-
-  // ── 2. Memories about mentioned entities ──
+  // ── 1. Memories about mentioned entities (highest value per token) ──
   for (const name of names) {
     if (tokensUsed >= budget) break;
 
@@ -321,9 +286,9 @@ export async function retrieveContext(
     : '';
 
   logger.info(
-    { memoriesRetrieved, peopleRetrieved, tokensUsed, budget },
+    { memoriesRetrieved, tokensUsed, budget },
     'Memory context retrieved',
   );
 
-  return { context, tokensUsed, memoriesRetrieved, peopleRetrieved };
+  return { context, tokensUsed, memoriesRetrieved };
 }

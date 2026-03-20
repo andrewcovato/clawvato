@@ -19,12 +19,10 @@ export async function showStatus(): Promise<void> {
 
   // Database stats
   const [memoriesRow] = await sql`SELECT COUNT(*)::int as n FROM memories WHERE valid_until IS NULL`;
-  const [peopleRow] = await sql`SELECT COUNT(*)::int as n FROM people`;
   const [actionsRow] = await sql`SELECT COUNT(*)::int as n FROM actions`;
 
   console.log('Database:');
   console.log(`  Active memories: ${memoriesRow.n}`);
-  console.log(`  Known people:    ${peopleRow.n}`);
   console.log(`  Actions logged:  ${actionsRow.n}`);
   console.log();
 

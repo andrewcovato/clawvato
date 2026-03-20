@@ -17,7 +17,7 @@ import type { Sql } from '../db/index.js';
 import { getConfig } from '../config.js';
 import { logger } from '../logger.js';
 import { NO_RESPONSE } from '../prompts.js';
-import { searchMemories, findPersonByName, supersedeMemory, type MemoryType } from '../memory/store.js';
+import { searchMemories, supersedeMemory, type MemoryType } from '../memory/store.js';
 import { preToolUse, type ToolUseContext } from '../hooks/pre-tool-use.js';
 import { postToolUse, type ToolResult } from '../hooks/post-tool-use.js';
 import type { ToolHandlerResult } from '../mcp/slack/server.js';
@@ -103,18 +103,6 @@ export function createFastPathMemoryTools(db: Sql): Array<{ definition: Anthropi
         const results = await searchMemories(db, query, { limit, type, sourcePrefix: sourceFilter, minImportance });
 
         if (results.length === 0) {
-          // Try person lookup if query was provided
-          if (query) {
-            const person = await findPersonByName(db, query);
-            if (person) {
-              const parts = [person.name];
-              if (person.role) parts.push(person.role);
-              if (person.organization) parts.push(`at ${person.organization}`);
-              if (person.email) parts.push(`(${person.email})`);
-              if (person.notes) parts.push(`— ${person.notes}`);
-              return { content: `Person: ${parts.join(', ')}` };
-            }
-          }
           return { content: query ? `No memories found for "${query}".` : 'No memories stored yet.' };
         }
 

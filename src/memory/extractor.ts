@@ -17,8 +17,6 @@ import {
   insertMemory,
   findDuplicates,
   supersedeMemory,
-  findOrCreatePerson,
-  touchPerson,
   insertEmbedding,
   deleteEmbedding,
   hasVectorSupport,
@@ -40,18 +38,8 @@ export interface ExtractedFact {
   entities: string[];
 }
 
-/** People info extracted by Haiku */
-export interface ExtractedPerson {
-  name: string;
-  email?: string;
-  role?: string;
-  organization?: string;
-  relationship?: 'colleague' | 'client' | 'vendor' | 'friend';
-}
-
 export interface ExtractionResult {
   facts: ExtractedFact[];
-  people: ExtractedPerson[];
 }
 
 // Prompt loaded from config/prompts/extraction.md
@@ -119,27 +107,15 @@ export async function extractFacts(
       }
     }
 
-    const people: ExtractedPerson[] = (parsed.people ?? [])
-      .filter((p: Record<string, unknown>) => p.name && typeof p.name === 'string')
-      .map((p: Record<string, unknown>) => ({
-        name: String(p.name),
-        email: p.email ? String(p.email) : undefined,
-        role: p.role ? String(p.role) : undefined,
-        organization: p.organization ? String(p.organization) : undefined,
-        relationship: ['colleague', 'client', 'vendor', 'friend'].includes(p.relationship as string)
-          ? p.relationship as ExtractedPerson['relationship']
-          : undefined,
-      }));
-
     logger.info(
-      { factsExtracted: facts.length, peopleExtracted: people.length, source },
+      { factsExtracted: facts.length, source },
       'Facts extracted from conversation',
     );
 
-    return { facts, people };
+    return { facts };
   } catch (error) {
     logger.error({ error, source }, 'Fact extraction failed');
-    return { facts: [], people: [] };
+    return { facts: [] };
   }
 }
 
@@ -153,22 +129,18 @@ export async function storeExtractionResult(
   sql: Sql,
   result: ExtractionResult,
   source: string,
-): Promise<{ memoriesStored: number; peopleStored: number; duplicatesSkipped: number }> {
+): Promise<{ memoriesStored: number; duplicatesSkipped: number }> {
   let memoriesStored = 0;
   let duplicatesSkipped = 0;
-  let peopleStored = 0;
   const newMemoryIds: { id: string; content: string }[] = [];
 
-  // Store facts
   for (const fact of result.facts) {
     const duplicates = await findDuplicates(sql, fact.content, fact.type);
 
-    // Simple dedup: if any duplicate has very similar content, skip or supersede
     const closeMatch = duplicates.find(d => contentSimilarity(d.content, fact.content) > 0.8);
 
     if (closeMatch) {
       if (fact.confidence > closeMatch.confidence) {
-        // New fact is more confident — supersede the old one
         const newMemory: NewMemory = {
           type: fact.type,
           content: fact.content,
@@ -190,7 +162,6 @@ export async function storeExtractionResult(
         duplicatesSkipped++;
       }
     } else {
-      // No duplicate — store as new
       const newMemory: NewMemory = {
         type: fact.type,
         content: fact.content,
@@ -202,27 +173,6 @@ export async function storeExtractionResult(
       const newId = await insertMemory(sql, newMemory);
       newMemoryIds.push({ id: newId, content: fact.content });
       memoriesStored++;
-    }
-  }
-
-  // Store/update people
-  for (const person of result.people) {
-    await findOrCreatePerson(sql, {
-      name: person.name,
-      email: person.email,
-      role: person.role,
-      organization: person.organization,
-      relationship: person.relationship,
-    });
-    peopleStored++;
-  }
-
-  // Touch people mentioned in facts (deduplicated)
-  const allEntities = new Set(result.facts.flatMap(f => f.entities));
-  for (const entity of allEntities) {
-    const [person] = await sql`SELECT id FROM people WHERE LOWER(name) = LOWER(${entity})`;
-    if (person) {
-      await touchPerson(sql, person.id as string);
     }
   }
 
@@ -241,11 +191,11 @@ export async function storeExtractionResult(
   }
 
   logger.info(
-    { memoriesStored, peopleStored, duplicatesSkipped, source },
+    { memoriesStored, duplicatesSkipped, source },
     'Extraction result stored',
   );
 
-  return { memoriesStored, peopleStored, duplicatesSkipped };
+  return { memoriesStored, duplicatesSkipped };
 }
 
 /**

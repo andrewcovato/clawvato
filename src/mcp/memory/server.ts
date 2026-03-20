@@ -5,7 +5,7 @@
  * Google uses `gws` CLI, Fireflies uses a thin CLI wrapper, Slack is bot-only.
  *
  * Protocol: JSON-RPC over stdio (MCP standard).
- * Tools: search_memory, store_fact, update_working_context, list_people, list_commitments
+ * Tools: search_memory, store_fact, update_working_context
  */
 
 import { createInterface } from 'node:readline';
@@ -13,10 +13,7 @@ import { getConfig } from '../../config.js';
 import type { Sql } from '../../db/index.js';
 import {
   searchMemories,
-  findPersonByName,
-  getAllPeople,
   insertMemory,
-  findMemoriesByType,
   findOrCreateCategory,
   type MemoryType,
 } from '../../memory/store.js';
@@ -116,32 +113,6 @@ const TOOLS = [
     },
   },
   {
-    name: 'list_people',
-    description:
-      'List known people from memory, ordered by interaction frequency. ' +
-      'Returns names, roles, organizations, and contact info.',
-    inputSchema: {
-      type: 'object' as const,
-      properties: {
-        limit: { type: 'number', description: 'Max results (default 20)' },
-      },
-      required: [],
-    },
-  },
-  {
-    name: 'list_commitments',
-    description:
-      'List outstanding commitments and promises from memory. ' +
-      'Returns who committed to what, when, and the source.',
-    inputSchema: {
-      type: 'object' as const,
-      properties: {
-        limit: { type: 'number', description: 'Max results (default 20)' },
-      },
-      required: [],
-    },
-  },
-  {
     name: 'list_tasks',
     description: 'List scheduled tasks. Shows active and pending tasks by default.',
     inputSchema: {
@@ -218,15 +189,6 @@ async function handleSearchMemory(sql: Sql, args: Record<string, unknown>): Prom
   });
 
   if (results.length === 0) {
-    const person = await findPersonByName(sql, query);
-    if (person) {
-      const parts = [person.name];
-      if (person.role) parts.push(person.role);
-      if (person.organization) parts.push(`at ${person.organization}`);
-      if (person.email) parts.push(`(${person.email})`);
-      if (person.notes) parts.push(`— ${person.notes}`);
-      return `Person: ${parts.join(', ')}`;
-    }
     return `No memories found for "${query}".`;
   }
 
@@ -250,7 +212,7 @@ async function handleRetrieveContext(sql: Sql, args: Record<string, unknown>): P
     return 'No relevant memories found.';
   }
 
-  return `${result.context}\n\n(${result.memoriesRetrieved} memories, ${result.peopleRetrieved} people, ${result.tokensUsed} tokens)`;
+  return `${result.context}\n\n(${result.memoriesRetrieved} memories, ${result.tokensUsed} tokens)`;
 }
 
 async function handleStoreFact(sql: Sql, args: Record<string, unknown>): Promise<string> {
@@ -284,40 +246,6 @@ async function handleUpdateWorkingContext(sql: Sql, args: Record<string, unknown
     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, status = 'active', updated_at = NOW()
   `;
   return `Working context updated: ${args.key} = ${value}`;
-}
-
-async function handleListPeople(sql: Sql, args: Record<string, unknown>): Promise<string> {
-  const limit = (args.limit as number) ?? 20;
-  const people = await getAllPeople(sql, { limit });
-
-  if (people.length === 0) return 'No people in memory yet.';
-
-  const lines = people.map(p => {
-    const parts = [p.name];
-    if (p.role) parts.push(p.role);
-    if (p.organization) parts.push(`at ${p.organization}`);
-    if (p.email) parts.push(`(${p.email})`);
-    if (p.notes) parts.push(`— ${p.notes}`);
-    return `- ${parts.join(', ')}`;
-  });
-
-  return `${people.length} people:\n${lines.join('\n')}`;
-}
-
-async function handleListCommitments(sql: Sql, args: Record<string, unknown>): Promise<string> {
-  const limit = (args.limit as number) ?? 20;
-  const commitments = await findMemoriesByType(sql, 'commitment', { validOnly: true, limit });
-
-  if (commitments.length === 0) return 'No outstanding commitments in memory.';
-
-  const lines = commitments.map(m => {
-    const src = m.source.split(':')[0];
-    const entities = JSON.parse(m.entities || '[]') as string[];
-    const who = entities.length > 0 ? ` (${entities.join(', ')})` : '';
-    return `- [${src}|imp:${m.importance}]${who} ${m.content}`;
-  });
-
-  return `${commitments.length} commitments:\n${lines.join('\n')}`;
 }
 
 // ── Task Handlers ──
@@ -465,12 +393,6 @@ async function handleRequest(sql: Sql, request: JsonRpcRequest): Promise<unknown
           break;
         case 'update_working_context':
           content = await handleUpdateWorkingContext(sql, toolArgs);
-          break;
-        case 'list_people':
-          content = await handleListPeople(sql, toolArgs);
-          break;
-        case 'list_commitments':
-          content = await handleListCommitments(sql, toolArgs);
           break;
         case 'list_tasks':
           content = await handleListTasks(sql, toolArgs);

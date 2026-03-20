@@ -127,13 +127,13 @@ async function processWorkspaceFiles(
           // Unstructured text (.md, .txt, etc.) — extract via Haiku
           const fileSource = `${source}:file:${fileName}`;
           const result = await extractFacts(anthropicClient, classifierModel, content, fileSource, db);
-          if (result.facts.length > 0 || result.people.length > 0) {
+          if (result.facts.length > 0) {
             const storeResult = await storeExtractionResult(db, result, fileSource);
             stored += storeResult.memoriesStored;
             skipped += storeResult.duplicatesSkipped;
           }
           logger.debug(
-            { fileName, facts: result.facts.length, people: result.people.length },
+            { fileName, facts: result.facts.length },
             'Workspace file extracted',
           );
         }
@@ -735,7 +735,7 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
           const extractionSource = `slack:${batch.channel}:${lastMsg.ts}`;
           extractFacts(anthropicClient, config.models.classifier, message, extractionSource, db)
             .then(async result => {
-              if (result.facts.length > 0 || result.people.length > 0) {
+              if (result.facts.length > 0) {
                 await storeExtractionResult(db, result, extractionSource);
                 await maybeReflect(db, anthropicClient, config.models.classifier);
               }

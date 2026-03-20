@@ -142,8 +142,6 @@ function describeToolUse(toolName: string, input: string): string | null {
   if (toolName.includes('search_memory')) return 'Searching memory...';
   if (toolName.includes('store_fact')) return 'Saving to memory...';
   if (toolName.includes('retrieve_context')) return 'Loading memory context...';
-  if (toolName.includes('list_people')) return 'Looking up known contacts...';
-  if (toolName.includes('list_commitments')) return 'Checking commitments...';
 
   // File tools
   if (toolName === 'Read') return 'Reading file...';
@@ -186,7 +184,6 @@ export async function executeDeepPath(
       'Bash(gws:*)', 'Bash(npx:*)', 'Bash(cat:*)', 'Bash(ls:*)', 'Bash(echo:*)', 'Bash(mkdir:*)',
       'Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch',
       'mcp__memory__search_memory', 'mcp__memory__retrieve_context',
-      'mcp__memory__list_people', 'mcp__memory__list_commitments',
       'mcp__memory__list_tasks', 'mcp__memory__create_task',
       'mcp__memory__update_task', 'mcp__memory__delete_task',
     ];

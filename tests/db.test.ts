@@ -24,7 +24,7 @@ describe('database', () => {
     const tableNames = tables.map(t => t.table_name);
 
     expect(tableNames).toContain('memories');
-    expect(tableNames).toContain('people');
+    expect(tableNames).toContain('memory_entities');
     expect(tableNames).toContain('actions');
     expect(tableNames).toContain('action_patterns');
     expect(tableNames).toContain('workflows');
@@ -54,18 +54,20 @@ describe('database', () => {
     expect(row.importance).toBe(7);
   });
 
-  it('can insert and query people', async () => {
+  it('can insert and query memory entities', async () => {
     const id = generateId();
 
     await sql`
-      INSERT INTO people (id, name, email, relationship)
-      VALUES (${id}, 'Jake Martinez', 'jake@corp.com', 'colleague')
+      INSERT INTO memories (id, type, content, source, importance)
+      VALUES (${id}, 'relationship', 'Jake Martinez is a colleague at Corp', 'test', 7)
+    `;
+    await sql`
+      INSERT INTO memory_entities (memory_id, entity)
+      VALUES (${id}, 'Jake Martinez')
     `;
 
-    const [person] = await sql`SELECT * FROM people WHERE email = 'jake@corp.com'`;
-
-    expect(person.name).toBe('Jake Martinez');
-    expect(person.relationship).toBe('colleague');
+    const [entity] = await sql`SELECT * FROM memory_entities WHERE entity = 'Jake Martinez'`;
+    expect(entity.memory_id).toBe(id);
   });
 
   it('tsvector search works on memories', async () => {

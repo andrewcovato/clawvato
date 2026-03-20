@@ -16,7 +16,7 @@ import {
   contentSimilarity,
   type ExtractionResult,
 } from '../../src/memory/extractor.js';
-import { getMemory, findMemoriesByType, findPersonByName, insertMemory } from '../../src/memory/store.js';
+import { getMemory, findMemoriesByType, insertMemory } from '../../src/memory/store.js';
 
 let sql: TestSql;
 let cleanup: () => Promise<void>;
@@ -44,14 +44,11 @@ function createMockClient(responseJson: Record<string, unknown>) {
 }
 
 describe('extractFacts', () => {
-  it('extracts facts and people from a conversation', async () => {
+  it('extracts facts from a conversation', async () => {
     const client = createMockClient({
       facts: [
         { type: 'fact', content: 'Jake works on the finance team', confidence: 0.9, importance: 7, entities: ['Jake'] },
         { type: 'preference', content: 'Andrew prefers meetings after 10am', confidence: 1.0, importance: 8, entities: ['Andrew'] },
-      ],
-      people: [
-        { name: 'Jake Wilson', role: 'Analyst', organization: 'Acme Corp', relationship: 'colleague' },
       ],
     });
 
@@ -63,19 +60,14 @@ describe('extractFacts', () => {
     expect(result.facts[0].confidence).toBe(0.9);
     expect(result.facts[0].importance).toBe(7);
     expect(result.facts[0].entities).toEqual(['Jake']);
-
-    expect(result.people).toHaveLength(1);
-    expect(result.people[0].name).toBe('Jake Wilson');
-    expect(result.people[0].role).toBe('Analyst');
   });
 
   it('handles empty extraction', async () => {
-    const client = createMockClient({ facts: [], people: [] });
+    const client = createMockClient({ facts: [] });
 
     const result = await extractFacts(client, 'haiku', 'hello how are you', 'test');
 
     expect(result.facts).toHaveLength(0);
-    expect(result.people).toHaveLength(0);
   });
 
   it('handles malformed response gracefully', async () => {
@@ -90,7 +82,6 @@ describe('extractFacts', () => {
     const result = await extractFacts(client, 'haiku', 'test', 'test');
 
     expect(result.facts).toHaveLength(0);
-    expect(result.people).toHaveLength(0);
   });
 
   it('handles API error gracefully', async () => {
@@ -103,7 +94,6 @@ describe('extractFacts', () => {
     const result = await extractFacts(client, 'haiku', 'test', 'test');
 
     expect(result.facts).toHaveLength(0);
-    expect(result.people).toHaveLength(0);
   });
 
   it('clamps confidence and importance values', async () => {
@@ -112,7 +102,6 @@ describe('extractFacts', () => {
         { type: 'fact', content: 'Test', confidence: 1.5, importance: 15, entities: [] },
         { type: 'fact', content: 'Test 2', confidence: -0.5, importance: -3, entities: [] },
       ],
-      people: [],
     });
 
     const result = await extractFacts(client, 'haiku', 'test', 'test');
@@ -129,7 +118,6 @@ describe('extractFacts', () => {
         { type: 'custom_dynamic_type', content: 'Custom category', confidence: 0.5, importance: 5, entities: [] },
         { type: 'fact', content: 'Standard category', confidence: 0.5, importance: 5, entities: [] },
       ],
-      people: [],
     });
 
     const result = await extractFacts(client, 'haiku', 'test', 'test');
@@ -145,7 +133,7 @@ describe('extractFacts', () => {
         create: vi.fn().mockResolvedValue({
           content: [{
             type: 'text',
-            text: '```json\n{"facts": [{"type": "fact", "content": "Test fact", "confidence": 0.8, "importance": 5, "entities": []}], "people": []}\n```',
+            text: '```json\n{"facts": [{"type": "fact", "content": "Test fact", "confidence": 0.8, "importance": 5, "entities": []}]}\n```',
           }],
         }),
       },
@@ -159,34 +147,25 @@ describe('extractFacts', () => {
 });
 
 describe('storeExtractionResult', () => {
-  it('stores facts and people', async () => {
+  it('stores facts', async () => {
     const result: ExtractionResult = {
       facts: [
         { type: 'fact', content: 'Jake works in finance', confidence: 0.9, importance: 7, entities: ['Jake'] },
         { type: 'preference', content: 'Prefers morning meetings', confidence: 1.0, importance: 8, entities: [] },
-      ],
-      people: [
-        { name: 'Jake Wilson', role: 'Analyst', relationship: 'colleague' },
       ],
     };
 
     const stored = await storeExtractionResult(sql, result, 'test');
 
     expect(stored.memoriesStored).toBe(2);
-    expect(stored.peopleStored).toBe(1);
     expect(stored.duplicatesSkipped).toBe(0);
 
     const facts = await findMemoriesByType(sql, 'fact');
     expect(facts).toHaveLength(1);
     expect(facts[0].content).toBe('Jake works in finance');
-
-    const person = await findPersonByName(sql, 'Jake Wilson');
-    expect(person).not.toBeNull();
-    expect(person!.role).toBe('Analyst');
   });
 
   it('skips duplicates with lower confidence', async () => {
-    // Store initial fact
     await insertMemory(sql, {
       type: 'fact',
       content: 'Jake works on the finance team',
@@ -195,12 +174,10 @@ describe('storeExtractionResult', () => {
       importance: 7,
     });
 
-    // Try to store similar fact with lower confidence
     const result: ExtractionResult = {
       facts: [
         { type: 'fact', content: 'Jake works in the finance team', confidence: 0.7, importance: 6, entities: [] },
       ],
-      people: [],
     };
 
     const stored = await storeExtractionResult(sql, result, 'test');
@@ -210,7 +187,6 @@ describe('storeExtractionResult', () => {
   });
 
   it('supersedes duplicates with higher confidence', async () => {
-    // Store initial lower-confidence fact
     const oldId = await insertMemory(sql, {
       type: 'fact',
       content: 'Jake works on the finance team',
@@ -219,41 +195,19 @@ describe('storeExtractionResult', () => {
       importance: 5,
     });
 
-    // Store higher-confidence version
     const result: ExtractionResult = {
       facts: [
         { type: 'fact', content: 'Jake works on the finance team now', confidence: 1.0, importance: 8, entities: ['Jake'] },
       ],
-      people: [],
     };
 
     const stored = await storeExtractionResult(sql, result, 'test');
 
     expect(stored.memoriesStored).toBe(1);
 
-    // Old memory should be superseded
     const old = await getMemory(sql, oldId);
     expect(old!.valid_until).not.toBeNull();
     expect(old!.superseded_by).not.toBeNull();
-  });
-
-  it('enriches existing people', async () => {
-    // Create person with minimal info
-    await findPersonByName(sql, 'Jake'); // doesn't exist yet
-    await storeExtractionResult(sql, {
-      facts: [],
-      people: [{ name: 'Jake Wilson' }],
-    }, 'test1');
-
-    // Update with more info
-    await storeExtractionResult(sql, {
-      facts: [],
-      people: [{ name: 'Jake Wilson', email: 'jake@corp.com', role: 'Manager' }],
-    }, 'test2');
-
-    const person = await findPersonByName(sql, 'Jake Wilson');
-    expect(person!.email).toBe('jake@corp.com');
-    expect(person!.role).toBe('Manager');
   });
 });
 

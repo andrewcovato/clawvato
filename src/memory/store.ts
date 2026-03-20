@@ -1,5 +1,5 @@
 /**
- * Memory Store — CRUD operations for the memories and people tables.
+ * Memory Store — CRUD operations for the memories table.
  *
  * All functions take a postgres Sql instance so they're testable
  * without global state. Uses snake_case interfaces to match Postgres columns.
@@ -38,36 +38,6 @@ export interface NewMemory {
   importance?: number;
   confidence?: number;
   entities?: string[];
-}
-
-// ── People types ──
-
-export type Relationship = 'colleague' | 'client' | 'vendor' | 'friend' | 'unknown';
-
-export interface Person {
-  id: string;
-  name: string;
-  email: string | null;
-  slack_id: string | null;
-  github_username: string | null;
-  relationship: Relationship;
-  organization: string | null;
-  role: string | null;
-  timezone: string | null;
-  notes: string | null;
-  communication_preferences: string | null;
-  first_seen_at: string;
-  last_interaction_at: string | null;
-  interaction_count: number;
-}
-
-export interface NewPerson {
-  name: string;
-  email?: string;
-  slack_id?: string;
-  relationship?: Relationship;
-  organization?: string;
-  role?: string;
 }
 
 // ── Memory CRUD ──
@@ -370,101 +340,6 @@ export async function getRecentMemories(
     SELECT * FROM memories WHERE created_at >= ${since} AND valid_until IS NULL
     ORDER BY created_at DESC LIMIT ${limit}
   ` as unknown as Memory[];
-}
-
-// ── People CRUD ──
-
-export async function insertPerson(sql: Sql, person: NewPerson): Promise<string> {
-  const id = generateId();
-  await sql`
-    INSERT INTO people (id, name, email, slack_id, relationship, organization, role)
-    VALUES (${id}, ${person.name}, ${person.email ?? null}, ${person.slack_id ?? null},
-            ${person.relationship ?? 'unknown'}, ${person.organization ?? null}, ${person.role ?? null})
-  `;
-
-  logger.debug({ id, name: person.name }, 'Person stored');
-  return id;
-}
-
-export async function findPersonByName(sql: Sql, name: string): Promise<Person | null> {
-  const [row] = await sql`SELECT * FROM people WHERE LOWER(name) = LOWER(${name})`;
-  return row ? row as unknown as Person : null;
-}
-
-export async function findPersonBySlackId(sql: Sql, slackId: string): Promise<Person | null> {
-  const [row] = await sql`SELECT * FROM people WHERE slack_id = ${slackId}`;
-  return row ? row as unknown as Person : null;
-}
-
-export async function findPersonByEmail(sql: Sql, email: string): Promise<Person | null> {
-  const [row] = await sql`SELECT * FROM people WHERE LOWER(email) = LOWER(${email})`;
-  return row ? row as unknown as Person : null;
-}
-
-/**
- * Update a person's interaction tracking.
- */
-export async function touchPerson(sql: Sql, id: string): Promise<void> {
-  await sql`
-    UPDATE people SET last_interaction_at = NOW(), interaction_count = interaction_count + 1
-    WHERE id = ${id}
-  `;
-}
-
-/**
- * Update specific fields on a person record.
- */
-export async function updatePerson(
-  sql: Sql,
-  id: string,
-  updates: Partial<Pick<Person, 'email' | 'slack_id' | 'role' | 'organization' | 'relationship' | 'notes' | 'timezone'>>,
-): Promise<void> {
-  // Build update dynamically — postgres.js doesn't support dynamic column names in tagged templates,
-  // so we use a single UPDATE with COALESCE-style conditional updates
-  await sql`
-    UPDATE people SET
-      email = COALESCE(${updates.email ?? null}, email),
-      slack_id = COALESCE(${updates.slack_id ?? null}, slack_id),
-      role = COALESCE(${updates.role ?? null}, role),
-      organization = COALESCE(${updates.organization ?? null}, organization),
-      relationship = COALESCE(${updates.relationship ?? null}, relationship),
-      notes = COALESCE(${updates.notes ?? null}, notes),
-      timezone = COALESCE(${updates.timezone ?? null}, timezone)
-    WHERE id = ${id}
-  `;
-}
-
-/**
- * Find or create a person by name. Returns the person ID.
- */
-export async function findOrCreatePerson(sql: Sql, person: NewPerson): Promise<string> {
-  const existing = await findPersonByName(sql, person.name);
-  if (existing) {
-    // Update fields if new info provided
-    const updates: Partial<Person> = {};
-    if (person.email && !existing.email) updates.email = person.email;
-    if (person.slack_id && !existing.slack_id) updates.slack_id = person.slack_id;
-    if (person.role && !existing.role) updates.role = person.role;
-    if (person.organization && !existing.organization) updates.organization = person.organization;
-    if (person.relationship && person.relationship !== 'unknown' && existing.relationship === 'unknown') {
-      updates.relationship = person.relationship;
-    }
-    if (Object.keys(updates).length > 0) {
-      await updatePerson(sql, existing.id, updates);
-    }
-    return existing.id;
-  }
-  return insertPerson(sql, person);
-}
-
-/**
- * Get all people, ordered by interaction frequency.
- */
-export async function getAllPeople(sql: Sql, opts?: { limit?: number }): Promise<Person[]> {
-  const limit = opts?.limit ?? 50;
-  return await sql`
-    SELECT * FROM people ORDER BY interaction_count DESC, last_interaction_at DESC LIMIT ${limit}
-  ` as unknown as Person[];
 }
 
 // ── Vector operations ──

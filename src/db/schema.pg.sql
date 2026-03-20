@@ -69,28 +69,6 @@ CREATE TABLE IF NOT EXISTS memory_entities (
 );
 CREATE INDEX IF NOT EXISTS idx_memory_entities_entity ON memory_entities(LOWER(entity));
 
--- People (structured, not embedded)
-CREATE TABLE IF NOT EXISTS people (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  email TEXT,
-  slack_id TEXT,
-  github_username TEXT,
-  relationship TEXT CHECK(relationship IN ('colleague','client','vendor','friend','unknown')),
-  organization TEXT,
-  role TEXT,
-  timezone TEXT,
-  notes TEXT,
-  communication_preferences TEXT,
-  first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  last_interaction_at TIMESTAMPTZ,
-  interaction_count INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE INDEX IF NOT EXISTS idx_people_name ON people(name);
-CREATE INDEX IF NOT EXISTS idx_people_email ON people(email);
-CREATE INDEX IF NOT EXISTS idx_people_slack ON people(slack_id);
-
 -- Immutable action audit trail
 CREATE TABLE IF NOT EXISTS actions (
   id TEXT PRIMARY KEY,
