@@ -199,33 +199,33 @@ const ConfigSchema = z.object({
     slack: z.object({
       enabled: z.boolean().default(true),
       excludeChannels: z.array(z.string()).default([]),
-      maxMessagesPerChannel: z.number().int().default(200),
+      maxMessagesPerChannel: z.number().int().default(500),
     }).default(() => ({
       enabled: true,
       excludeChannels: [],
-      maxMessagesPerChannel: 200,
+      maxMessagesPerChannel: 500,
     })),
     gmail: z.object({
       enabled: z.boolean().default(true),
-      maxThreads: z.number().int().default(50),
+      maxThreads: z.number().int().default(500),
     }).default(() => ({
       enabled: true,
-      maxThreads: 50,
+      maxThreads: 500,
     })),
     fireflies: z.object({
       enabled: z.boolean().default(true),
-      maxMeetings: z.number().int().default(10),
+      maxMeetings: z.number().int().default(100),
     }).default(() => ({
       enabled: true,
-      maxMeetings: 10,
+      maxMeetings: 100,
     })),
   }).default(() => ({
     enabled: true,
     cron: 'every 6 hours',
     maxChunksPerSource: 20,
-    slack: { enabled: true, excludeChannels: [], maxMessagesPerChannel: 200 },
-    gmail: { enabled: true, maxThreads: 50 },
-    fireflies: { enabled: true, maxMeetings: 10 },
+    slack: { enabled: true, excludeChannels: [], maxMessagesPerChannel: 500 },
+    gmail: { enabled: true, maxThreads: 500 },
+    fireflies: { enabled: true, maxMeetings: 100 },
   })),
 
   trainingWheels: z.object({

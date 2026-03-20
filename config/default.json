@@ -88,15 +88,15 @@
     "slack": {
       "enabled": true,
       "excludeChannels": [],
-      "maxMessagesPerChannel": 200
+      "maxMessagesPerChannel": 500
     },
     "gmail": {
       "enabled": true,
-      "maxThreads": 50
+      "maxThreads": 500
     },
     "fireflies": {
       "enabled": true,
-      "maxMeetings": 10
+      "maxMeetings": 100
     }
   },
   "trainingWheels": {
