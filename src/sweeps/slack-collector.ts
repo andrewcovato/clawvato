@@ -52,7 +52,10 @@ export function createSlackCollector(
 
           itemsScanned += messages.length;
 
-          if (messages.length === 0) continue;
+          if (messages.length === 0) {
+            logger.info({ channel: channel.name, channelId: channel.id, hwm: lastTs }, 'Slack sweep: channel empty or no new messages');
+            continue;
+          }
 
           // Format as markdown chunk
           const chunk = formatSlackChunk(channel.name, messages);
@@ -67,7 +70,8 @@ export function createSlackCollector(
 
           logger.debug({ channel: channel.name, newMessages: messages.length }, 'Slack sweep: channel processed');
         } catch (err) {
-          logger.debug({ error: err, channel: channel.name }, 'Slack sweep: channel failed — skipping');
+          const errMsg = err instanceof Error ? err.message : JSON.stringify(err);
+          logger.warn({ error: errMsg, channel: channel.name, channelId: channel.id }, 'Slack sweep: channel failed — skipping');
         }
       }
 

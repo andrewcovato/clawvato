@@ -8,13 +8,14 @@
  * Triggered by the task scheduler as a recurring task.
  */
 
-import { writeFileSync, mkdtempSync, mkdirSync } from 'node:fs';
+import { writeFileSync, readFileSync, mkdtempSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type Anthropic from '@anthropic-ai/sdk';
 import type { Sql } from '../db/index.js';
 import { logger } from '../logger.js';
 import { getConfig } from '../config.js';
 import { getPrompts } from '../prompts.js';
+
 import { executeDeepPath } from '../agent/deep-path.js';
 import { retrieveContext } from '../memory/retriever.js';
 import { findTaskByTitle, createTask } from '../tasks/store.js';
@@ -93,7 +94,14 @@ export async function executeSweep(
   }
 
   // ── 3. Run Opus synthesis via deep path ──
-  logger.info({ chunks: allChunks.length, sources: sourcesSwept }, 'Sweep: starting Opus synthesis');
+  // Log workspace content size for debugging
+  const sweepContent = readFileSync(join(contextDir, 'sweep-content.md'), 'utf-8');
+  logger.info({
+    chunks: allChunks.length,
+    sources: sourcesSwept,
+    sweepContentLength: sweepContent.length,
+    sweepContentPreview: sweepContent.slice(0, 500),
+  }, 'Sweep: starting Opus synthesis');
 
   const sweepPrompt = 'Process the sweep content in workspace/context/sweep-content.md. ' +
     'Cross-reference across all sources, deduplicate against existing memory in workspace/context/memory.md, ' +
@@ -104,6 +112,7 @@ export async function executeSweep(
     {
       dataDir: deps.dataDir,
       workspaceDir,
+      promptOverride: getPrompts().sweepSynthesis.replaceAll('{{WORKSPACE_DIR}}', workspaceDir),
     },
     undefined, // no SlackHandler — background task
   );

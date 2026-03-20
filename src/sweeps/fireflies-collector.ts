@@ -109,7 +109,8 @@ export function createFirefliesCollector(
 
         logger.info({ itemsScanned, itemsNew, chunks: contentChunks.length }, 'Fireflies sweep complete');
       } catch (err) {
-        logger.warn({ error: err }, 'Fireflies sweep failed');
+        const errMsg = err instanceof Error ? err.message : JSON.stringify(err);
+        logger.warn({ error: errMsg }, 'Fireflies sweep failed');
       }
 
       return { source: 'fireflies', itemsScanned, itemsNew, contentChunks };
