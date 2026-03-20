@@ -61,9 +61,12 @@ export interface HybridAgentOptions {
   taskChannelManager?: TaskChannelManager;
 }
 
-/** Create a unique workspace directory per deep-path invocation */
+/** Create a unique workspace directory per deep-path invocation.
+ *  Must be inside cwd — Claude CLI sandbox blocks writes outside the project dir. */
 function createWorkspaceDir(): string {
-  return mkdtempSync(join(tmpdir(), 'clawvato-workspace-'));
+  const baseDir = join(process.cwd(), '.workspaces');
+  mkdirSync(baseDir, { recursive: true });
+  return mkdtempSync(join(baseDir, 'ws-'));
 }
 
 /**
