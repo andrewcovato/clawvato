@@ -1,5 +1,5 @@
 /**
- * Memory MCP Server — exposes the SQLite memory store to the Claude Code SDK.
+ * Memory MCP Server — exposes the Postgres memory store to the Claude Code SDK.
  *
  * This is the ONLY MCP server needed for the hybrid architecture.
  * Google uses `gws` CLI, Fireflies uses a thin CLI wrapper, Slack is bot-only.
@@ -10,7 +10,7 @@
 
 import { createInterface } from 'node:readline';
 import { getConfig } from '../../config.js';
-import type { DatabaseSync } from 'node:sqlite';
+import type { Sql } from '../../db/index.js';
 import {
   searchMemories,
   findPersonByName,
@@ -22,6 +22,15 @@ import {
 } from '../../memory/store.js';
 import { retrieveContext } from '../../memory/retriever.js';
 import { logger } from '../../logger.js';
+import {
+  createTask as createTaskDb,
+  listTasks as listTasksDb,
+  updateTask as updateTaskDb,
+  deleteTask as deleteTaskDb,
+  findTaskByTitle,
+  getTask,
+  type TaskCreatorType,
+} from '../../tasks/store.js';
 
 // ── MCP Tool Definitions ──
 
@@ -132,18 +141,76 @@ const TOOLS = [
       required: [],
     },
   },
+  {
+    name: 'list_tasks',
+    description: 'List scheduled tasks. Shows active and pending tasks by default.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        status: { type: 'string', description: 'Filter: active, paused, pending_approval, completed, failed, cancelled, or "all"' },
+        limit: { type: 'number', description: 'Max results (default 20)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'create_task',
+    description:
+      'Create a scheduled task. Use created_by_type "owner" when the owner asked for it, "agent" when self-assigning.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        title: { type: 'string', description: 'Short task title' },
+        description: { type: 'string', description: 'Detailed instructions' },
+        priority: { type: 'number', description: '1-10 (default 5)' },
+        cron_expression: { type: 'string', description: '"daily", "daily at 6am", "weekly", "every 3 hours"' },
+        delay: { type: 'string', description: '"2 minutes", "3 hours", "1 day"' },
+        created_by_type: { type: 'string', enum: ['owner', 'agent'], description: 'Default: owner' },
+      },
+      required: ['title'],
+    },
+  },
+  {
+    name: 'update_task',
+    description: 'Update a task by ID or title fragment.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'Task ID' },
+        title_match: { type: 'string', description: 'Fuzzy title match' },
+        title: { type: 'string' },
+        description: { type: 'string' },
+        priority: { type: 'number' },
+        cron_expression: { type: 'string' },
+        status: { type: 'string', enum: ['active', 'paused', 'cancelled'] },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'delete_task',
+    description: 'Cancel a task by ID or title fragment.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'Task ID' },
+        title_match: { type: 'string', description: 'Fuzzy title match' },
+      },
+      required: [],
+    },
+  },
 ];
 
 // ── Tool Handlers ──
 
-function handleSearchMemory(db: DatabaseSync, args: Record<string, unknown>): string {
+async function handleSearchMemory(sql: Sql, args: Record<string, unknown>): Promise<string> {
   const query = (args.query as string | undefined) ?? '';
   const type = args.type as MemoryType | undefined;
   const sourceFilter = args.source_filter as string | undefined;
   const limit = Math.min((args.limit as number) ?? 20, 50);
   const minImportance = args.min_importance as number | undefined;
 
-  const results = searchMemories(db, query, {
+  const results = await searchMemories(sql, query, {
     limit,
     type,
     sourcePrefix: sourceFilter,
@@ -151,7 +218,7 @@ function handleSearchMemory(db: DatabaseSync, args: Record<string, unknown>): st
   });
 
   if (results.length === 0) {
-    const person = findPersonByName(db, query);
+    const person = await findPersonByName(sql, query);
     if (person) {
       const parts = [person.name];
       if (person.role) parts.push(person.role);
@@ -172,12 +239,12 @@ function handleSearchMemory(db: DatabaseSync, args: Record<string, unknown>): st
   return `Found ${results.length} memories:\n${lines.join('\n')}`;
 }
 
-async function handleRetrieveContext(db: DatabaseSync, args: Record<string, unknown>): Promise<string> {
+async function handleRetrieveContext(sql: Sql, args: Record<string, unknown>): Promise<string> {
   const message = args.message as string;
   // MCP server is used by deep path / interactive sessions — default to deep budget
   const tokenBudget = (args.token_budget as number | undefined) ?? getConfig().context.deepPathLongTermTokenBudget;
 
-  const result = await retrieveContext(db, message, { tokenBudget });
+  const result = await retrieveContext(sql, message, { tokenBudget });
 
   if (!result.context) {
     return 'No relevant memories found.';
@@ -186,11 +253,11 @@ async function handleRetrieveContext(db: DatabaseSync, args: Record<string, unkn
   return `${result.context}\n\n(${result.memoriesRetrieved} memories, ${result.peopleRetrieved} people, ${result.tokensUsed} tokens)`;
 }
 
-function handleStoreFact(db: DatabaseSync, args: Record<string, unknown>): string {
+async function handleStoreFact(sql: Sql, args: Record<string, unknown>): Promise<string> {
   // Normalize category via findOrCreateCategory (handles fuzzy matching)
-  const category = findOrCreateCategory(db, args.type as string);
+  const category = await findOrCreateCategory(sql, args.type as string);
 
-  const id = insertMemory(db, {
+  const id = await insertMemory(sql, {
     type: category,
     content: args.content as string,
     source: args.source as string,
@@ -202,24 +269,26 @@ function handleStoreFact(db: DatabaseSync, args: Record<string, unknown>): strin
   return `Stored memory ${id} (${category}: "${(args.content as string).slice(0, 60)}...")`;
 }
 
-function handleUpdateWorkingContext(db: DatabaseSync, args: Record<string, unknown>): string {
+async function handleUpdateWorkingContext(sql: Sql, args: Record<string, unknown>): Promise<string> {
   const key = `wctx:${args.key as string}`;
 
   if (args.clear) {
-    db.prepare("DELETE FROM agent_state WHERE key = ?").run(key);
+    await sql`DELETE FROM agent_state WHERE key = ${key}`;
     return `Working context cleared: ${args.key}`;
   }
 
   const value = args.value as string;
-  db.prepare(
-    "INSERT OR REPLACE INTO agent_state (key, value, status, updated_at) VALUES (?, ?, 'active', datetime('now'))"
-  ).run(key, value);
+  await sql`
+    INSERT INTO agent_state (key, value, status, updated_at)
+    VALUES (${key}, ${value}, 'active', NOW())
+    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, status = 'active', updated_at = NOW()
+  `;
   return `Working context updated: ${args.key} = ${value}`;
 }
 
-function handleListPeople(db: DatabaseSync, args: Record<string, unknown>): string {
+async function handleListPeople(sql: Sql, args: Record<string, unknown>): Promise<string> {
   const limit = (args.limit as number) ?? 20;
-  const people = getAllPeople(db, { limit });
+  const people = await getAllPeople(sql, { limit });
 
   if (people.length === 0) return 'No people in memory yet.';
 
@@ -235,9 +304,9 @@ function handleListPeople(db: DatabaseSync, args: Record<string, unknown>): stri
   return `${people.length} people:\n${lines.join('\n')}`;
 }
 
-function handleListCommitments(db: DatabaseSync, args: Record<string, unknown>): string {
+async function handleListCommitments(sql: Sql, args: Record<string, unknown>): Promise<string> {
   const limit = (args.limit as number) ?? 20;
-  const commitments = findMemoriesByType(db, 'commitment', { validOnly: true, limit });
+  const commitments = await findMemoriesByType(sql, 'commitment', { validOnly: true, limit });
 
   if (commitments.length === 0) return 'No outstanding commitments in memory.';
 
@@ -249,6 +318,69 @@ function handleListCommitments(db: DatabaseSync, args: Record<string, unknown>):
   });
 
   return `${commitments.length} commitments:\n${lines.join('\n')}`;
+}
+
+// ── Task Handlers ──
+
+async function handleListTasks(sql: Sql, args: Record<string, unknown>): Promise<string> {
+  const status = args.status as string | undefined;
+  const limit = (args.limit as number) ?? 20;
+  const opts = status === 'all' ? { limit } : status ? { status, limit } : { limit };
+  const tasks = await listTasksDb(sql, opts);
+  if (tasks.length === 0) return 'No active tasks.';
+  const lines = tasks.map((t, i) => `${i + 1}. [${t.status}] ${t.title} (${t.cron_expression ?? 'one-shot'})`);
+  return `${tasks.length} task(s):\n${lines.join('\n')}`;
+}
+
+async function handleCreateTask(sql: Sql, args: Record<string, unknown>): Promise<string> {
+  let nextRunAt: string | undefined;
+  if (args.delay) {
+    const match = (args.delay as string).trim().match(/^(\d+(?:\.\d+)?)\s*(second|minute|min|hour|day|week|month)s?$/i);
+    if (match) {
+      const n = parseFloat(match[1]);
+      const unit = match[2].toLowerCase();
+      const ms: Record<string, number> = { second: 1000, minute: 60000, min: 60000, hour: 3600000, day: 86400000, week: 604800000, month: 2592000000 };
+      if (ms[unit]) nextRunAt = new Date(Date.now() + n * ms[unit]).toISOString();
+    }
+  }
+  const id = await createTaskDb(sql, {
+    title: args.title as string,
+    description: args.description as string | undefined,
+    priority: args.priority as number | undefined,
+    cron_expression: args.cron_expression as string | undefined,
+    next_run_at: nextRunAt,
+    created_by_type: (args.created_by_type as TaskCreatorType) ?? 'owner',
+  });
+  return `Task created: "${args.title}" (ID: ${id.slice(0, 8)})`;
+}
+
+async function handleUpdateTask(sql: Sql, args: Record<string, unknown>): Promise<string> {
+  let taskId = args.id as string | undefined;
+  if (!taskId && args.title_match) {
+    const found = await findTaskByTitle(sql, args.title_match as string);
+    if (!found) return `No task found matching "${args.title_match}".`;
+    taskId = found.id;
+  }
+  if (!taskId) return 'Provide id or title_match.';
+  const updates: Record<string, unknown> = {};
+  for (const k of ['title', 'description', 'priority', 'cron_expression', 'status']) {
+    if (args[k] !== undefined) updates[k] = args[k];
+  }
+  if (Object.keys(updates).length === 0) return 'No updates provided.';
+  const result = await updateTaskDb(sql, taskId, updates as Parameters<typeof updateTaskDb>[2]);
+  return result ? `Task updated: ${Object.keys(updates).join(', ')}` : 'Task not found.';
+}
+
+async function handleDeleteTask(sql: Sql, args: Record<string, unknown>): Promise<string> {
+  let taskId = args.id as string | undefined;
+  if (!taskId && args.title_match) {
+    const found = await findTaskByTitle(sql, args.title_match as string);
+    if (!found) return `No task found matching "${args.title_match}".`;
+    taskId = found.id;
+  }
+  if (!taskId) return 'Provide id or title_match.';
+  const success = await deleteTaskDb(sql, taskId);
+  return success ? 'Task cancelled.' : 'Task not found.';
 }
 
 // ── MCP Protocol ──
@@ -276,7 +408,7 @@ function sendResponse(response: JsonRpcResponse): void {
  * Start the Memory MCP server over stdio.
  * Reads JSON-RPC requests from stdin, writes responses to stdout.
  */
-export function startMemoryMcpServer(db: DatabaseSync): void {
+export function startMemoryMcpServer(sql: Sql): void {
   const rl = createInterface({ input: process.stdin, terminal: false });
 
   rl.on('line', async (line: string) => {
@@ -289,7 +421,7 @@ export function startMemoryMcpServer(db: DatabaseSync): void {
     }
 
     try {
-      const result = await handleRequest(db, request);
+      const result = await handleRequest(sql, request);
       sendResponse({ jsonrpc: '2.0', id: request.id, result });
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -300,7 +432,7 @@ export function startMemoryMcpServer(db: DatabaseSync): void {
   logger.info('Memory MCP server started on stdio');
 }
 
-async function handleRequest(db: DatabaseSync, request: JsonRpcRequest): Promise<unknown> {
+async function handleRequest(sql: Sql, request: JsonRpcRequest): Promise<unknown> {
   switch (request.method) {
     case 'initialize':
       return {
@@ -323,22 +455,34 @@ async function handleRequest(db: DatabaseSync, request: JsonRpcRequest): Promise
       let content: string;
       switch (toolName) {
         case 'search_memory':
-          content = handleSearchMemory(db, toolArgs);
+          content = await handleSearchMemory(sql, toolArgs);
           break;
         case 'retrieve_context':
-          content = await handleRetrieveContext(db, toolArgs);
+          content = await handleRetrieveContext(sql, toolArgs);
           break;
         case 'store_fact':
-          content = handleStoreFact(db, toolArgs);
+          content = await handleStoreFact(sql, toolArgs);
           break;
         case 'update_working_context':
-          content = handleUpdateWorkingContext(db, toolArgs);
+          content = await handleUpdateWorkingContext(sql, toolArgs);
           break;
         case 'list_people':
-          content = handleListPeople(db, toolArgs);
+          content = await handleListPeople(sql, toolArgs);
           break;
         case 'list_commitments':
-          content = handleListCommitments(db, toolArgs);
+          content = await handleListCommitments(sql, toolArgs);
+          break;
+        case 'list_tasks':
+          content = await handleListTasks(sql, toolArgs);
+          break;
+        case 'create_task':
+          content = await handleCreateTask(sql, toolArgs);
+          break;
+        case 'update_task':
+          content = await handleUpdateTask(sql, toolArgs);
+          break;
+        case 'delete_task':
+          content = await handleDeleteTask(sql, toolArgs);
           break;
         default:
           throw new Error(`Unknown tool: ${toolName}`);
@@ -361,8 +505,10 @@ export function getMemoryMcpConfig(dataDir: string): Record<string, unknown> {
     mcpServers: {
       memory: {
         command: 'npx',
-        args: ['tsx', 'src/mcp/memory/stdio.ts', '--data-dir', dataDir],
-        env: {},
+        args: ['tsx', 'src/mcp/memory/stdio.ts'],
+        env: {
+          DATABASE_URL: process.env.DATABASE_URL ?? '',
+        },
       },
     },
   };

@@ -3,27 +3,21 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
-import { loadConfig } from '../../src/config.js';
-import { initDb, closeDb } from '../../src/db/index.js';
+import { createTestDb, type TestSql } from '../helpers/pg-test.js';
 import { insertMemory, findMemoriesByType } from '../../src/memory/store.js';
 import { maybeReflect } from '../../src/memory/reflection.js';
-import type { DatabaseSync } from 'node:sqlite';
 
-let db: DatabaseSync;
-let tmpDir: string;
+let sql: TestSql;
+let cleanup: () => Promise<void>;
 
-beforeEach(() => {
-  tmpDir = mkdtempSync(join(tmpdir(), 'clawvato-test-'));
-  loadConfig({ dataDir: tmpDir });
-  db = initDb();
+beforeEach(async () => {
+  const testDb = await createTestDb();
+  sql = testDb.sql;
+  cleanup = testDb.cleanup;
 });
 
-afterEach(() => {
-  closeDb();
-  rmSync(tmpDir, { recursive: true, force: true });
+afterEach(async () => {
+  await cleanup();
 });
 
 function createMockClient(responseJson: unknown[]) {
@@ -39,7 +33,7 @@ function createMockClient(responseJson: unknown[]) {
 describe('maybeReflect', () => {
   it('does not trigger when no memories exist', async () => {
     const client = createMockClient([]);
-    const result = await maybeReflect(db, client, 'haiku');
+    const result = await maybeReflect(sql, client, 'haiku');
 
     expect(result.reflected).toBe(false);
     expect(result.insightsGenerated).toBe(0);
@@ -49,12 +43,12 @@ describe('maybeReflect', () => {
   it('does not trigger when cumulative importance is below threshold', async () => {
     // Insert a few low-importance memories (total < 50)
     for (let i = 0; i < 5; i++) {
-      insertMemory(db, { type: 'fact', content: `Low importance fact ${i}`, source: 'test', importance: 3 });
+      await insertMemory(sql, { type: 'fact', content: `Low importance fact ${i}`, source: 'test', importance: 3 });
     }
     // Total importance = 15, well below 50
 
     const client = createMockClient([]);
-    const result = await maybeReflect(db, client, 'haiku');
+    const result = await maybeReflect(sql, client, 'haiku');
 
     expect(result.reflected).toBe(false);
     expect(client.messages.create).not.toHaveBeenCalled();
@@ -63,7 +57,7 @@ describe('maybeReflect', () => {
   it('triggers when cumulative importance exceeds threshold', async () => {
     // Insert enough high-importance memories to exceed 50
     for (let i = 0; i < 7; i++) {
-      insertMemory(db, { type: 'fact', content: `Important fact ${i}`, source: 'test', importance: 8 });
+      await insertMemory(sql, { type: 'fact', content: `Important fact ${i}`, source: 'test', importance: 8 });
     }
     // Total importance = 56, above threshold of 50
 
@@ -72,14 +66,14 @@ describe('maybeReflect', () => {
       { content: 'There is a pattern of strategic pivots driven by procurement delays', importance: 7 },
     ]);
 
-    const result = await maybeReflect(db, client, 'haiku');
+    const result = await maybeReflect(sql, client, 'haiku');
 
     expect(result.reflected).toBe(true);
     expect(result.insightsGenerated).toBe(2);
     expect(client.messages.create).toHaveBeenCalledOnce();
 
     // Reflections should be stored in the DB
-    const reflections = findMemoriesByType(db, 'reflection');
+    const reflections = await findMemoriesByType(sql, 'reflection');
     expect(reflections).toHaveLength(2);
     expect(reflections[0].content).toContain('client management');
   });
@@ -87,19 +81,19 @@ describe('maybeReflect', () => {
   it('does not trigger again immediately after reflecting', async () => {
     // First: trigger a reflection
     for (let i = 0; i < 7; i++) {
-      insertMemory(db, { type: 'fact', content: `Fact ${i}`, source: 'test', importance: 8 });
+      await insertMemory(sql, { type: 'fact', content: `Fact ${i}`, source: 'test', importance: 8 });
     }
 
     const client = createMockClient([
       { content: 'Test insight', importance: 7 },
     ]);
 
-    await maybeReflect(db, client, 'haiku');
+    await maybeReflect(sql, client, 'haiku');
 
     // Second: add a few more memories (not enough to re-trigger)
-    insertMemory(db, { type: 'fact', content: 'New fact', source: 'test', importance: 5 });
+    await insertMemory(sql, { type: 'fact', content: 'New fact', source: 'test', importance: 5 });
 
-    const result = await maybeReflect(db, client, 'haiku');
+    const result = await maybeReflect(sql, client, 'haiku');
 
     expect(result.reflected).toBe(false);
     // Only the first call should have called the API
@@ -108,7 +102,7 @@ describe('maybeReflect', () => {
 
   it('handles malformed API response gracefully', async () => {
     for (let i = 0; i < 7; i++) {
-      insertMemory(db, { type: 'fact', content: `Fact ${i}`, source: 'test', importance: 8 });
+      await insertMemory(sql, { type: 'fact', content: `Fact ${i}`, source: 'test', importance: 8 });
     }
 
     const client = {
@@ -119,7 +113,7 @@ describe('maybeReflect', () => {
       },
     } as any;
 
-    const result = await maybeReflect(db, client, 'haiku');
+    const result = await maybeReflect(sql, client, 'haiku');
 
     // Should still mark as reflected (to prevent infinite retries) but no insights
     expect(result.reflected).toBe(true);
@@ -129,27 +123,27 @@ describe('maybeReflect', () => {
   it('handles empty agent_state table gracefully', async () => {
     // Insert enough memories to trigger reflection
     for (let i = 0; i < 7; i++) {
-      insertMemory(db, { type: 'fact', content: `Fact ${i}`, source: 'test', importance: 8 });
+      await insertMemory(sql, { type: 'fact', content: `Fact ${i}`, source: 'test', importance: 8 });
     }
 
     const client = createMockClient([{ content: 'Test insight', importance: 7 }]);
     // Should work even with empty agent_state table
-    const result = await maybeReflect(db, client, 'haiku');
+    const result = await maybeReflect(sql, client, 'haiku');
     expect(result.reflected).toBe(true);
   });
 
   it('stores reflections with correct metadata', async () => {
     for (let i = 0; i < 7; i++) {
-      insertMemory(db, { type: 'fact', content: `Fact ${i}`, source: 'test', importance: 8 });
+      await insertMemory(sql, { type: 'fact', content: `Fact ${i}`, source: 'test', importance: 8 });
     }
 
     const client = createMockClient([
       { content: 'Key insight about workflow patterns', importance: 9 },
     ]);
 
-    await maybeReflect(db, client, 'haiku');
+    await maybeReflect(sql, client, 'haiku');
 
-    const reflections = findMemoriesByType(db, 'reflection');
+    const reflections = await findMemoriesByType(sql, 'reflection');
     expect(reflections).toHaveLength(1);
     expect(reflections[0].type).toBe('reflection');
     expect(reflections[0].confidence).toBe(0.8);

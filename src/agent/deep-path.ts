@@ -163,6 +163,8 @@ export async function executeDeepPath(
       'Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch',
       'mcp__memory__search_memory', 'mcp__memory__retrieve_context',
       'mcp__memory__list_people', 'mcp__memory__list_commitments',
+      'mcp__memory__list_tasks', 'mcp__memory__create_task',
+      'mcp__memory__update_task', 'mcp__memory__delete_task',
     ];
 
     logger.info({ promptLength: userPrompt.length }, 'Starting deep path SDK call');

@@ -11,7 +11,7 @@
  */
 
 import type Anthropic from '@anthropic-ai/sdk';
-import type { DatabaseSync } from 'node:sqlite';
+import type { Sql } from '../db/index.js';
 import { logger } from '../logger.js';
 import {
   insertMemory,
@@ -58,22 +58,22 @@ export interface ExtractionResult {
 
 /**
  * Extract facts from a conversation using Haiku.
- * Pass db to enable dynamic category injection and auto-discovery.
+ * Pass sql to enable dynamic category injection and auto-discovery.
  */
 export async function extractFacts(
   client: Anthropic,
   model: string,
   conversation: string,
   source: string,
-  db?: DatabaseSync,
+  sql?: Sql,
 ): Promise<ExtractionResult> {
   try {
     const config = getConfig();
 
     // Inject dynamic categories into the extraction prompt
     let systemPrompt = getPrompts().extraction;
-    if (db) {
-      const categoryList = getCategoryList(db);
+    if (sql) {
+      const categoryList = await getCategoryList(sql);
       systemPrompt = systemPrompt.replace('{{CATEGORIES}}', categoryList);
     } else {
       // Fallback: no DB available, use a static list
@@ -113,9 +113,9 @@ export async function extractFacts(
       }));
 
     // Auto-discover new categories via normalize-on-add
-    if (db) {
+    if (sql) {
       for (const fact of facts) {
-        fact.type = findOrCreateCategory(db, fact.type);
+        fact.type = await findOrCreateCategory(sql, fact.type);
       }
     }
 
@@ -147,10 +147,10 @@ export async function extractFacts(
  * Store extracted facts and people into the database.
  * Handles deduplication — if a near-duplicate exists, supersedes the old one
  * if the new fact has higher confidence.
- * Embeds facts for vector search if sqlite-vec is available.
+ * Embeds facts for vector search (pgvector always available).
  */
 export async function storeExtractionResult(
-  db: DatabaseSync,
+  sql: Sql,
   result: ExtractionResult,
   source: string,
 ): Promise<{ memoriesStored: number; peopleStored: number; duplicatesSkipped: number }> {
@@ -161,7 +161,7 @@ export async function storeExtractionResult(
 
   // Store facts
   for (const fact of result.facts) {
-    const duplicates = findDuplicates(db, fact.content, fact.type);
+    const duplicates = await findDuplicates(sql, fact.content, fact.type);
 
     // Simple dedup: if any duplicate has very similar content, skip or supersede
     const closeMatch = duplicates.find(d => contentSimilarity(d.content, fact.content) > 0.8);
@@ -177,9 +177,9 @@ export async function storeExtractionResult(
           confidence: fact.confidence,
           entities: fact.entities,
         };
-        const newId = insertMemory(db, newMemory);
-        supersedeMemory(db, closeMatch.id, newId);
-        deleteEmbedding(db, closeMatch.id);
+        const newId = await insertMemory(sql, newMemory);
+        await supersedeMemory(sql, closeMatch.id, newId);
+        await deleteEmbedding(sql, closeMatch.id);
         newMemoryIds.push({ id: newId, content: fact.content });
         memoriesStored++;
         logger.debug(
@@ -199,7 +199,7 @@ export async function storeExtractionResult(
         confidence: fact.confidence,
         entities: fact.entities,
       };
-      const newId = insertMemory(db, newMemory);
+      const newId = await insertMemory(sql, newMemory);
       newMemoryIds.push({ id: newId, content: fact.content });
       memoriesStored++;
     }
@@ -207,7 +207,7 @@ export async function storeExtractionResult(
 
   // Store/update people
   for (const person of result.people) {
-    findOrCreatePerson(db, {
+    await findOrCreatePerson(sql, {
       name: person.name,
       email: person.email,
       role: person.role,
@@ -220,21 +220,19 @@ export async function storeExtractionResult(
   // Touch people mentioned in facts (deduplicated)
   const allEntities = new Set(result.facts.flatMap(f => f.entities));
   for (const entity of allEntities) {
-    const person = db.prepare(
-      'SELECT id FROM people WHERE name = ? COLLATE NOCASE'
-    ).get(entity) as { id: string } | undefined;
+    const [person] = await sql`SELECT id FROM people WHERE LOWER(name) = LOWER(${entity})`;
     if (person) {
-      touchPerson(db, person.id);
+      await touchPerson(sql, person.id as string);
     }
   }
 
-  // Embed new memories for vector search (if sqlite-vec is available)
-  if (newMemoryIds.length > 0 && hasVectorSupport(db)) {
+  // Embed new memories for vector search
+  if (newMemoryIds.length > 0 && await hasVectorSupport(sql)) {
     try {
       const texts = newMemoryIds.map(m => m.content);
       const embeddings = await embedBatch(texts);
       for (let i = 0; i < newMemoryIds.length; i++) {
-        insertEmbedding(db, newMemoryIds[i].id, embeddings[i]);
+        await insertEmbedding(sql, newMemoryIds[i].id, embeddings[i]);
       }
       logger.debug({ count: newMemoryIds.length }, 'Embeddings stored');
     } catch (error) {

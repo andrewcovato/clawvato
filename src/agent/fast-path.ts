@@ -13,15 +13,13 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import type { WebClient } from '@slack/web-api';
-import type { DatabaseSync } from 'node:sqlite';
+import type { Sql } from '../db/index.js';
 import { getConfig } from '../config.js';
 import { logger } from '../logger.js';
 import { NO_RESPONSE } from '../prompts.js';
-import { searchMemories, findPersonByName, type MemoryType } from '../memory/store.js';
+import { searchMemories, findPersonByName, supersedeMemory, type MemoryType } from '../memory/store.js';
 import { preToolUse, type ToolUseContext } from '../hooks/pre-tool-use.js';
 import { postToolUse, type ToolResult } from '../hooks/post-tool-use.js';
-import { evaluatePolicy } from '../training-wheels/policy-engine.js';
-import { isGraduated, recordOccurrence } from '../training-wheels/graduation.js';
 import type { ToolHandlerResult } from '../mcp/slack/server.js';
 import type { SlackHandler } from '../slack/handler.js';
 
@@ -43,13 +41,21 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
   slack_get_channel_history: 'Reading channel history...',
   slack_search_messages: 'Searching Slack...',
   web_search: 'Searching the web...',
+  delete_memory: 'Correcting memory...',
+  list_tasks: 'Checking task queue...',
+  create_task: 'Creating task...',
+  update_task: 'Updating task...',
+  delete_task: 'Removing task...',
+  sync_tasks: 'Syncing task channel...',
 };
 
 export interface FastPathOptions {
   client: Anthropic;
-  db: DatabaseSync;
+  db: Sql;
   /** Tool definitions + handlers for fast-path tools only */
   tools: Array<{ definition: Anthropic.Tool; handler: (args: Record<string, unknown>) => Promise<ToolHandlerResult> }>;
+  /** Override the model (default: config.models.executor) */
+  model?: string;
 }
 
 export interface FastPathResult {
@@ -61,22 +67,21 @@ export interface FastPathResult {
 /**
  * Create the fast-path memory tools (always available).
  */
-export function createFastPathMemoryTools(db: DatabaseSync): Array<{ definition: Anthropic.Tool; handler: (args: Record<string, unknown>) => Promise<ToolHandlerResult> }> {
+export function createFastPathMemoryTools(db: Sql): Array<{ definition: Anthropic.Tool; handler: (args: Record<string, unknown>) => Promise<ToolHandlerResult> }> {
   return [
     {
       definition: {
         name: 'search_memory',
         description:
-          'Search and browse stored memories — facts, decisions, technical insights, research findings, ' +
-          'commitments, and more. With a query: keyword search ranked by relevance. Without a query: ' +
-          'returns most important/recent memories. Use filters to narrow by category, source, or importance.',
+          'Search and browse stored memories. With a query: keyword search. Without a query: browse by importance/recency. ' +
+          'Supports filtering by type and source.',
         input_schema: {
           type: 'object' as const,
           properties: {
-            query: { type: 'string', description: 'Search keywords (optional — omit to browse by importance/recency)' },
+            query: { type: 'string', description: 'Search keywords (optional — omit to browse)' },
             type: {
               type: 'string',
-              description: 'Filter by category (e.g., "fact", "technical", "commitment", "project"). Optional.',
+              description: 'Filter by memory category (e.g. "fact", "research", "technical", "decision", "commitment", "strategy", "project", "artifact", "relationship", "reflection")',
             },
             source_filter: {
               type: 'string',
@@ -95,12 +100,12 @@ export function createFastPathMemoryTools(db: DatabaseSync): Array<{ definition:
         const limit = Math.min((args.limit as number) ?? 20, 50);
         const minImportance = args.min_importance as number | undefined;
 
-        const results = searchMemories(db, query, { limit, type, sourcePrefix: sourceFilter, minImportance });
+        const results = await searchMemories(db, query, { limit, type, sourcePrefix: sourceFilter, minImportance });
 
         if (results.length === 0) {
           // Try person lookup if query was provided
           if (query) {
-            const person = findPersonByName(db, query);
+            const person = await findPersonByName(db, query);
             if (person) {
               const parts = [person.name];
               if (person.role) parts.push(person.role);
@@ -116,7 +121,7 @@ export function createFastPathMemoryTools(db: DatabaseSync): Array<{ definition:
         const lines = results.map(m => {
           const conf = m.confidence >= 0.9 ? '' : ` [${Math.round(m.confidence * 100)}%]`;
           const src = m.source.split(':')[0];
-          return `- [${m.type}|${src}|imp:${m.importance}] ${m.content}${conf}`;
+          return `- [${m.type}|${src}|imp:${m.importance}|id:${m.id.slice(0, 8)}] ${m.content}${conf}`;
         });
 
         return { content: `Found ${results.length} memories:\n${lines.join('\n')}` };
@@ -140,14 +145,52 @@ export function createFastPathMemoryTools(db: DatabaseSync): Array<{ definition:
       handler: async (args) => {
         const key = `wctx:${args.key as string}`;
         if (args.clear) {
-          db.prepare("DELETE FROM agent_state WHERE key = ?").run(key);
+          await db`DELETE FROM agent_state WHERE key = ${key}`;
           return { content: `Working context cleared: ${args.key}` };
         }
         const value = args.value as string;
-        db.prepare(
-          "INSERT OR REPLACE INTO agent_state (key, value, status, updated_at) VALUES (?, ?, 'active', datetime('now'))"
-        ).run(key, value);
+        await db`
+          INSERT INTO agent_state (key, value, status, updated_at)
+          VALUES (${key}, ${value}, 'active', NOW())
+          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, status = 'active', updated_at = NOW()
+        `;
         return { content: `Working context updated: ${args.key} = ${value}` };
+      },
+    },
+    {
+      definition: {
+        name: 'delete_memory',
+        description:
+          'Invalidate a memory by ID. Use this to correct wrong information — search first to find the ID, then delete the bad entry. ' +
+          'The memory is soft-deleted (kept for audit) but excluded from future retrieval.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            id: { type: 'string', description: 'Memory ID (first 8 chars is enough)' },
+            reason: { type: 'string', description: 'Why this memory is being invalidated' },
+          },
+          required: ['id'],
+        },
+      },
+      handler: async (args) => {
+        let memoryId = args.id as string;
+
+        // Short ID expansion
+        if (memoryId.length < 36) {
+          const [match] = await db`
+            SELECT id FROM memories WHERE id LIKE ${memoryId + '%'} AND valid_until IS NULL LIMIT 1
+          `;
+          if (!match) return { content: `No active memory found matching ID "${memoryId}".` };
+          memoryId = match.id as string;
+        }
+
+        // Soft-delete by setting valid_until
+        await db`UPDATE memories SET valid_until = NOW() WHERE id = ${memoryId}`;
+
+        const reason = (args.reason as string) ?? 'manually invalidated';
+        logger.info({ memoryId, reason }, 'Memory invalidated by agent');
+
+        return { content: `Memory ${memoryId.slice(0, 8)} invalidated (${reason}).` };
       },
     },
   ];
@@ -184,7 +227,7 @@ export async function executeFastPath(
       if (abortController.signal.aborted) break;
 
       const response = await opts.client.messages.create({
-        model: config.models.executor,
+        model: opts.model ?? config.models.executor,
         max_tokens: config.agent.fastPathMaxTokens,
         system: systemPrompt,
         tools: [
@@ -229,7 +272,7 @@ export async function executeFastPath(
         const toolInput = (toolUse.input ?? {}) as Record<string, unknown>;
 
         // Security checks
-        if (!runFastPathPreToolChecks(opts.db, toolUse.name, toolInput, config.ownerSlackUserId)) {
+        if (!runFastPathPreToolChecks(toolUse.name, toolInput, config.ownerSlackUserId)) {
           toolResults.push({
             type: 'tool_result',
             tool_use_id: toolUse.id,
@@ -250,7 +293,7 @@ export async function executeFastPath(
         const result = await toolHandler(toolInput);
 
         // Post-tool audit (on text content)
-        const sanitized = runFastPathPostToolChecks(opts.db, toolUse.name, toolInput, result.content, !!result.isError);
+        const sanitized = runFastPathPostToolChecks(toolUse.name, toolInput, result.content, !!result.isError);
 
         // Use rich content blocks for multimodal results (PDFs, images), else text
         toolResults.push({
@@ -286,13 +329,11 @@ export async function executeFastPath(
 }
 
 function runFastPathPreToolChecks(
-  db: DatabaseSync,
   toolName: string,
   toolInput: Record<string, unknown>,
   senderSlackId?: string,
 ): boolean {
   const serverName = toolName.startsWith('google_') ? 'google' : toolName.startsWith('slack_') ? 'slack' : 'agent';
-  const config = getConfig();
 
   const ctx: ToolUseContext = { toolName, serverName, input: toolInput, senderSlackId };
   const secResult = preToolUse(ctx);
@@ -301,18 +342,10 @@ function runFastPathPreToolChecks(
     return false;
   }
 
-  const graduated = isGraduated(db, toolName);
-  const policy = evaluatePolicy(toolName, graduated, config.trustLevel);
-  if (!policy.autoApproved) {
-    logger.info({ toolName, reason: policy.reason }, 'Fast path: tool blocked by training wheels');
-    return false;
-  }
-
   return true;
 }
 
 function runFastPathPostToolChecks(
-  db: DatabaseSync,
   toolName: string,
   toolInput: Record<string, unknown>,
   output: string,
@@ -331,10 +364,6 @@ function runFastPathPostToolChecks(
   };
 
   const { sanitizedOutput } = postToolUse(result);
-
-  try {
-    recordOccurrence(db, toolName, `Tool call: ${toolName}`, {}, 'approved');
-  } catch { /* non-critical */ }
 
   return String(sanitizedOutput);
 }

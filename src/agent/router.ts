@@ -1,10 +1,11 @@
 /**
- * Router — Haiku complexity classifier that routes to fast or deep path.
+ * Router — Haiku complexity classifier that routes to fast, medium, or deep path.
  *
  * Cost: ~$0.0002 per classification (~200ms).
  *
- * FAST path: memory queries, single-source lookups, simple responses.
- * DEEP path: cross-source reasoning, multi-step tasks, document analysis.
+ * FAST path: Sonnet API — simple commands, greetings, single-tool lookups.
+ * MEDIUM path: Opus API — memory reasoning, multi-tool, nuanced judgment.
+ * DEEP path: Opus CLI — cross-source research, multi-minute analysis.
  */
 
 import Anthropic from '@anthropic-ai/sdk';
@@ -12,7 +13,7 @@ import { getConfig } from '../config.js';
 import { getPrompts } from '../prompts.js';
 import { logger } from '../logger.js';
 
-export type RoutingDecision = 'fast' | 'deep';
+export type RoutingDecision = 'fast' | 'medium' | 'deep';
 
 export interface RouterResult {
   decision: RoutingDecision;
@@ -21,9 +22,9 @@ export interface RouterResult {
 }
 
 /**
- * Classify a message as fast or deep path.
+ * Classify a message as fast, medium, or deep path.
  *
- * Receives the full assembled context (same thing both paths see):
+ * Receives the full assembled context (same thing all paths see):
  * working context, memory, conversation history, and new message.
  * This ensures the router makes the same decision a human would
  * after reading the full Slack thread.
@@ -66,7 +67,14 @@ function parseRouterResponse(text: string): RouterResult {
   for (const line of lines) {
     const upper = line.toUpperCase().trim();
     if (upper.startsWith('DECISION:')) {
-      decision = upper.includes('HEAVY') ? 'deep' : 'fast';
+      const val = upper.replace('DECISION:', '').trim();
+      if (val.includes('DEEP') || val.includes('HEAVY')) {
+        decision = 'deep';
+      } else if (val.includes('MEDIUM')) {
+        decision = 'medium';
+      } else {
+        decision = 'fast';
+      }
     } else if (upper.startsWith('CONFIDENCE:')) {
       const num = parseInt(line.replace(/[^0-9]/g, ''), 10);
       if (!isNaN(num)) confidence = Math.min(100, Math.max(0, num));

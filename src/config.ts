@@ -15,10 +15,12 @@ const ConfigSchema = z.object({
     classifier: z.string().default('claude-haiku-4-5-20251001'),
     planner: z.string().default('claude-opus-4-6'),
     executor: z.string().default('claude-sonnet-4-6'),
+    reasoner: z.string().default('claude-opus-4-6'),
   }).default(() => ({
     classifier: 'claude-haiku-4-5-20251001',
     planner: 'claude-opus-4-6',
     executor: 'claude-sonnet-4-6',
+    reasoner: 'claude-opus-4-6',
   })),
 
   // Training wheels
@@ -153,6 +155,23 @@ const ConfigSchema = z.object({
     categoryReorgIntervalHours: 168,
   })),
 
+  tasks: z.object({
+    channelId: z.string().optional(),
+    schedulerPollMs: z.number().int().min(10_000).default(60_000),
+    allowSelfAssignment: z.boolean().default(true),
+    autoApproveAgentTasks: z.boolean().default(false),
+    reminderDelayMs: z.number().int().default(3_600_000),
+    maxConcurrentTasks: z.number().int().min(1).default(1),
+    taskExecutionTimeoutMs: z.number().int().default(300_000),
+  }).default(() => ({
+    schedulerPollMs: 60_000,
+    allowSelfAssignment: true,
+    autoApproveAgentTasks: false,
+    reminderDelayMs: 3_600_000,
+    maxConcurrentTasks: 1,
+    taskExecutionTimeoutMs: 300_000,
+  })),
+
   drive: z.object({
     syncBatchSize: z.number().int().default(10),
     maxFileSizeBytes: z.number().int().default(50 * 1024 * 1024),
@@ -200,6 +219,7 @@ function getDefaultConfig(): Partial<ClawvatoConfig> {
       classifier: 'claude-haiku-4-5-20251001',
       planner: 'claude-opus-4-6',
       executor: 'claude-sonnet-4-6',
+      reasoner: 'claude-opus-4-6',
     },
     rateLimits: {
       actionsPerMinute: 30,
@@ -254,6 +274,15 @@ function getDefaultConfig(): Partial<ClawvatoConfig> {
       decayExemptCategories: ['preference', 'commitment'],
       archiveExemptCategories: ['preference', 'commitment', 'reflection'],
       categoryReorgIntervalHours: 168,
+    },
+    tasks: {
+      channelId: process.env.TASK_CHANNEL_ID,
+      schedulerPollMs: 60_000,
+      allowSelfAssignment: true,
+      autoApproveAgentTasks: false,
+      reminderDelayMs: 3_600_000,
+      maxConcurrentTasks: 1,
+      taskExecutionTimeoutMs: 300_000,
     },
     drive: {
       syncBatchSize: 10,

@@ -63,20 +63,25 @@ const READ_ACTIONS: RegExp[] = [
   /^update_working_context$/i,
   /^store_fact$/i,
   /^mcp__memory__/i,
+  // Memory management — internal agent state
+  /^delete_memory$/i,
+  // Task queue management — internal agent state
+  /^(?:list|create|update|delete|sync)_task/i,
 ];
 
 /**
  * Categorize an action based on its type/tool name.
  */
 export function categorizeAction(actionType: string): ActionCategory {
-  // Check destructive first (highest priority)
-  if (ALWAYS_CONFIRM.some(p => p.test(actionType))) {
-    return 'destructive';
-  }
-
-  // Check read-only
+  // Check read-only FIRST — internal agent tools override destructive patterns
+  // (e.g., delete_memory and delete_task are internal state, not destructive external actions)
   if (READ_ACTIONS.some(p => p.test(actionType))) {
     return 'read';
+  }
+
+  // Check destructive
+  if (ALWAYS_CONFIRM.some(p => p.test(actionType))) {
+    return 'destructive';
   }
 
   // Check outbound (messages, emails)

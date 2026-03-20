@@ -8,7 +8,7 @@ Clawvato is an always-on personal AI agent deployed on Railway. It acts as a "ch
 ```bash
 npm install                            # Install dependencies
 npm run build                          # TypeScript compile
-npm test                               # Run all tests (vitest) — 24 files, 311 tests
+npm test                               # Run all tests (vitest) — requires DATABASE_URL
 npm run lint                           # Type-check without emitting
 npx tsx src/cli/index.ts setup         # First-time interactive setup wizard
 npx tsx src/cli/index.ts start         # Start agent (Socket Mode)
@@ -51,9 +51,9 @@ src/
     start.ts       # Startup — creates hybrid agent, wires Slack handler
     setup.ts       # Interactive setup wizard
     status.ts      # Status reporting
-  db/              # SQLite via node:sqlite (DatabaseSync) + FTS5
-    index.ts       # DB init, schema loading, migrations
-    schema.sql     # Tables, triggers, FTS5 virtual table
+  db/              # Postgres via postgres.js (async Sql type)
+    index.ts       # DB init (async), connection pool, schema loading
+    schema.pg.sql  # Postgres schema (tsvector, pgvector, GIN/HNSW indexes)
   mcp/             # MCP servers
     memory/        # Memory MCP server for SDK deep path
       server.ts    # 6 tools: search, retrieve, store, working ctx, people, commitments
@@ -61,11 +61,18 @@ src/
     slack/server.ts  # Slack tools (5 tools)
   memory/          # Memory system (crown jewel)
     store.ts       # CRUD for memories + people tables
-    retriever.ts   # Token-budgeted context retrieval (FTS5 + vector hybrid)
+    retriever.ts   # Token-budgeted context retrieval (tsvector + pgvector hybrid)
     extractor.ts   # Haiku fact extraction from conversations
     embeddings.ts  # all-MiniLM-L6-v2 vector embeddings
     reflection.ts  # Synthesized insights from memory accumulation
     consolidation.ts # Duplicate merge, decay, archival
+  tasks/           # Autonomous task queue
+    store.ts       # CRUD + scheduler operations (async, Postgres)
+    tools.ts       # Fast-path tools: list/create/update/delete/sync_tasks
+    scheduler.ts   # Polling loop (60s), executes due tasks
+    executor.ts    # Task → agent pipeline bridge
+    channel-manager.ts  # Dedicated Slack channel: pins, notifications, threads
+    approval.ts    # Thumbs-up reaction approval for agent-created tasks
   security/        # sender-verify, output-sanitizer, path-validator, rate-limiter
   slack/           # Slack event handling
     handler.ts     # Event routing, reaction lifecycle, interrupt buffer
@@ -103,20 +110,25 @@ config/
     + 7 more
 ```
 
-### Three-Model Architecture
-- **Haiku** (`claude-haiku-4-5-20251001`): Router + classifier + fact extraction (~$0.0002/call)
-- **Sonnet** (`claude-sonnet-4-6`): Fast path executor (~$0.01/call)
-- **Opus** (`claude-opus-4-6`): Deep path via SDK ($0 on Max plan)
+### Four-Model Architecture
+- **Haiku** (`claude-haiku-4-5-20251001`): Router + classifier + fact extraction + pin summaries (~$0.0002/call)
+- **Sonnet** (`claude-sonnet-4-6`): Fast path — simple lookups, commands (~$0.01/call)
+- **Opus** (`claude-opus-4-6`): Medium path via API — memory reasoning, task management, corrections (~$0.05-0.10/call)
+- **Opus** (`claude-opus-4-6`): Deep path via CLI — cross-source research ($0 on Max plan)
 
-### Database (node:sqlite)
-Uses Node.js built-in `node:sqlite` (DatabaseSync) — **not** better-sqlite3.
+### Database (Postgres via postgres.js)
+Uses `postgres` (porsager/postgres) — tagged template SQL client. Connection via `DATABASE_URL` env var.
 
 Key patterns:
-- Return types from `.get()` / `.all()` are `Record<string, SQLOutputValue>` — always cast with `as unknown as YourType`
-- Schema loaded from `src/db/schema.sql` via single `db.exec()` call (do NOT split on `;` — breaks trigger bodies)
-- Tables: memories, people, actions, action_patterns, documents, agent_state, schema_version
-- FTS5 virtual table `memories_fts` with auto-sync triggers
-- Optional: `memories_vec` (sqlite-vec, 384-dim vectors)
+- Tagged template queries: `sql\`SELECT * FROM memories WHERE id = ${id}\`` — automatic parameterization, SQL injection impossible by construction
+- All DB operations are **async** — every function that touches the DB returns a Promise
+- `Sql` type (from postgres.js) replaces `DatabaseSync` as the DB handle passed through the codebase
+- `initDb()` is async — must be awaited before any DB operations
+- Schema loaded from `src/db/schema.pg.sql` via `sql.unsafe(schema)`
+- Tables: memories, memory_categories, memory_entities, people, actions, action_patterns, documents, agent_state, schema_version
+- `tsvector` generated column on memories with GIN index (replaces FTS5)
+- `vector(384)` column on memories with HNSW index (replaces sqlite-vec)
+- Hybrid search: single CTE query combining tsvector + pgvector with RRF scoring
 
 ### Security Model — Single-Principal Authority
 Only the owner (identified by `OWNER_SLACK_USER_ID`) can issue instructions. Everything else is **untrusted data**.
@@ -181,9 +193,9 @@ Graduation: 10+ approvals with <5% rejection rate and zero rejections in last 5.
 
 ### Testing (Vitest)
 - Test files: `tests/**/*.test.ts`
-- Use temp directories for DB/config tests (`mkdtempSync` + cleanup in `afterEach`)
+- DB tests use isolated Postgres schemas via `tests/helpers/pg-test.ts` (requires `DATABASE_URL`)
 - Security tests are pure functions — no I/O needed
-- **22 test files, 297 tests, all passing**
+- Config tests use temp directories (`mkdtempSync` + cleanup in `afterEach`)
 
 ## Important Patterns
 
@@ -252,7 +264,7 @@ Supports `LOG_DESTINATION=stderr` for MCP server mode.
 ### Three Memory Tiers
 - **Working context** = Scratch pad in `agent_state` (1000 tokens, auto-archives after 14 days)
 - **Short-term** = Slack message history (last 50 messages, 8000 tokens)
-- **Long-term** = SQLite DB (extracted facts via hybrid FTS5 + vector search, 1500 tokens)
+- **Long-term** = Postgres (extracted facts via hybrid tsvector + pgvector search, 1500 tokens)
 
 ### Memory Extraction
 After each interaction:
@@ -267,6 +279,8 @@ After each interaction:
 - **Track D** ✅: Memory + Embeddings — extraction, storage, retrieval, vector search
 - **Track I** ✅: Fireflies.ai — GraphQL client, sync, CLI wrapper
 - **Track J** ✅: SDK Pivot — Hybrid architecture (fast + deep path, router, MCP server)
+- **Track K** ✅: Postgres Migration — SQLite → Postgres, tsvector, pgvector, async ops
+- **Track L** ✅: Autonomous Task Queue — scheduler, executor, dedicated task channel, three-tier routing
 - **Track E** ⬜: Workflow Engine + Scheduling
 - **Track F** 🔶: Security + Training Wheels (undo system remaining)
 - **Track G** ⬜: GitHub + Filesystem + Web Research
@@ -321,6 +335,7 @@ Owner can cancel by sending "stop", "cancel", "abort", "nvm", etc. Polled every 
 
 ### Environment Variables
 ```
+DATABASE_URL               — Postgres connection string (Railway injects via ${{Postgres.DATABASE_URL}})
 ANTHROPIC_API_KEY          — Fast path API access
 CLAUDE_CODE_OAUTH_TOKEN    — Deep path Max plan auth (from `claude setup-token`)
 GWS_CONFIG_B64             — gws CLI auth (from `cd ~/.config/gws && tar czf - --exclude=cache . | base64`)
@@ -329,7 +344,9 @@ SLACK_APP_TOKEN            — Slack app-level token (Socket Mode)
 OWNER_SLACK_USER_ID        — Owner's Slack user ID
 FIREFLIES_API_KEY          — Fireflies API key
 GOOGLE_AGENT_EMAIL         — Owner's email for Gmail identification
-DATA_DIR=/data             — Persistent volume mount
+TASK_CHANNEL_ID            — Slack channel ID for task management (pinned messages, notifications)
+TZ=America/New_York        — Timezone for scheduling
+DATA_DIR=/data             — Persistent volume (Claude CLI auth + gws config only, NOT for DB)
 ```
 
 ### Docker Entrypoint (`scripts/docker-entrypoint.sh`)
@@ -353,15 +370,15 @@ railway variables set GWS_CONFIG_B64="$(cd ~/.config/gws && tar czf - --exclude=
 ```
 
 ## Gotchas
-- `node:sqlite` is experimental — `ExperimentalWarning` in test output is expected
-- Schema SQL uses triggers with `;` inside bodies — never split schema on semicolons
 - **MCP stdio server**: ALL logging must go to stderr, not stdout (corrupts JSON-RPC protocol)
 - **Docker `node:22-slim`**: Stripped of CA certificates — must `apt-get install ca-certificates` or gws/external HTTPS calls fail with TLS UnknownIssuer
 - **Deep path strips `ANTHROPIC_API_KEY`** from subprocess env so Claude CLI uses Max plan OAuth instead of API billing
-- **One-time migrations are dangerous**: Guard keys in `agent_state` may not persist across schema recreations. The v5 reset migration was wiping all memories on every deploy — it was removed.
-- DB interfaces MUST use snake_case to match SQLite column names
+- **All DB ops are async** — every function touching Postgres returns a Promise. Missing `await` will silently succeed but not persist.
+- DB interfaces MUST use snake_case to match Postgres column names
 - `keytar` CJS→ESM interop: `imported.default ?? imported`
 - Socket Mode startup is slow (~11s) — normal
 - Startup crawl skips if offline <5 min (prevents re-processing on quick redeploys)
 - Startup crawl always uses fast path (never routed to heavy)
 - Policy engine regexes must use `(?:^|_)` to match prefixed tool names
+- **Pre-flight must never imply starting without `[PROCEED]`** — saying "kicking it off" without the sentinel makes the user think it's broken
+- **Brain reaction goes on user's message**, not the bot's confirmation message

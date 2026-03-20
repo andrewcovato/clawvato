@@ -17,26 +17,18 @@ export interface AuditEntry {
  * Log an action to the immutable audit trail.
  * Every tool call and outbound action is recorded here.
  */
-export function logAction(entry: AuditEntry): string {
-  const db = getDb();
+export async function logAction(entry: AuditEntry): Promise<string> {
+  const sql = getDb();
   const id = generateId();
 
-  db.prepare(`
+  await sql`
     INSERT INTO actions (id, type, status, trust_level, request_source, request_context,
                          planned_action, actual_result, confirmed_by_user, error_message)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    id,
-    entry.type,
-    entry.status,
-    entry.trustLevel,
-    entry.requestSource,
-    entry.requestContext ?? null,
-    entry.plannedAction,
-    entry.actualResult ?? null,
-    entry.confirmedByUser ? 1 : 0,
-    entry.errorMessage ?? null,
-  );
+    VALUES (${id}, ${entry.type}, ${entry.status}, ${entry.trustLevel},
+            ${entry.requestSource}, ${entry.requestContext ?? null},
+            ${entry.plannedAction}, ${entry.actualResult ?? null},
+            ${entry.confirmedByUser ? 1 : 0}, ${entry.errorMessage ?? null})
+  `;
 
   logger.debug({ actionId: id, type: entry.type, status: entry.status }, 'Action logged');
   return id;
@@ -45,45 +37,45 @@ export function logAction(entry: AuditEntry): string {
 /**
  * Update an existing action's status and result.
  */
-export function updateAction(
+export async function updateAction(
   id: string,
   updates: { status?: string; actualResult?: string; errorMessage?: string; confirmedByUser?: boolean },
-): void {
-  const db = getDb();
+): Promise<void> {
+  const sql = getDb();
 
   if (updates.status) {
-    db.prepare("UPDATE actions SET status = ? WHERE id = ?").run(updates.status, id);
+    await sql`UPDATE actions SET status = ${updates.status} WHERE id = ${id}`;
     if (updates.status === 'confirmed') {
-      db.prepare("UPDATE actions SET confirmed_at = datetime('now') WHERE id = ?").run(id);
+      await sql`UPDATE actions SET confirmed_at = NOW() WHERE id = ${id}`;
     }
     if (updates.status === 'completed' || updates.status === 'failed') {
-      db.prepare("UPDATE actions SET completed_at = datetime('now') WHERE id = ?").run(id);
+      await sql`UPDATE actions SET completed_at = NOW() WHERE id = ${id}`;
     }
   }
   if (updates.actualResult !== undefined) {
-    db.prepare("UPDATE actions SET actual_result = ? WHERE id = ?").run(updates.actualResult, id);
+    await sql`UPDATE actions SET actual_result = ${updates.actualResult} WHERE id = ${id}`;
   }
   if (updates.errorMessage !== undefined) {
-    db.prepare("UPDATE actions SET error_message = ? WHERE id = ?").run(updates.errorMessage, id);
+    await sql`UPDATE actions SET error_message = ${updates.errorMessage} WHERE id = ${id}`;
   }
   if (updates.confirmedByUser !== undefined) {
-    db.prepare("UPDATE actions SET confirmed_by_user = ? WHERE id = ?").run(updates.confirmedByUser ? 1 : 0, id);
+    await sql`UPDATE actions SET confirmed_by_user = ${updates.confirmedByUser ? 1 : 0} WHERE id = ${id}`;
   }
 }
 
 /**
  * Get recent actions for the audit log display.
  */
-export function getRecentActions(limit: number = 20, type?: string): AuditEntry[] {
-  const db = getDb();
+export async function getRecentActions(limit: number = 20, type?: string): Promise<AuditEntry[]> {
+  const sql = getDb();
 
   if (type) {
-    return db.prepare(
-      'SELECT * FROM actions WHERE type = ? ORDER BY created_at DESC LIMIT ?',
-    ).all(type, limit) as unknown as AuditEntry[];
+    return await sql`
+      SELECT * FROM actions WHERE type = ${type} ORDER BY created_at DESC LIMIT ${limit}
+    ` as unknown as AuditEntry[];
   }
 
-  return db.prepare(
-    'SELECT * FROM actions ORDER BY created_at DESC LIMIT ?',
-  ).all(limit) as unknown as AuditEntry[];
+  return await sql`
+    SELECT * FROM actions ORDER BY created_at DESC LIMIT ${limit}
+  ` as unknown as AuditEntry[];
 }

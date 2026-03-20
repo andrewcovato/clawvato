@@ -21,11 +21,10 @@
 import { createHash } from 'node:crypto';
 import { logger } from '../logger.js';
 import { getConfig } from '../config.js';
-import type { DatabaseSync } from 'node:sqlite';
+import type { Sql } from '../db/index.js';
 
 /**
- * PatternRecord uses snake_case to match SQLite column names directly.
- * node:sqlite's .get()/.all() return raw column names from the DB.
+ * PatternRecord uses snake_case to match Postgres column names directly.
  */
 export interface PatternRecord {
   id: string;
@@ -39,18 +38,11 @@ export interface PatternRecord {
   current_trust_level: number;
   last_occurred_at: string | null;
   graduated_at: string | null;
-  non_graduatable: number; // SQLite stores booleans as 0/1
+  non_graduatable: number; // Postgres stores booleans as 0/1 in this schema
 }
-
-// Graduation thresholds read from config.trainingWheels
 
 /**
  * Compute a stable hash for an action pattern.
- * The hash captures the action type and key structural parameters,
- * but not variable data like specific channel names or search queries.
- *
- * @param actionType - The action type (e.g., "send_email", "search_messages")
- * @param keyParams - Structural parameters that define the pattern
  */
 export function computePatternHash(actionType: string, keyParams: Record<string, string> = {}): string {
   const normalized = [
@@ -66,41 +58,36 @@ export function computePatternHash(actionType: string, keyParams: Record<string,
 /**
  * Record an occurrence of an action pattern and check graduation eligibility.
  */
-export function recordOccurrence(
-  db: DatabaseSync,
+export async function recordOccurrence(
+  sql: Sql,
   actionType: string,
   description: string,
   keyParams: Record<string, string>,
   outcome: 'approved' | 'rejected' | 'modified',
   nonGraduatable: boolean = false,
-): { graduated: boolean; pattern: PatternRecord } {
+): Promise<{ graduated: boolean; pattern: PatternRecord }> {
   const hash = computePatternHash(actionType, keyParams);
   const now = new Date().toISOString();
 
   // Upsert the pattern
-  const existing = db.prepare(
-    'SELECT * FROM action_patterns WHERE pattern_hash = ?'
-  ).get(hash) as unknown as PatternRecord | undefined;
+  const [existing] = await sql`
+    SELECT * FROM action_patterns WHERE pattern_hash = ${hash}
+  ` as unknown as [PatternRecord | undefined];
 
   if (!existing) {
     const id = createHash('sha256').update(`${hash}-${now}`).digest('hex').slice(0, 16);
-    db.prepare(`
+    await sql`
       INSERT INTO action_patterns (id, pattern_hash, action_type, description,
         total_occurrences, total_approvals, total_rejections, total_modifications,
         current_trust_level, last_occurred_at, non_graduatable)
-      VALUES (?, ?, ?, ?, 1, ?, ?, ?, 0, ?, ?)
-    `).run(
-      id, hash, actionType, description,
-      outcome === 'approved' ? 1 : 0,
-      outcome === 'rejected' ? 1 : 0,
-      outcome === 'modified' ? 1 : 0,
-      now,
-      nonGraduatable ? 1 : 0,
-    );
+      VALUES (${id}, ${hash}, ${actionType}, ${description},
+        1, ${outcome === 'approved' ? 1 : 0}, ${outcome === 'rejected' ? 1 : 0},
+        ${outcome === 'modified' ? 1 : 0}, 0, ${now}, ${nonGraduatable ? 1 : 0})
+    `;
 
-    const pattern = db.prepare(
-      'SELECT * FROM action_patterns WHERE id = ?'
-    ).get(id) as unknown as PatternRecord;
+    const [pattern] = await sql`
+      SELECT * FROM action_patterns WHERE id = ${id}
+    ` as unknown as [PatternRecord];
 
     return { graduated: false, pattern };
   }
@@ -111,15 +98,15 @@ export function recordOccurrence(
   const modifications = existing.total_modifications + (outcome === 'modified' ? 1 : 0);
   const occurrences = existing.total_occurrences + 1;
 
-  db.prepare(`
+  await sql`
     UPDATE action_patterns SET
-      total_occurrences = ?,
-      total_approvals = ?,
-      total_rejections = ?,
-      total_modifications = ?,
-      last_occurred_at = ?
-    WHERE pattern_hash = ?
-  `).run(occurrences, approvals, rejections, modifications, now, hash);
+      total_occurrences = ${occurrences},
+      total_approvals = ${approvals},
+      total_rejections = ${rejections},
+      total_modifications = ${modifications},
+      last_occurred_at = ${now}
+    WHERE pattern_hash = ${hash}
+  `;
 
   // Check graduation eligibility
   const shouldGraduate = checkGraduation(
@@ -128,10 +115,10 @@ export function recordOccurrence(
   );
 
   if (shouldGraduate && !existing.graduated_at) {
-    db.prepare(`
-      UPDATE action_patterns SET graduated_at = ?, current_trust_level = current_trust_level + 1
-      WHERE pattern_hash = ?
-    `).run(now, hash);
+    await sql`
+      UPDATE action_patterns SET graduated_at = ${now}, current_trust_level = current_trust_level + 1
+      WHERE pattern_hash = ${hash}
+    `;
 
     logger.info(
       { actionType, hash, approvals, occurrences },
@@ -139,9 +126,9 @@ export function recordOccurrence(
     );
   }
 
-  const updatedPattern = db.prepare(
-    'SELECT * FROM action_patterns WHERE pattern_hash = ?'
-  ).get(hash) as unknown as PatternRecord;
+  const [updatedPattern] = await sql`
+    SELECT * FROM action_patterns WHERE pattern_hash = ${hash}
+  ` as unknown as [PatternRecord];
 
   return { graduated: shouldGraduate, pattern: updatedPattern };
 }
@@ -156,25 +143,16 @@ function checkGraduation(
   nonGraduatable: boolean,
   alreadyGraduated: string | null,
 ): boolean {
-  // Non-graduatable actions never graduate
   if (nonGraduatable) return false;
-
-  // Already graduated
   if (alreadyGraduated) return false;
 
-  // Must have enough approvals
   const twConfig = getConfig().trainingWheels;
   if (totalApprovals < twConfig.graduationThreshold) return false;
 
-  // Rejection rate must be below threshold
   if (totalOccurrences > 0) {
     const rejectionRate = totalRejections / totalOccurrences;
     if (rejectionRate >= twConfig.maxRejectionRate) return false;
   }
-
-  // Note: "zero rejections in last 5" requires tracking per-occurrence history.
-  // For now, we use the overall rejection rate as a proxy.
-  // TODO: Add occurrence history table for precise recent-window tracking.
 
   return true;
 }
@@ -182,20 +160,20 @@ function checkGraduation(
 /**
  * Check if a specific action pattern has graduated.
  */
-export function isGraduated(db: DatabaseSync, actionType: string, keyParams: Record<string, string> = {}): boolean {
+export async function isGraduated(sql: Sql, actionType: string, keyParams: Record<string, string> = {}): Promise<boolean> {
   const hash = computePatternHash(actionType, keyParams);
-  const row = db.prepare(
-    'SELECT graduated_at FROM action_patterns WHERE pattern_hash = ?'
-  ).get(hash) as unknown as { graduated_at: string | null } | undefined;
+  const [row] = await sql`
+    SELECT graduated_at FROM action_patterns WHERE pattern_hash = ${hash}
+  `;
 
-  return !!row?.graduated_at;
+  return !!(row?.graduated_at);
 }
 
 /**
  * Get all graduated patterns (for the status command).
  */
-export function getGraduatedPatterns(db: DatabaseSync): PatternRecord[] {
-  return db.prepare(
-    'SELECT * FROM action_patterns WHERE graduated_at IS NOT NULL ORDER BY graduated_at DESC'
-  ).all() as unknown as PatternRecord[];
+export async function getGraduatedPatterns(sql: Sql): Promise<PatternRecord[]> {
+  return await sql`
+    SELECT * FROM action_patterns WHERE graduated_at IS NOT NULL ORDER BY graduated_at DESC
+  ` as unknown as PatternRecord[];
 }

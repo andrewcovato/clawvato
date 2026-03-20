@@ -4,9 +4,9 @@ import { getConfig } from '../config.js';
 /**
  * Show agent status: config, database stats, active workflows, recent actions.
  */
-export function showStatus(): void {
+export async function showStatus(): Promise<void> {
   const config = getConfig();
-  const db = getDb();
+  const sql = getDb();
 
   console.log('\n=== Clawvato Status ===\n');
 
@@ -18,20 +18,22 @@ export function showStatus(): void {
   console.log();
 
   // Database stats
-  const memoriesCount = (db.prepare('SELECT COUNT(*) as n FROM memories WHERE valid_until IS NULL').get() as unknown as { n: number }).n;
-  const peopleCount = (db.prepare('SELECT COUNT(*) as n FROM people').get() as unknown as { n: number }).n;
-  const actionsCount = (db.prepare('SELECT COUNT(*) as n FROM actions').get() as unknown as { n: number }).n;
+  const [memoriesRow] = await sql`SELECT COUNT(*)::int as n FROM memories WHERE valid_until IS NULL`;
+  const [peopleRow] = await sql`SELECT COUNT(*)::int as n FROM people`;
+  const [actionsRow] = await sql`SELECT COUNT(*)::int as n FROM actions`;
 
   console.log('Database:');
-  console.log(`  Active memories: ${memoriesCount}`);
-  console.log(`  Known people:    ${peopleCount}`);
-  console.log(`  Actions logged:  ${actionsCount}`);
+  console.log(`  Active memories: ${memoriesRow.n}`);
+  console.log(`  Known people:    ${peopleRow.n}`);
+  console.log(`  Actions logged:  ${actionsRow.n}`);
   console.log();
 
   // Active workflows
-  const activeWorkflows = db.prepare(
-    "SELECT id, type, status, created_at FROM workflows WHERE status IN ('active', 'waiting_reply', 'waiting_confirmation') ORDER BY updated_at DESC LIMIT 5",
-  ).all() as unknown as Array<{ id: string; type: string; status: string; created_at: string }>;
+  const activeWorkflows = await sql`
+    SELECT id, type, status, created_at FROM workflows
+    WHERE status IN ('active', 'waiting_reply', 'waiting_confirmation')
+    ORDER BY updated_at DESC LIMIT 5
+  ` as unknown as Array<{ id: string; type: string; status: string; created_at: string }>;
 
   if (activeWorkflows.length > 0) {
     console.log('Active Workflows:');
@@ -44,9 +46,9 @@ export function showStatus(): void {
   console.log();
 
   // Recent actions
-  const recentActions = db.prepare(
-    'SELECT type, status, created_at FROM actions ORDER BY created_at DESC LIMIT 5',
-  ).all() as unknown as Array<{ type: string; status: string; created_at: string }>;
+  const recentActions = await sql`
+    SELECT type, status, created_at FROM actions ORDER BY created_at DESC LIMIT 5
+  ` as unknown as Array<{ type: string; status: string; created_at: string }>;
 
   if (recentActions.length > 0) {
     console.log('Recent Actions:');
@@ -58,8 +60,8 @@ export function showStatus(): void {
   }
 
   // Graduated patterns
-  const graduatedCount = (db.prepare('SELECT COUNT(*) as n FROM action_patterns WHERE graduated_at IS NOT NULL').get() as unknown as { n: number }).n;
-  console.log(`\nGraduated Patterns: ${graduatedCount}`);
+  const [graduatedRow] = await sql`SELECT COUNT(*)::int as n FROM action_patterns WHERE graduated_at IS NOT NULL`;
+  console.log(`\nGraduated Patterns: ${graduatedRow.n}`);
 
   console.log();
 }

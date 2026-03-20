@@ -5,7 +5,7 @@
  * working context, conversation history, and system prompt.
  */
 
-import type { DatabaseSync } from 'node:sqlite';
+import type { Sql } from '../db/index.js';
 import type { WebClient } from '@slack/web-api';
 import { getConfig } from '../config.js';
 import { getPrompts } from '../prompts.js';
@@ -85,13 +85,15 @@ export async function buildConversationContext(
 /**
  * Load working context from agent_state (token-budgeted).
  */
-export function loadWorkingContext(db: DatabaseSync, budgetOverride?: number): string {
+export async function loadWorkingContext(sql: Sql, budgetOverride?: number): Promise<string> {
   const config = getConfig();
   const budget = budgetOverride ?? config.context.workingContextTokenBudget;
   try {
-    const rows = db.prepare(
-      "SELECT key, value FROM agent_state WHERE key LIKE 'wctx:%' AND status = 'active' ORDER BY updated_at DESC LIMIT 20"
-    ).all() as unknown as Array<{ key: string; value: string }>;
+    const rows = await sql`
+      SELECT key, value FROM agent_state
+      WHERE key LIKE 'wctx:%' AND status = 'active'
+      ORDER BY updated_at DESC LIMIT 20
+    ` as unknown as Array<{ key: string; value: string }>;
 
     if (rows.length === 0) return '';
 
@@ -115,7 +117,7 @@ export function loadWorkingContext(db: DatabaseSync, budgetOverride?: number): s
  * Assemble the full context for an agent interaction.
  */
 export async function assembleContext(
-  db: DatabaseSync,
+  sql: Sql,
   botClient: WebClient,
   message: string,
   channel: string,
@@ -128,7 +130,7 @@ export async function assembleContext(
   const config = getConfig();
 
   // Retrieve memory context
-  const memoryResult = await retrieveContext(db, message, {
+  const memoryResult = await retrieveContext(sql, message, {
     tokenBudget: config.context.longTermTokenBudget,
   });
 
@@ -149,7 +151,7 @@ export async function assembleContext(
   } catch { /* use ID as fallback */ }
 
   // Load working context
-  const workingContext = loadWorkingContext(db);
+  const workingContext = await loadWorkingContext(sql);
 
   // Assemble user prompt
   const parts: string[] = [];

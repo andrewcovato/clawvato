@@ -1,30 +1,27 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
-import { loadConfig } from '../src/config.js';
-import { initDb, getDb, closeDb, generateId } from '../src/db/index.js';
+import { generateId } from '../src/db/index.js';
+import { createTestDb, type TestSql } from './helpers/pg-test.js';
 
 describe('database', () => {
-  let tmpDir: string;
+  let sql: TestSql;
+  let cleanup: () => Promise<void>;
 
-  beforeEach(() => {
-    tmpDir = mkdtempSync(join(tmpdir(), 'clawvato-test-'));
-    loadConfig({ dataDir: tmpDir });
+  beforeEach(async () => {
+    ({ sql, cleanup } = await createTestDb());
   });
 
-  afterEach(() => {
-    closeDb();
-    rmSync(tmpDir, { recursive: true, force: true });
+  afterEach(async () => {
+    await cleanup();
   });
 
-  it('initializes database with schema', () => {
-    const db = initDb();
+  it('initializes database with schema', async () => {
     // Verify tables exist
-    const tables = db.prepare(
-      "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
-    ).all() as unknown as Array<{ name: string }>;
-    const tableNames = tables.map(t => t.name);
+    const tables = await sql`
+      SELECT table_name FROM information_schema.tables
+      WHERE table_schema = current_schema() AND table_type = 'BASE TABLE'
+      ORDER BY table_name
+    `;
+    const tableNames = tables.map(t => t.table_name);
 
     expect(tableNames).toContain('memories');
     expect(tableNames).toContain('people');
@@ -42,85 +39,78 @@ describe('database', () => {
     expect(id1).toMatch(/^[0-9a-f]{8}-/); // UUID format
   });
 
-  it('can insert and query memories', () => {
-    const db = initDb();
+  it('can insert and query memories', async () => {
     const id = generateId();
 
-    db.prepare(`
+    await sql`
       INSERT INTO memories (id, type, content, source, importance)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(id, 'fact', 'Test memory content', 'test', 7);
+      VALUES (${id}, 'fact', 'Test memory content', 'test', 7)
+    `;
 
-    const row = db.prepare('SELECT * FROM memories WHERE id = ?').get(id) as unknown as {
-      id: string; content: string; importance: number;
-    };
+    const [row] = await sql`SELECT * FROM memories WHERE id = ${id}`;
 
     expect(row.id).toBe(id);
     expect(row.content).toBe('Test memory content');
     expect(row.importance).toBe(7);
   });
 
-  it('can insert and query people', () => {
-    const db = initDb();
+  it('can insert and query people', async () => {
     const id = generateId();
 
-    db.prepare(`
+    await sql`
       INSERT INTO people (id, name, email, relationship)
-      VALUES (?, ?, ?, ?)
-    `).run(id, 'Jake Martinez', 'jake@corp.com', 'colleague');
+      VALUES (${id}, 'Jake Martinez', 'jake@corp.com', 'colleague')
+    `;
 
-    const person = db.prepare('SELECT * FROM people WHERE email = ?').get('jake@corp.com') as unknown as {
-      name: string; relationship: string;
-    };
+    const [person] = await sql`SELECT * FROM people WHERE email = 'jake@corp.com'`;
 
     expect(person.name).toBe('Jake Martinez');
     expect(person.relationship).toBe('colleague');
   });
 
-  it('FTS5 search works on memories', () => {
-    const db = initDb();
+  it('tsvector search works on memories', async () => {
     const id = generateId();
 
-    db.prepare(`
+    await sql`
       INSERT INTO memories (id, type, content, source)
-      VALUES (?, ?, ?, ?)
-    `).run(id, 'fact', 'Andrew prefers morning meetings before lunch', 'test');
+      VALUES (${id}, 'fact', 'Andrew prefers morning meetings before lunch', 'test')
+    `;
 
-    const results = db.prepare(`
-      SELECT m.* FROM memories m
-      JOIN memories_fts ON m.rowid = memories_fts.rowid
-      WHERE memories_fts MATCH 'morning meetings'
-    `).all() as unknown as Array<{ id: string; content: string }>;
+    const results = await sql`
+      SELECT * FROM memories
+      WHERE content_tsv @@ plainto_tsquery('english', 'morning meetings')
+    `;
 
     expect(results.length).toBe(1);
     expect(results[0].content).toContain('morning meetings');
   });
 
-  it('allows dynamic memory types (no CHECK constraint)', () => {
-    const db = initDb();
+  it('allows dynamic memory types (no CHECK constraint on type)', async () => {
+    const id = generateId();
     // Dynamic categories — any string type is allowed at the schema level
-    expect(() => {
-      const id = generateId();
-      db.prepare(`
-        INSERT INTO memories (id, type, content, source)
-        VALUES (?, ?, ?, ?)
-      `).run(id, 'custom_dynamic_type', 'test', 'test');
-      db.prepare('DELETE FROM memories WHERE id = ?').run(id);
-    }).not.toThrow();
+    await sql`
+      INSERT INTO memories (id, type, content, source)
+      VALUES (${id}, 'custom_dynamic_type', 'test', 'test')
+    `;
+    await sql`DELETE FROM memories WHERE id = ${id}`;
   });
 
-  it('is idempotent on repeated init', () => {
-    const db1 = initDb();
-    db1.prepare(`
+  it('is idempotent on repeated schema application', async () => {
+    await sql`
       INSERT INTO memories (id, type, content, source)
-      VALUES (?, ?, ?, ?)
-    `).run(generateId(), 'fact', 'first init data', 'test');
+      VALUES (${generateId()}, 'fact', 'first init data', 'test')
+    `;
 
-    closeDb();
+    // Re-running schema should not drop existing data (IF NOT EXISTS)
+    const { readFileSync } = await import('node:fs');
+    const { join, dirname } = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const __dirname = dirname(fileURLToPath(import.meta.url));
+    const schemaPath = join(__dirname, '..', 'src', 'db', 'schema.pg.sql');
+    const schema = readFileSync(schemaPath, 'utf-8');
+    await sql.unsafe(schema);
 
-    // Re-init should not drop existing data
-    const db2 = initDb();
-    const count = db2.prepare('SELECT COUNT(*) as n FROM memories').get() as unknown as { n: number };
+    const [count] = await sql`SELECT COUNT(*)::int as n FROM memories`;
     expect(count.n).toBe(1);
   });
 });

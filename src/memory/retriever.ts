@@ -8,15 +8,14 @@
  * 1. People mentioned in the message (structured lookup, ~30-50 tokens each)
  * 2. Preferences relevant to the action type (structured, ~15-20 tokens each)
  * 3. Related documents from the file catalog (~20-40 tokens each)
- * 4. Keyword search for relevant facts/decisions (FTS5, ~15-20 tokens each)
+ * 4. Keyword search for relevant facts/decisions (tsvector, ~15-20 tokens each)
  */
 
-import type { DatabaseSync } from 'node:sqlite';
+import type { Sql } from '../db/index.js';
 import { logger } from '../logger.js';
 // Document summaries are stored as memories — no special document search needed
 import {
   findPersonByName,
-  findMemoriesByType,
   searchMemories,
   findMemoriesByEntity,
   touchMemory,
@@ -100,7 +99,7 @@ export function extractEntities(message: string): { names: string[]; keywords: s
     sentenceStart = endsSentence;
   }
 
-  // Extract keywords for FTS5 search (filter stopwords, take meaningful terms)
+  // Extract keywords for search (filter stopwords, take meaningful terms)
   const keywords = message
     .toLowerCase()
     .replace(/[^\w\s]/g, '')
@@ -204,11 +203,11 @@ async function rerankMemories(
  *
  * Returns formatted context string and metadata about what was retrieved.
  * Respects the token budget — stops adding context when budget is exceeded.
- * Uses hybrid search (FTS5 + vector) when sqlite-vec is available.
+ * Uses hybrid search (tsvector + pgvector) when available.
  * Optionally reranks results via Haiku for precision.
  */
 export async function retrieveContext(
-  db: DatabaseSync,
+  sql: Sql,
   message: string,
   opts?: { tokenBudget?: number },
 ): Promise<RetrievalResult> {
@@ -225,7 +224,7 @@ export async function retrieveContext(
   for (const name of names) {
     if (tokensUsed >= budget) break;
 
-    const person = findPersonByName(db, name);
+    const person = await findPersonByName(sql, name);
     if (person) {
       const line = formatPerson(person);
       const tokens = estimateTokens(line);
@@ -241,7 +240,7 @@ export async function retrieveContext(
   for (const name of names) {
     if (tokensUsed >= budget) break;
 
-    const entityMemories = findMemoriesByEntity(db, name, { limit: 3 });
+    const entityMemories = await findMemoriesByEntity(sql, name, { limit: 3 });
     for (const mem of entityMemories) {
       if (tokensUsed >= budget) break;
 
@@ -251,7 +250,7 @@ export async function retrieveContext(
         parts.push(line);
         tokensUsed += tokens;
         memoriesRetrieved++;
-        touchMemory(db, mem.id);
+        await touchMemory(sql, mem.id);
       }
     }
   }
@@ -259,20 +258,20 @@ export async function retrieveContext(
   // ── 4. Semantic + keyword search for relevant facts/decisions ──
   // (File summaries are stored as memories — they surface here naturally)
   if (tokensUsed < budget && keywords.length > 0) {
-    const ftsQuery = keywords.slice(0, 5).join(' OR ');
+    const ftsQuery = keywords.slice(0, 5).join(' | ');
     let searchResults: Memory[];
 
-    // Use hybrid search (vector + FTS5) when available, else FTS5 only
-    if (hasVectorSupport(db)) {
+    // Use hybrid search (vector + tsvector) — pgvector always available
+    if (await hasVectorSupport(sql)) {
       try {
         const queryEmbedding = await embed(message);
-        searchResults = vectorSearch(db, queryEmbedding, { limit: 20, ftsQuery });
+        searchResults = await vectorSearch(sql, queryEmbedding, { limit: 20, ftsQuery });
       } catch {
-        // Embedding failed — fall back to FTS5 only
-        searchResults = searchMemories(db, ftsQuery, { limit: 20 });
+        // Embedding failed — fall back to tsvector only
+        searchResults = await searchMemories(sql, ftsQuery, { limit: 20 });
       }
     } else {
-      searchResults = searchMemories(db, ftsQuery, { limit: 20 });
+      searchResults = await searchMemories(sql, ftsQuery, { limit: 20 });
     }
 
     // LLM rerank: Haiku scores candidates for actual relevance to the query
@@ -289,7 +288,7 @@ export async function retrieveContext(
         parts.push(line);
         tokensUsed += tokens;
         memoriesRetrieved++;
-        touchMemory(db, mem.id);
+        await touchMemory(sql, mem.id);
       }
     }
   }
@@ -299,13 +298,15 @@ export async function retrieveContext(
     try {
       const sleepingQuery = keywords.slice(0, 3).map(k => `%${k}%`);
       for (const pattern of sleepingQuery) {
-        const sleeping = db.prepare(
-          "SELECT key, value FROM agent_state WHERE key LIKE 'wctx:%' AND status = 'sleeping' AND value LIKE ? LIMIT 3"
-        ).all(pattern) as unknown as Array<{ key: string; value: string }>;
+        const sleeping = await sql`
+          SELECT key, value FROM agent_state
+          WHERE key LIKE 'wctx:%' AND status = 'sleeping' AND value LIKE ${pattern}
+          LIMIT 3
+        ` as unknown as Array<{ key: string; value: string }>;
 
         for (const entry of sleeping) {
           // Wake it — set status back to active
-          db.prepare("UPDATE agent_state SET status = 'active', updated_at = datetime('now') WHERE key = ?").run(entry.key);
+          await sql`UPDATE agent_state SET status = 'active', updated_at = NOW() WHERE key = ${entry.key}`;
           logger.info({ key: entry.key }, 'Woke sleeping working context — matched query');
         }
       }

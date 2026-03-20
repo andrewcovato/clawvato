@@ -11,7 +11,7 @@
  */
 
 import type Anthropic from '@anthropic-ai/sdk';
-import type { DatabaseSync } from 'node:sqlite';
+import type { Sql } from '../db/index.js';
 import { logger } from '../logger.js';
 import { getPrompts } from '../prompts.js';
 import { FirefliesClient, formatMeetingDate, type TranscriptSummary } from './api.js';
@@ -45,7 +45,7 @@ export interface MeetingSyncResult {
  */
 export async function syncMeetings(
   client: FirefliesClient,
-  db: DatabaseSync,
+  db: Sql,
   anthropicClient: Anthropic,
   classifierModel: string,
   synthesisModel: string,
@@ -72,17 +72,18 @@ export async function syncMeetings(
   let peopleExtracted = 0;
 
   // Delta detection: filter to only new meetings
-  const newTranscripts = transcripts.filter(meta => {
+  const newTranscripts: typeof transcripts = [];
+  for (const meta of transcripts) {
     const existingPattern = `fireflies:${meta.id}:%`;
-    const existing = db.prepare(
-      "SELECT id FROM memories WHERE source LIKE ? AND valid_until IS NULL LIMIT 1"
-    ).get(existingPattern);
+    const [existing] = await db`
+      SELECT id FROM memories WHERE source LIKE ${existingPattern} AND valid_until IS NULL LIMIT 1
+    `;
     if (existing) {
       skippedMeetings++;
-      return false;
+    } else {
+      newTranscripts.push(meta);
     }
-    return true;
-  });
+  }
 
   logger.info({ newMeetings: newTranscripts.length, skipped: skippedMeetings }, 'Delta detection complete');
 
@@ -149,7 +150,7 @@ export async function syncMeetings(
  * Uses the meeting extraction prompt with Haiku, optionally refined by Sonnet.
  */
 async function extractMeetingSummary(
-  db: DatabaseSync,
+  db: Sql,
   client: Anthropic,
   classifierModel: string,
   synthesisModel: string,
@@ -220,7 +221,7 @@ async function extractMeetingSummary(
     ...extractEntitiesFromTitle(transcript.title),
   ];
 
-  const summaryMemoryId = insertMemory(db, {
+  const summaryMemoryId = await insertMemory(db, {
     type: 'fact',
     content: summaryContent,
     source,
@@ -252,12 +253,12 @@ async function extractMeetingSummary(
     }
 
     // Check for duplicates
-    const duplicates = findDuplicates(db, factContent, factType as 'fact');
+    const duplicates = await findDuplicates(db, factContent, factType as 'fact');
     const closeMatch = duplicates.find(d => contentSimilarity(d.content, factContent) > 0.7);
 
     if (closeMatch) {
       if (confidence > closeMatch.confidence) {
-        const newId = insertMemory(db, {
+        const newId = await insertMemory(db, {
           type: factType as 'fact',
           content: factContent,
           source,
@@ -265,14 +266,14 @@ async function extractMeetingSummary(
           confidence,
           entities,
         });
-        supersedeMemory(db, closeMatch.id, newId);
-        deleteEmbedding(db, closeMatch.id);
+        await supersedeMemory(db, closeMatch.id, newId);
+        await deleteEmbedding(db, closeMatch.id);
         newMemoryIds.push({ id: newId, content: factContent });
         factsExtracted++;
         if (factType === 'commitment') commitmentsExtracted++;
       }
     } else {
-      const newId = insertMemory(db, {
+      const newId = await insertMemory(db, {
         type: factType as 'fact',
         content: factContent,
         source,
@@ -287,11 +288,11 @@ async function extractMeetingSummary(
   }
 
   // Batch embed all new memories
-  if (newMemoryIds.length > 0 && hasVectorSupport(db)) {
+  if (newMemoryIds.length > 0 && await hasVectorSupport(db)) {
     try {
       const embeddings = await embedBatch(newMemoryIds.map(m => m.content));
       for (let i = 0; i < newMemoryIds.length; i++) {
-        insertEmbedding(db, newMemoryIds[i].id, embeddings[i]);
+        await insertEmbedding(db, newMemoryIds[i].id, embeddings[i]);
       }
     } catch (error) {
       logger.debug({ error }, 'Embedding generation failed for meeting facts');
@@ -307,7 +308,7 @@ async function extractMeetingSummary(
  */
 export async function deepReadMeeting(
   client: FirefliesClient,
-  db: DatabaseSync,
+  db: Sql,
   anthropicClient: Anthropic,
   classifierModel: string,
   synthesisModel: string,
@@ -415,11 +416,11 @@ export async function deepReadMeeting(
     const importance = Math.max(1, Math.min(10, Math.round(Number(fact.importance) || 5)));
     const entities = Array.isArray(fact.entities) ? fact.entities.map(String) : [];
 
-    const duplicates = findDuplicates(db, factContent, factType as 'fact');
+    const duplicates = await findDuplicates(db, factContent, factType as 'fact');
     const closeMatch = duplicates.find(d => contentSimilarity(d.content, factContent) > 0.7);
 
     if (!closeMatch || confidence > (closeMatch?.confidence ?? 0)) {
-      const newId = insertMemory(db, {
+      const newId = await insertMemory(db, {
         type: factType as 'fact',
         content: factContent,
         source,
@@ -428,8 +429,8 @@ export async function deepReadMeeting(
         entities,
       });
       if (closeMatch) {
-        supersedeMemory(db, closeMatch.id, newId);
-        deleteEmbedding(db, closeMatch.id);
+        await supersedeMemory(db, closeMatch.id, newId);
+        await deleteEmbedding(db, closeMatch.id);
       }
       newMemoryIds.push({ id: newId, content: factContent });
       factsExtracted++;
@@ -438,11 +439,11 @@ export async function deepReadMeeting(
   }
 
   // Batch embed
-  if (newMemoryIds.length > 0 && hasVectorSupport(db)) {
+  if (newMemoryIds.length > 0 && await hasVectorSupport(db)) {
     try {
       const embeddings = await embedBatch(newMemoryIds.map(m => m.content));
       for (let i = 0; i < newMemoryIds.length; i++) {
-        insertEmbedding(db, newMemoryIds[i].id, embeddings[i]);
+        await insertEmbedding(db, newMemoryIds[i].id, embeddings[i]);
       }
     } catch { /* non-critical */ }
   }

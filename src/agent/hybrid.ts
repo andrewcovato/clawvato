@@ -16,7 +16,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { WebClient } from '@slack/web-api';
 import { readFileSync, existsSync, unlinkSync } from 'node:fs';
-import type { DatabaseSync } from 'node:sqlite';
+import type { Sql } from '../db/index.js';
 import { logger } from '../logger.js';
 import { getConfig } from '../config.js';
 import { requireCredential, getCredential } from '../credentials.js';
@@ -39,6 +39,8 @@ import { findOrCreateCategory, insertMemory, findDuplicates, supersedeMemory, de
 import { contentSimilarity } from '../memory/extractor.js';
 import { embedBatch } from '../memory/embeddings.js';
 import { classifyInterrupt, generateClarificationMessage } from '../slack/interrupt-classifier.js';
+import { createTaskTools, type TaskToolContext } from '../tasks/tools.js';
+import type { TaskChannelManager } from '../tasks/channel-manager.js';
 import { scanForSecrets } from '../security/output-sanitizer.js';
 import type { SlackHandler } from '../slack/handler.js';
 import type { AccumulatedBatch } from '../slack/event-queue.js';
@@ -46,12 +48,15 @@ import type { AccumulatedBatch } from '../slack/event-queue.js';
 export interface HybridAgent {
   processBatch(batch: AccumulatedBatch, handler: SlackHandler): Promise<void>;
   shutdown(): Promise<void>;
+  /** Expose the full fast-path tool list for task executor reuse */
+  getFastPathTools(): Array<{ definition: Anthropic.Tool; handler: (args: Record<string, unknown>) => Promise<ToolHandlerResult> }>;
 }
 
 export interface HybridAgentOptions {
   apiKey?: string;
   botClient: WebClient;
   userClient?: WebClient;
+  taskChannelManager?: TaskChannelManager;
 }
 
 /** Generate a unique findings file path per deep-path invocation */
@@ -65,7 +70,7 @@ function getFindingsFilePath(): string {
  * Runs as a background task after deep path completes.
  */
 async function processDeepPathFindings(
-  db: DatabaseSync,
+  db: Sql,
   source: string,
   findingsFilePath: string,
 ): Promise<{ stored: number; skipped: number; errors: number }> {
@@ -114,29 +119,29 @@ async function processDeepPathFindings(
         const content = String(finding.content ?? '').slice(0, 10_000);
         if (!content || content.length < 10) continue;
 
-        const type = findOrCreateCategory(db, String(finding.type ?? 'fact'));
+        const type = await findOrCreateCategory(db, String(finding.type ?? 'fact'));
         const entities = Array.isArray(finding.entities) ? finding.entities.map(String) : [];
         const importance = Math.max(1, Math.min(10, Math.round(Number(finding.importance) || 5)));
         const confidence = Math.max(0, Math.min(1, Number(finding.confidence) || 0.7));
         const factSource = finding.source ? `${source}:${finding.source}` : source;
 
         // Dedup check
-        const duplicates = findDuplicates(db, content, type);
+        const duplicates = await findDuplicates(db, content, type);
         const closeMatch = duplicates.find(d => contentSimilarity(d.content, content) > 0.8);
 
         if (closeMatch) {
           if (confidence > closeMatch.confidence) {
             // Higher confidence — supersede
-            const newId = insertMemory(db, { type, content, source: factSource, importance, confidence, entities });
-            supersedeMemory(db, closeMatch.id, newId);
-            deleteEmbedding(db, closeMatch.id);
+            const newId = await insertMemory(db, { type, content, source: factSource, importance, confidence, entities });
+            await supersedeMemory(db, closeMatch.id, newId);
+            await deleteEmbedding(db, closeMatch.id);
             newMemoryIds.push({ id: newId, content });
             stored++;
           } else {
             skipped++;
           }
         } else {
-          const newId = insertMemory(db, { type, content, source: factSource, importance, confidence, entities });
+          const newId = await insertMemory(db, { type, content, source: factSource, importance, confidence, entities });
           newMemoryIds.push({ id: newId, content });
           stored++;
         }
@@ -147,12 +152,12 @@ async function processDeepPathFindings(
     }
 
     // Batch embed all new memories
-    if (newMemoryIds.length > 0 && hasVectorSupport(db)) {
+    if (newMemoryIds.length > 0 && await hasVectorSupport(db)) {
       try {
         const texts = newMemoryIds.map(m => m.content);
         const embeddings = await embedBatch(texts);
         for (let i = 0; i < newMemoryIds.length; i++) {
-          insertEmbedding(db, newMemoryIds[i].id, embeddings[i]);
+          await insertEmbedding(db, newMemoryIds[i].id, embeddings[i]);
         }
         logger.debug({ count: newMemoryIds.length }, 'Findings embeddings stored');
       } catch (err) {
@@ -181,6 +186,11 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
   // Memory + read-only lookups across all sources
   const db = getDb();
   const fastPathTools = createFastPathMemoryTools(db);
+
+  // Task queue tools — context is mutable, updated per-batch
+  const taskCtx: TaskToolContext = {};
+  const taskTools = createTaskTools(db, taskCtx, options.taskChannelManager);
+  fastPathTools.push(...taskTools);
 
   // Slack tools — channel history + search
   const slackTools = createSlackTools(options.botClient, options.userClient);
@@ -255,6 +265,9 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
         'Hybrid agent processing batch',
       );
 
+      // ── Update task tool context for this batch ──
+      taskCtx.channelName = batch.channel; // will be replaced with resolved name below
+
       // ── Assemble shared context ──
       const context = await assembleContext(
         db,
@@ -263,6 +276,9 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
         batch.channel,
         { botUserId, ownerUserId: config.ownerSlackUserId },
       );
+
+      // Update task context with resolved channel name
+      taskCtx.channelName = context.channelLabel;
 
       // ── Transition to processing state ──
       const lastMsg = batch.messages[batch.messages.length - 1];
@@ -303,7 +319,7 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
           const deepMemory = await retrieveContext(db, message, {
             tokenBudget: config.context.deepPathLongTermTokenBudget,
           });
-          const deepWorkingContext = loadWorkingContext(db, config.context.deepPathWorkingContextTokenBudget);
+          const deepWorkingContext = await loadWorkingContext(db, config.context.deepPathWorkingContextTokenBudget);
 
           // Rebuild userPrompt with richer context
           const deepParts: string[] = [];
@@ -427,8 +443,9 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
                   // Start a fresh processing cycle for deep path progress updates
                   // Complete the old pre-flight activeTask first to avoid stale state
                   await handler.completeProcessing();
-                  const progressTs = confirmTs ?? interrupt.ts;
-                  await handler.startProcessing('Deep analysis...', batch.channel, [progressTs], batch.threadTs);
+                  // Don't pass message timestamps — the progress message is sufficient feedback.
+                  // Passing the user's ts would re-add 🧠 to their message after stopThinking already removed it.
+                  await handler.startProcessing('Deep analysis...', batch.channel, [], batch.threadTs);
                   // Post progress immediately (don't wait 20s — user already waited through pre-flight)
                   await handler.updateProgress('Deep analysis in progress...');
 
@@ -544,11 +561,13 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
           } // end if (!finalResponse) — deep path execution
           } // end if (routing.decision === 'deep')
         } else {
-          // ── Fast Path: direct API ──
+          // ── Fast / Medium Path: direct API ──
+          // Medium uses Opus for better reasoning; fast uses Sonnet for speed
+          const model = routing.decision === 'medium' ? config.models.reasoner : undefined;
           const fastResult = await executeFastPath(
             context.userPrompt,
             context.systemPrompt,
-            { client: anthropicClient, db, tools: fastPathTools },
+            { client: anthropicClient, db, tools: fastPathTools, model },
             handler,
           );
           finalResponse = fastResult.response;
@@ -572,7 +591,35 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
                 await handler.getMessages().post(batch.channel, cleanResponse, batch.threadTs);
               }
             } catch (error) {
-              logger.error({ error }, 'Failed to post response to Slack');
+              const errDetail = error instanceof Error ? error.message : String(error);
+              logger.error({ error: errDetail }, 'Failed to post response to Slack');
+
+              // Fallback: if deep path response failed to post, save it to memory
+              // so the work isn't lost entirely
+              if (routing?.decision === 'deep' && cleanResponse.length > 200) {
+                try {
+                  const truncated = cleanResponse.slice(0, 10_000);
+                  await insertMemory(db, {
+                    type: 'research',
+                    content: `[Undelivered deep path response] ${truncated}`,
+                    source: `deep:${batch.channel}:${lastMsg.ts}:undelivered`,
+                    importance: 8,
+                    confidence: 0.9,
+                    entities: [],
+                  });
+                  logger.info({ responseLength: cleanResponse.length }, 'Deep path response saved to memory as fallback');
+                } catch (memErr) {
+                  logger.error({ error: memErr }, 'Failed to save fallback response to memory');
+                }
+              }
+
+              // Always tell the user something went wrong
+              try {
+                const userMsg = routing?.decision === 'deep'
+                  ? `Sorry, I finished the analysis but hit an error posting the response (${errDetail.slice(0, 100)}). The response has been saved to my memory — ask me to retrieve it.`
+                  : `Sorry, I hit an error posting my response: ${errDetail.slice(0, 100)}`;
+                await handler.getMessages().post(batch.channel, userMsg, batch.threadTs);
+              } catch { /* last resort — can't reach Slack at all */ }
             }
           }
         } else {
@@ -634,6 +681,10 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
 
     async shutdown() {
       logger.info('Hybrid agent shutting down');
+    },
+
+    getFastPathTools() {
+      return fastPathTools;
     },
   };
 }

@@ -33,7 +33,7 @@ program
   .action(async (opts) => {
     const config = loadConfig(opts.logLevel ? { logLevel: opts.logLevel } : undefined);
     initLogger(config.logLevel);
-    initDb();
+    await initDb();
     await startAgent();
   });
 
@@ -42,8 +42,8 @@ program
   .description('Show agent status, uptime, and pending workflows')
   .action(async () => {
     loadConfig();
-    initDb();
-    showStatus();
+    await initDb();
+    await showStatus();
   });
 
 // --- Config commands ---
@@ -140,10 +140,10 @@ program
   .description('Show recent action audit log')
   .option('-n, --limit <n>', 'Number of entries', '20')
   .option('-t, --type <type>', 'Filter by action type')
-  .action((opts) => {
+  .action(async (opts) => {
     loadConfig();
-    initDb();
-    const entries = getRecentActions(parseInt(opts.limit), opts.type);
+    await initDb();
+    const entries = await getRecentActions(parseInt(opts.limit), opts.type);
     if (entries.length === 0) {
       console.log('No actions recorded yet.');
       return;

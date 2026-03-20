@@ -3,14 +3,13 @@
  *
  * Tests the extraction pipeline, deduplication logic, and storage.
  * Mocks the Anthropic client so tests are free and fast.
+ *
+ * Uses Postgres via the pg-test helper (isolated schema per suite).
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { createTestDb, type TestSql } from '../helpers/pg-test.js';
 import { loadConfig } from '../../src/config.js';
-import { initDb, closeDb } from '../../src/db/index.js';
 import {
   extractFacts,
   storeExtractionResult,
@@ -18,20 +17,19 @@ import {
   type ExtractionResult,
 } from '../../src/memory/extractor.js';
 import { getMemory, findMemoriesByType, findPersonByName, insertMemory } from '../../src/memory/store.js';
-import type { DatabaseSync } from 'node:sqlite';
 
-let db: DatabaseSync;
-let tmpDir: string;
+let sql: TestSql;
+let cleanup: () => Promise<void>;
 
-beforeEach(() => {
-  tmpDir = mkdtempSync(join(tmpdir(), 'clawvato-test-'));
-  loadConfig({ dataDir: tmpDir });
-  db = initDb();
+beforeEach(async () => {
+  loadConfig({});
+  const testDb = await createTestDb();
+  sql = testDb.sql;
+  cleanup = testDb.cleanup;
 });
 
-afterEach(() => {
-  closeDb();
-  rmSync(tmpDir, { recursive: true, force: true });
+afterEach(async () => {
+  await cleanup();
 });
 
 // Mock Anthropic client
@@ -172,24 +170,24 @@ describe('storeExtractionResult', () => {
       ],
     };
 
-    const stored = await storeExtractionResult(db, result, 'test');
+    const stored = await storeExtractionResult(sql, result, 'test');
 
     expect(stored.memoriesStored).toBe(2);
     expect(stored.peopleStored).toBe(1);
     expect(stored.duplicatesSkipped).toBe(0);
 
-    const facts = findMemoriesByType(db, 'fact');
+    const facts = await findMemoriesByType(sql, 'fact');
     expect(facts).toHaveLength(1);
     expect(facts[0].content).toBe('Jake works in finance');
 
-    const person = findPersonByName(db, 'Jake Wilson');
+    const person = await findPersonByName(sql, 'Jake Wilson');
     expect(person).not.toBeNull();
     expect(person!.role).toBe('Analyst');
   });
 
   it('skips duplicates with lower confidence', async () => {
     // Store initial fact
-    insertMemory(db, {
+    await insertMemory(sql, {
       type: 'fact',
       content: 'Jake works on the finance team',
       source: 'old',
@@ -205,7 +203,7 @@ describe('storeExtractionResult', () => {
       people: [],
     };
 
-    const stored = await storeExtractionResult(db, result, 'test');
+    const stored = await storeExtractionResult(sql, result, 'test');
 
     expect(stored.duplicatesSkipped).toBe(1);
     expect(stored.memoriesStored).toBe(0);
@@ -213,7 +211,7 @@ describe('storeExtractionResult', () => {
 
   it('supersedes duplicates with higher confidence', async () => {
     // Store initial lower-confidence fact
-    const oldId = insertMemory(db, {
+    const oldId = await insertMemory(sql, {
       type: 'fact',
       content: 'Jake works on the finance team',
       source: 'old',
@@ -229,31 +227,31 @@ describe('storeExtractionResult', () => {
       people: [],
     };
 
-    const stored = await storeExtractionResult(db, result, 'test');
+    const stored = await storeExtractionResult(sql, result, 'test');
 
     expect(stored.memoriesStored).toBe(1);
 
     // Old memory should be superseded
-    const old = getMemory(db, oldId);
+    const old = await getMemory(sql, oldId);
     expect(old!.valid_until).not.toBeNull();
     expect(old!.superseded_by).not.toBeNull();
   });
 
   it('enriches existing people', async () => {
     // Create person with minimal info
-    findPersonByName(db, 'Jake'); // doesn't exist yet
-    storeExtractionResult(db, {
+    await findPersonByName(sql, 'Jake'); // doesn't exist yet
+    await storeExtractionResult(sql, {
       facts: [],
       people: [{ name: 'Jake Wilson' }],
     }, 'test1');
 
     // Update with more info
-    storeExtractionResult(db, {
+    await storeExtractionResult(sql, {
       facts: [],
       people: [{ name: 'Jake Wilson', email: 'jake@corp.com', role: 'Manager' }],
     }, 'test2');
 
-    const person = findPersonByName(db, 'Jake Wilson');
+    const person = await findPersonByName(sql, 'Jake Wilson');
     expect(person!.email).toBe('jake@corp.com');
     expect(person!.role).toBe('Manager');
   });

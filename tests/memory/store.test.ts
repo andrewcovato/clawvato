@@ -1,15 +1,11 @@
 /**
  * Tests for the Memory Store — CRUD operations for memories and people.
  *
- * Uses real SQLite databases in temp directories (same pattern as db.test.ts).
+ * Uses isolated Postgres schemas per test suite via pg-test helper.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
-import { loadConfig } from '../../src/config.js';
-import { initDb, closeDb } from '../../src/db/index.js';
+import { createTestDb, type TestSql } from '../helpers/pg-test.js';
 import {
   insertMemory,
   getMemory,
@@ -29,25 +25,23 @@ import {
   findOrCreatePerson,
   getAllPeople,
 } from '../../src/memory/store.js';
-import type { DatabaseSync } from 'node:sqlite';
 
-let db: DatabaseSync;
-let tmpDir: string;
+let sql: TestSql;
+let cleanup: () => Promise<void>;
 
-beforeEach(() => {
-  tmpDir = mkdtempSync(join(tmpdir(), 'clawvato-test-'));
-  loadConfig({ dataDir: tmpDir });
-  db = initDb();
+beforeEach(async () => {
+  const testDb = await createTestDb();
+  sql = testDb.sql;
+  cleanup = testDb.cleanup;
 });
 
-afterEach(() => {
-  closeDb();
-  rmSync(tmpDir, { recursive: true, force: true });
+afterEach(async () => {
+  await cleanup();
 });
 
 describe('Memory CRUD', () => {
-  it('inserts and retrieves a memory', () => {
-    const id = insertMemory(db, {
+  it('inserts and retrieves a memory', async () => {
+    const id = await insertMemory(sql, {
       type: 'fact',
       content: 'Jake works on the finance team',
       source: 'slack:C123:ts1',
@@ -56,7 +50,7 @@ describe('Memory CRUD', () => {
       entities: ['Jake'],
     });
 
-    const memory = getMemory(db, id);
+    const memory = await getMemory(sql, id);
     expect(memory).not.toBeNull();
     expect(memory!.type).toBe('fact');
     expect(memory!.content).toBe('Jake works on the finance team');
@@ -67,136 +61,136 @@ describe('Memory CRUD', () => {
     expect(memory!.access_count).toBe(0);
   });
 
-  it('uses default importance and confidence', () => {
-    const id = insertMemory(db, {
+  it('uses default importance and confidence', async () => {
+    const id = await insertMemory(sql, {
       type: 'observation',
       content: 'Andrew usually sends standup notes by 9am',
       source: 'inferred',
     });
 
-    const memory = getMemory(db, id);
+    const memory = await getMemory(sql, id);
     expect(memory!.importance).toBe(5);
     expect(memory!.confidence).toBe(0.5);
   });
 
-  it('finds memories by type', () => {
-    insertMemory(db, { type: 'fact', content: 'Fact 1', source: 'test' });
-    insertMemory(db, { type: 'fact', content: 'Fact 2', source: 'test' });
-    insertMemory(db, { type: 'preference', content: 'Pref 1', source: 'test' });
+  it('finds memories by type', async () => {
+    await insertMemory(sql, { type: 'fact', content: 'Fact 1', source: 'test' });
+    await insertMemory(sql, { type: 'fact', content: 'Fact 2', source: 'test' });
+    await insertMemory(sql, { type: 'preference', content: 'Pref 1', source: 'test' });
 
-    const facts = findMemoriesByType(db, 'fact');
+    const facts = await findMemoriesByType(sql, 'fact');
     expect(facts).toHaveLength(2);
 
-    const prefs = findMemoriesByType(db, 'preference');
+    const prefs = await findMemoriesByType(sql, 'preference');
     expect(prefs).toHaveLength(1);
   });
 
-  it('filters out superseded memories when validOnly=true', () => {
-    const id1 = insertMemory(db, { type: 'fact', content: 'Old fact', source: 'test' });
-    const id2 = insertMemory(db, { type: 'fact', content: 'New fact', source: 'test' });
-    supersedeMemory(db, id1, id2);
+  it('filters out superseded memories when validOnly=true', async () => {
+    const id1 = await insertMemory(sql, { type: 'fact', content: 'Old fact', source: 'test' });
+    const id2 = await insertMemory(sql, { type: 'fact', content: 'New fact', source: 'test' });
+    await supersedeMemory(sql, id1, id2);
 
-    const valid = findMemoriesByType(db, 'fact', { validOnly: true });
+    const valid = await findMemoriesByType(sql, 'fact', { validOnly: true });
     expect(valid).toHaveLength(1);
     expect(valid[0].id).toBe(id2);
 
-    const all = findMemoriesByType(db, 'fact', { validOnly: false });
+    const all = await findMemoriesByType(sql, 'fact', { validOnly: false });
     expect(all).toHaveLength(2);
   });
 
-  it('searches memories via FTS5', () => {
-    insertMemory(db, { type: 'fact', content: 'The quarterly budget review is on Fridays', source: 'test' });
-    insertMemory(db, { type: 'fact', content: 'Sarah prefers morning meetings', source: 'test' });
+  it('searches memories via full-text search', async () => {
+    await insertMemory(sql, { type: 'fact', content: 'The quarterly budget review is on Fridays', source: 'test' });
+    await insertMemory(sql, { type: 'fact', content: 'Sarah prefers morning meetings', source: 'test' });
 
-    const results = searchMemories(db, 'budget review');
+    const results = await searchMemories(sql, 'budget review');
     expect(results.length).toBeGreaterThanOrEqual(1);
     expect(results[0].content).toContain('budget');
   });
 
-  it('returns empty for FTS5 with no matches', () => {
-    insertMemory(db, { type: 'fact', content: 'Some fact', source: 'test' });
-    const results = searchMemories(db, 'xyzzyzzy');
+  it('returns empty for full-text search with no matches', async () => {
+    await insertMemory(sql, { type: 'fact', content: 'Some fact', source: 'test' });
+    const results = await searchMemories(sql, 'xyzzyzzy');
     expect(results).toHaveLength(0);
   });
 
-  it('finds memories by entity', () => {
-    insertMemory(db, {
+  it('finds memories by entity', async () => {
+    await insertMemory(sql, {
       type: 'fact',
       content: 'Jake is on the sales team',
       source: 'test',
       entities: ['Jake'],
     });
-    insertMemory(db, {
+    await insertMemory(sql, {
       type: 'fact',
       content: 'Sarah works in marketing',
       source: 'test',
       entities: ['Sarah'],
     });
 
-    const jakeMemories = findMemoriesByEntity(db, 'Jake');
+    const jakeMemories = await findMemoriesByEntity(sql, 'Jake');
     expect(jakeMemories).toHaveLength(1);
     expect(jakeMemories[0].content).toContain('Jake');
   });
 
-  it('touches a memory (updates access tracking)', () => {
-    const id = insertMemory(db, { type: 'fact', content: 'Test', source: 'test' });
+  it('touches a memory (updates access tracking)', async () => {
+    const id = await insertMemory(sql, { type: 'fact', content: 'Test', source: 'test' });
 
-    touchMemory(db, id);
-    const memory = getMemory(db, id);
+    await touchMemory(sql, id);
+    const memory = await getMemory(sql, id);
     expect(memory!.access_count).toBe(1);
     expect(memory!.last_accessed_at).not.toBeNull();
 
-    touchMemory(db, id);
-    const updated = getMemory(db, id);
+    await touchMemory(sql, id);
+    const updated = await getMemory(sql, id);
     expect(updated!.access_count).toBe(2);
   });
 
-  it('supersedes a memory', () => {
-    const oldId = insertMemory(db, { type: 'fact', content: 'Jake is on sales', source: 'test' });
-    const newId = insertMemory(db, { type: 'fact', content: 'Jake is on marketing', source: 'test' });
+  it('supersedes a memory', async () => {
+    const oldId = await insertMemory(sql, { type: 'fact', content: 'Jake is on sales', source: 'test' });
+    const newId = await insertMemory(sql, { type: 'fact', content: 'Jake is on marketing', source: 'test' });
 
-    supersedeMemory(db, oldId, newId);
+    await supersedeMemory(sql, oldId, newId);
 
-    const old = getMemory(db, oldId);
+    const old = await getMemory(sql, oldId);
     expect(old!.valid_until).not.toBeNull();
     expect(old!.superseded_by).toBe(newId);
 
-    const current = getMemory(db, newId);
+    const current = await getMemory(sql, newId);
     expect(current!.valid_until).toBeNull();
   });
 
-  it('finds duplicates by keyword overlap', () => {
-    insertMemory(db, { type: 'fact', content: 'Jake works on the finance team', source: 'test' });
+  it('finds duplicates by keyword overlap', async () => {
+    await insertMemory(sql, { type: 'fact', content: 'Jake works on the finance team', source: 'test' });
 
-    const dupes = findDuplicates(db, 'Jake is part of the finance team', 'fact');
+    const dupes = await findDuplicates(sql, 'Jake is part of the finance team', 'fact');
     expect(dupes.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('gets recent memories since a timestamp', () => {
-    insertMemory(db, { type: 'fact', content: 'Recent fact', source: 'test' });
+  it('gets recent memories since a timestamp', async () => {
+    await insertMemory(sql, { type: 'fact', content: 'Recent fact', source: 'test' });
 
-    const recent = getRecentMemories(db, '2020-01-01');
+    const recent = await getRecentMemories(sql, '2020-01-01');
     expect(recent.length).toBeGreaterThanOrEqual(1);
 
-    const future = getRecentMemories(db, '2099-01-01');
+    const future = await getRecentMemories(sql, '2099-01-01');
     expect(future).toHaveLength(0);
   });
 
-  it('respects limit parameter', () => {
+  it('respects limit parameter', async () => {
     for (let i = 0; i < 10; i++) {
-      insertMemory(db, { type: 'fact', content: `Fact ${i}`, source: 'test' });
+      await insertMemory(sql, { type: 'fact', content: `Fact ${i}`, source: 'test' });
     }
 
-    const limited = findMemoriesByType(db, 'fact', { limit: 3 });
+    const limited = await findMemoriesByType(sql, 'fact', { limit: 3 });
     expect(limited).toHaveLength(3);
   });
 });
 
 describe('People CRUD', () => {
-  it('inserts and finds a person by name', () => {
-    insertPerson(db, { name: 'Jake Wilson', email: 'jake@corp.com', role: 'Engineer' });
+  it('inserts and finds a person by name', async () => {
+    await insertPerson(sql, { name: 'Jake Wilson', email: 'jake@corp.com', role: 'Engineer' });
 
-    const person = findPersonByName(db, 'Jake Wilson');
+    const person = await findPersonByName(sql, 'Jake Wilson');
     expect(person).not.toBeNull();
     expect(person!.name).toBe('Jake Wilson');
     expect(person!.email).toBe('jake@corp.com');
@@ -205,87 +199,87 @@ describe('People CRUD', () => {
     expect(person!.interaction_count).toBe(0);
   });
 
-  it('finds person by name case-insensitively', () => {
-    insertPerson(db, { name: 'Sarah Chen' });
+  it('finds person by name case-insensitively', async () => {
+    await insertPerson(sql, { name: 'Sarah Chen' });
 
-    const found = findPersonByName(db, 'sarah chen');
+    const found = await findPersonByName(sql, 'sarah chen');
     expect(found).not.toBeNull();
     expect(found!.name).toBe('Sarah Chen');
   });
 
-  it('finds person by Slack ID', () => {
-    insertPerson(db, { name: 'Sarah', slack_id: 'U123ABC' });
+  it('finds person by Slack ID', async () => {
+    await insertPerson(sql, { name: 'Sarah', slack_id: 'U123ABC' });
 
-    const person = findPersonBySlackId(db, 'U123ABC');
+    const person = await findPersonBySlackId(sql, 'U123ABC');
     expect(person).not.toBeNull();
     expect(person!.name).toBe('Sarah');
   });
 
-  it('finds person by email', () => {
-    insertPerson(db, { name: 'Bob', email: 'bob@corp.com' });
+  it('finds person by email', async () => {
+    await insertPerson(sql, { name: 'Bob', email: 'bob@corp.com' });
 
-    const person = findPersonByEmail(db, 'bob@corp.com');
+    const person = await findPersonByEmail(sql, 'bob@corp.com');
     expect(person).not.toBeNull();
     expect(person!.name).toBe('Bob');
   });
 
-  it('touches a person (updates interaction tracking)', () => {
-    const id = insertPerson(db, { name: 'Jake' });
+  it('touches a person (updates interaction tracking)', async () => {
+    const id = await insertPerson(sql, { name: 'Jake' });
 
-    touchPerson(db, id);
-    const person = findPersonByName(db, 'Jake');
+    await touchPerson(sql, id);
+    const person = await findPersonByName(sql, 'Jake');
     expect(person!.interaction_count).toBe(1);
     expect(person!.last_interaction_at).not.toBeNull();
   });
 
-  it('updates person fields', () => {
-    const id = insertPerson(db, { name: 'Jake' });
+  it('updates person fields', async () => {
+    const id = await insertPerson(sql, { name: 'Jake' });
 
-    updatePerson(db, id, { email: 'jake@corp.com', role: 'Manager', timezone: 'US/Pacific' });
+    await updatePerson(sql, id, { email: 'jake@corp.com', role: 'Manager', timezone: 'US/Pacific' });
 
-    const updated = findPersonByName(db, 'Jake');
+    const updated = await findPersonByName(sql, 'Jake');
     expect(updated!.email).toBe('jake@corp.com');
     expect(updated!.role).toBe('Manager');
     expect(updated!.timezone).toBe('US/Pacific');
   });
 
-  it('findOrCreatePerson creates new person', () => {
-    const id = findOrCreatePerson(db, { name: 'New Person', email: 'new@corp.com' });
+  it('findOrCreatePerson creates new person', async () => {
+    const id = await findOrCreatePerson(sql, { name: 'New Person', email: 'new@corp.com' });
 
-    const person = findPersonByName(db, 'New Person');
+    const person = await findPersonByName(sql, 'New Person');
     expect(person).not.toBeNull();
     expect(person!.id).toBe(id);
     expect(person!.email).toBe('new@corp.com');
   });
 
-  it('findOrCreatePerson returns existing and enriches', () => {
-    const id1 = findOrCreatePerson(db, { name: 'Jake' });
-    const id2 = findOrCreatePerson(db, { name: 'Jake', email: 'jake@corp.com', role: 'Engineer' });
+  it('findOrCreatePerson returns existing and enriches', async () => {
+    const id1 = await findOrCreatePerson(sql, { name: 'Jake' });
+    const id2 = await findOrCreatePerson(sql, { name: 'Jake', email: 'jake@corp.com', role: 'Engineer' });
 
     expect(id2).toBe(id1);
 
-    const person = findPersonByName(db, 'Jake');
+    const person = await findPersonByName(sql, 'Jake');
     expect(person!.email).toBe('jake@corp.com');
     expect(person!.role).toBe('Engineer');
   });
 
-  it('findOrCreatePerson does not overwrite existing fields with nothing', () => {
-    findOrCreatePerson(db, { name: 'Jake', email: 'jake@corp.com' });
-    findOrCreatePerson(db, { name: 'Jake' }); // no email this time
+  it('findOrCreatePerson does not overwrite existing fields with nothing', async () => {
+    await findOrCreatePerson(sql, { name: 'Jake', email: 'jake@corp.com' });
+    await findOrCreatePerson(sql, { name: 'Jake' }); // no email this time
 
-    const person = findPersonByName(db, 'Jake');
+    const person = await findPersonByName(sql, 'Jake');
     expect(person!.email).toBe('jake@corp.com'); // not overwritten
   });
 
-  it('getAllPeople returns people ordered by interaction count', () => {
-    const id1 = insertPerson(db, { name: 'Alice' });
-    const id2 = insertPerson(db, { name: 'Bob' });
+  it('getAllPeople returns people ordered by interaction count', async () => {
+    const id1 = await insertPerson(sql, { name: 'Alice' });
+    const id2 = await insertPerson(sql, { name: 'Bob' });
 
-    touchPerson(db, id2);
-    touchPerson(db, id2);
-    touchPerson(db, id1);
+    await touchPerson(sql, id2);
+    await touchPerson(sql, id2);
+    await touchPerson(sql, id1);
 
-    const people = getAllPeople(db);
+    const people = await getAllPeople(sql);
     expect(people[0].name).toBe('Bob');
     expect(people[1].name).toBe('Alice');
   });

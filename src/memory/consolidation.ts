@@ -13,13 +13,12 @@
  * Cost: ~$0.01 per run (mostly DB operations, no LLM calls for basic consolidation).
  */
 
-import type { DatabaseSync } from 'node:sqlite';
+import type { Sql } from '../db/index.js';
 import { logger } from '../logger.js';
 import { getConfig } from '../config.js';
 import { generateId } from '../db/index.js';
 import { contentSimilarity } from './extractor.js';
 import { deleteEmbedding, insertMemory, findDuplicates, type Memory } from './store.js';
-import { backupToGoogleDrive } from './backup.js';
 
 // Memory consolidation tunables loaded from config (memory.*)
 
@@ -33,16 +32,16 @@ export interface ConsolidationResult {
 /**
  * Check if consolidation should run (>24h since last run).
  */
-export function shouldConsolidate(db: DatabaseSync): boolean {
+export async function shouldConsolidate(sql: Sql): Promise<boolean> {
   try {
-    const row = db.prepare(`
+    const [row] = await sql`
       SELECT completed_at FROM consolidation_runs
       ORDER BY completed_at DESC LIMIT 1
-    `).get() as { completed_at: string } | undefined;
+    `;
 
     if (!row) return true; // Never run before
 
-    const lastRun = new Date(row.completed_at).getTime();
+    const lastRun = new Date(row.completed_at as string).getTime();
     const hoursSince = (Date.now() - lastRun) / (1000 * 60 * 60);
     return hoursSince >= getConfig().memory.consolidationIntervalHours;
   } catch {
@@ -53,7 +52,7 @@ export function shouldConsolidate(db: DatabaseSync): boolean {
 /**
  * Run the full consolidation pipeline.
  */
-export function consolidate(db: DatabaseSync): ConsolidationResult {
+export async function consolidate(sql: Sql): Promise<ConsolidationResult> {
   const runId = generateId();
   const startedAt = new Date().toISOString();
 
@@ -64,33 +63,30 @@ export function consolidate(db: DatabaseSync): ConsolidationResult {
   let archived = 0;
 
   // ── 1. Merge near-duplicates ──
-  merged = mergeDuplicates(db);
+  merged = await mergeDuplicates(sql);
 
   // ── 2. Decay stale memories ──
-  decayed = decayStaleMemories(db);
+  decayed = await decayStaleMemories(sql);
 
   // ── 3. Archive very low importance ──
-  archived = archiveMemories(db);
+  archived = await archiveMemories(sql);
 
   // ── 4. Working context cleanup ──
-  archiveStaleWorkingContext(db);
+  await archiveStaleWorkingContext(sql);
 
   // ── 5. Category reorganization (weekly cadence) ──
-  reorganizeCategories(db);
+  await reorganizeCategories(sql);
 
-  // ── 6. Backup to Google Drive (fire-and-forget) ──
-  backupToGoogleDrive().catch(err => {
-    logger.debug({ error: err }, 'Drive backup failed during consolidation — non-critical');
-  });
+  // Note: Railway Postgres handles backups automatically — no Drive backup needed
 
   const memoriesProcessed = merged + decayed + archived;
 
   // Record the run
   try {
-    db.prepare(`
+    await sql`
       INSERT INTO consolidation_runs (id, started_at, completed_at, memories_processed, memories_merged, memories_archived)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(runId, startedAt, new Date().toISOString(), memoriesProcessed, merged, archived);
+      VALUES (${runId}, ${startedAt}, ${new Date().toISOString()}, ${memoriesProcessed}, ${merged}, ${archived})
+    `;
   } catch (error) {
     logger.debug({ error }, 'Failed to record consolidation run — non-critical');
   }
@@ -100,24 +96,25 @@ export function consolidate(db: DatabaseSync): ConsolidationResult {
 }
 
 /**
- * Find and merge near-duplicate memories using FTS5-based candidate finding.
- * O(n × 5) instead of O(n²) — for each memory, find top 5 FTS5 candidates and compare only those.
+ * Find and merge near-duplicate memories using tsvector-based candidate finding.
+ * O(n × 5) instead of O(n²) — for each memory, find top 5 candidates and compare only those.
  */
-function mergeDuplicates(db: DatabaseSync): number {
+async function mergeDuplicates(sql: Sql): Promise<number> {
   let merged = 0;
   const superseded = new Set<string>();
   const config = getConfig();
 
   // Get all valid memories ordered by importance (keep highest)
-  const memories = db.prepare(
-    'SELECT id, type, content, importance, confidence FROM memories WHERE valid_until IS NULL ORDER BY importance DESC'
-  ).all() as unknown as Array<{ id: string; type: string; content: string; importance: number; confidence: number }>;
+  const memories = await sql`
+    SELECT id, type, content, importance, confidence FROM memories
+    WHERE valid_until IS NULL ORDER BY importance DESC
+  ` as unknown as Array<{ id: string; type: string; content: string; importance: number; confidence: number }>;
 
   for (const mem of memories) {
     if (superseded.has(mem.id)) continue;
 
-    // Use FTS5 to find candidate duplicates (already exists, returns top 5)
-    const candidates = findDuplicates(db, mem.content, mem.type);
+    // Use tsvector to find candidate duplicates (already exists, returns top 5)
+    const candidates = await findDuplicates(sql, mem.content, mem.type);
 
     for (const candidate of candidates) {
       if (candidate.id === mem.id || superseded.has(candidate.id)) continue;
@@ -125,11 +122,11 @@ function mergeDuplicates(db: DatabaseSync): number {
       const similarity = contentSimilarity(mem.content, candidate.content);
       if (similarity >= config.memory.mergeSimilarityThreshold) {
         // mem has higher importance (ORDER BY DESC), supersede candidate
-        db.prepare(`
-          UPDATE memories SET valid_until = datetime('now'), superseded_by = ?
-          WHERE id = ?
-        `).run(mem.id, candidate.id);
-        deleteEmbedding(db, candidate.id);
+        await sql`
+          UPDATE memories SET valid_until = NOW(), superseded_by = ${mem.id}
+          WHERE id = ${candidate.id}
+        `;
+        await deleteEmbedding(sql, candidate.id);
         superseded.add(candidate.id);
         merged++;
 
@@ -149,59 +146,59 @@ function mergeDuplicates(db: DatabaseSync): number {
  * - Not accessed in 30 days: importance *= 0.9
  * - Not accessed in 90 days: importance *= 0.7
  */
-function decayStaleMemories(db: DatabaseSync): number {
+async function decayStaleMemories(sql: Sql): Promise<number> {
   const config = getConfig();
   const decayExempt = config.memory.decayExemptCategories;
-  const exemptPlaceholders = decayExempt.map(() => '?').join(',');
 
   // 90-day decay (stronger)
-  const decay90 = db.prepare(`
+  const decay90 = await sql`
     UPDATE memories
-    SET importance = MAX(1, CAST(importance * 0.7 AS INTEGER))
+    SET importance = GREATEST(1, CAST(importance * 0.7 AS INTEGER))
     WHERE valid_until IS NULL
-      AND type NOT IN (${exemptPlaceholders})
-      AND (last_accessed_at IS NOT NULL AND julianday('now') - julianday(last_accessed_at) > ?)
+      AND type != ALL(${decayExempt})
+      AND last_accessed_at IS NOT NULL
+      AND (NOW() - last_accessed_at) > ${config.memory.decayThresholdDays90 + ' days'}::interval
       AND importance > 1
-  `).run(...decayExempt, config.memory.decayThresholdDays90);
+  `;
 
   // 30-day decay (lighter)
-  const decay30 = db.prepare(`
+  const decay30 = await sql`
     UPDATE memories
-    SET importance = MAX(1, CAST(importance * 0.9 AS INTEGER))
+    SET importance = GREATEST(1, CAST(importance * 0.9 AS INTEGER))
     WHERE valid_until IS NULL
-      AND type NOT IN (${exemptPlaceholders})
-      AND (last_accessed_at IS NOT NULL AND julianday('now') - julianday(last_accessed_at) > ?)
-      AND (last_accessed_at IS NULL OR julianday('now') - julianday(last_accessed_at) <= ?)
+      AND type != ALL(${decayExempt})
+      AND last_accessed_at IS NOT NULL
+      AND (NOW() - last_accessed_at) > ${config.memory.decayThresholdDays30 + ' days'}::interval
+      AND (NOW() - last_accessed_at) <= ${config.memory.decayThresholdDays90 + ' days'}::interval
       AND importance > 1
-  `).run(...decayExempt, config.memory.decayThresholdDays30, config.memory.decayThresholdDays90);
+  `;
 
-  const total = Number(decay90.changes ?? 0) + Number(decay30.changes ?? 0);
+  const total = (decay90.count ?? 0) + (decay30.count ?? 0);
 
   if (total > 0) {
     logger.info({ decayed: total }, 'Decayed stale memories');
   }
 
-  return total;
+  return Number(total);
 }
 
 /**
  * Archive memories with importance at or below the threshold.
  * Sets valid_until to now (removes from active retrieval) but keeps in DB for audit.
  */
-function archiveMemories(db: DatabaseSync): number {
+async function archiveMemories(sql: Sql): Promise<number> {
   const config = getConfig();
   const exemptCategories = config.memory.archiveExemptCategories;
-  const exemptPlaceholders = exemptCategories.map(() => '?').join(',');
 
-  const result = db.prepare(`
+  const result = await sql`
     UPDATE memories
-    SET valid_until = datetime('now')
+    SET valid_until = NOW()
     WHERE valid_until IS NULL
-      AND importance <= ?
-      AND type NOT IN (${exemptPlaceholders})
-  `).run(config.memory.archiveThreshold, ...exemptCategories);
+      AND importance <= ${config.memory.archiveThreshold}
+      AND type != ALL(${exemptCategories})
+  `;
 
-  const count = Number(result.changes ?? 0);
+  const count = Number(result.count ?? 0);
 
   if (count > 0) {
     logger.info({ archived: count }, 'Archived low-importance memories');
@@ -216,18 +213,18 @@ function archiveMemories(db: DatabaseSync): number {
  * - Sleeping entries persist indefinitely — woken by retriever when query matches
  * - No hard deletion: sleeping context is searchable and can always come back
  */
-function archiveStaleWorkingContext(db: DatabaseSync): void {
+async function archiveStaleWorkingContext(sql: Sql): Promise<void> {
   try {
-    const staleEntries = db.prepare(`
+    const staleEntries = await sql`
       SELECT key, value, updated_at FROM agent_state
       WHERE key LIKE 'wctx:%'
         AND status = 'active'
-        AND julianday('now') - julianday(updated_at) > ?
-    `).all(getConfig().memory.workingContextArchiveDays) as unknown as Array<{ key: string; value: string; updated_at: string }>;
+        AND (NOW() - updated_at) > ${getConfig().memory.workingContextArchiveDays + ' days'}::interval
+    ` as unknown as Array<{ key: string; value: string; updated_at: string }>;
 
     for (const entry of staleEntries) {
       // Extract a summary to LTM as a pointer
-      insertMemory(db, {
+      await insertMemory(sql, {
         type: 'fact',
         content: `[Past working context] ${entry.value}`,
         source: `working_context:${entry.key}`,
@@ -236,7 +233,7 @@ function archiveStaleWorkingContext(db: DatabaseSync): void {
       });
 
       // Sleep — don't delete. Can be woken by retriever if query matches.
-      db.prepare("UPDATE agent_state SET status = 'sleeping' WHERE key = ?").run(entry.key);
+      await sql`UPDATE agent_state SET status = 'sleeping' WHERE key = ${entry.key}`;
     }
 
     if (staleEntries.length > 0) {
@@ -252,39 +249,39 @@ function archiveStaleWorkingContext(db: DatabaseSync): void {
  * Runs as part of consolidation but at a weekly cadence (guarded by agent_state).
  * No merge needed — duplicates are prevented at insert time by findOrCreateCategory.
  */
-function reorganizeCategories(db: DatabaseSync): void {
+async function reorganizeCategories(sql: Sql): Promise<void> {
   try {
     const config = getConfig();
     const guardKey = 'last_category_reorg';
-    const lastReorg = db.prepare(
-      "SELECT value FROM agent_state WHERE key = ?"
-    ).get(guardKey) as { value: string } | undefined;
+    const [lastReorg] = await sql`SELECT value FROM agent_state WHERE key = ${guardKey}`;
 
     if (lastReorg) {
-      const hoursSince = (Date.now() - new Date(lastReorg.value).getTime()) / (1000 * 60 * 60);
+      const hoursSince = (Date.now() - new Date(lastReorg.value as string).getTime()) / (1000 * 60 * 60);
       if (hoursSince < config.memory.categoryReorgIntervalHours) return;
     }
 
     // Recalculate counts
-    db.exec(`
+    await sql`
       UPDATE memory_categories SET count = (
         SELECT COUNT(*) FROM memories WHERE type = memory_categories.name AND valid_until IS NULL
       )
-    `);
+    `;
 
     // Remove discovered categories with zero memories
-    const removed = db.prepare(
-      "DELETE FROM memory_categories WHERE source = 'discovered' AND count = 0"
-    ).run();
+    const removed = await sql`
+      DELETE FROM memory_categories WHERE source = 'discovered' AND count = 0
+    `;
 
-    if (Number(removed.changes ?? 0) > 0) {
-      logger.info({ removed: removed.changes }, 'Pruned empty discovered categories');
+    if (Number(removed.count ?? 0) > 0) {
+      logger.info({ removed: removed.count }, 'Pruned empty discovered categories');
     }
 
     // Update guard
-    db.prepare(
-      "INSERT OR REPLACE INTO agent_state (key, value, status, updated_at) VALUES (?, ?, 'active', datetime('now'))"
-    ).run(guardKey, new Date().toISOString());
+    await sql`
+      INSERT INTO agent_state (key, value, status, updated_at)
+      VALUES (${guardKey}, ${new Date().toISOString()}, 'active', NOW())
+      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+    `;
   } catch (error) {
     logger.debug({ error }, 'Category reorganization failed — non-critical');
   }

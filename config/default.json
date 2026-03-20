@@ -4,7 +4,8 @@
   "models": {
     "classifier": "claude-haiku-4-5-20251001",
     "planner": "claude-opus-4-6",
-    "executor": "claude-sonnet-4-6"
+    "executor": "claude-sonnet-4-6",
+    "reasoner": "claude-opus-4-6"
   },
   "rateLimits": {
     "actionsPerMinute": 30,
@@ -61,6 +62,14 @@
     "decayExemptCategories": ["preference", "commitment"],
     "archiveExemptCategories": ["preference", "commitment", "reflection"],
     "categoryReorgIntervalHours": 168
+  },
+  "tasks": {
+    "schedulerPollMs": 60000,
+    "allowSelfAssignment": true,
+    "autoApproveAgentTasks": false,
+    "reminderDelayMs": 3600000,
+    "maxConcurrentTasks": 1,
+    "taskExecutionTimeoutMs": 300000
   },
   "drive": {
     "syncBatchSize": 10,

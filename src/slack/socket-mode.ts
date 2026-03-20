@@ -15,6 +15,22 @@ import { WebClient } from '@slack/web-api';
 import { logger } from '../logger.js';
 import { SlackHandler, type SlackReactionAPI, type SlackMessageAPI } from './handler.js';
 
+/** Callback for task approval reactions. Set by start.ts after DB is ready. */
+let onTaskApprovalReaction: ((channel: string, messageTs: string) => Promise<void>) | null = null;
+
+/** Callback to resolve task context from a thread parent ts. */
+let onResolveTaskFromThread: ((channel: string, threadTs: string) => Promise<{ taskId: string; title: string } | null>) | null = null;
+
+/** Register a callback for task approval reactions. */
+export function setTaskApprovalHandler(handler: (channel: string, messageTs: string) => Promise<void>): void {
+  onTaskApprovalReaction = handler;
+}
+
+/** Register a callback to resolve tasks from thread replies. */
+export function setTaskThreadResolver(resolver: (channel: string, threadTs: string) => Promise<{ taskId: string; title: string } | null>): void {
+  onResolveTaskFromThread = resolver;
+}
+
 export interface SlackConnection {
   app: App;
   handler: SlackHandler;
@@ -74,31 +90,94 @@ export async function createSlackConnection(config: {
   };
 
   // ── Implement SlackMessageAPI ──
+
+  /** Slack's max message length. We use 3900 to leave room for block overhead. */
+  const SLACK_MAX_CHARS = 3900;
+
+  /**
+   * Split a long message into chunks at natural boundaries (paragraph, heading, hr).
+   * Each chunk stays under SLACK_MAX_CHARS.
+   */
+  function chunkMessage(text: string): string[] {
+    if (text.length <= SLACK_MAX_CHARS) return [text];
+
+    const chunks: string[] = [];
+    let remaining = text;
+
+    while (remaining.length > 0) {
+      if (remaining.length <= SLACK_MAX_CHARS) {
+        chunks.push(remaining);
+        break;
+      }
+
+      // Find a good break point within the limit
+      const slice = remaining.slice(0, SLACK_MAX_CHARS);
+      let breakAt = -1;
+
+      // Try to break at a horizontal rule
+      const hrMatch = slice.lastIndexOf('\n---');
+      if (hrMatch > SLACK_MAX_CHARS * 0.3) breakAt = hrMatch;
+
+      // Try double newline (paragraph boundary)
+      if (breakAt === -1) {
+        const paraMatch = slice.lastIndexOf('\n\n');
+        if (paraMatch > SLACK_MAX_CHARS * 0.3) breakAt = paraMatch;
+      }
+
+      // Try single newline
+      if (breakAt === -1) {
+        const nlMatch = slice.lastIndexOf('\n');
+        if (nlMatch > SLACK_MAX_CHARS * 0.3) breakAt = nlMatch;
+      }
+
+      // Hard break at limit if no good boundary found
+      if (breakAt === -1) breakAt = SLACK_MAX_CHARS;
+
+      chunks.push(remaining.slice(0, breakAt).trimEnd());
+      remaining = remaining.slice(breakAt).trimStart();
+    }
+
+    return chunks;
+  }
+
   const messages: SlackMessageAPI = {
     async post(channel: string, text: string, threadTs?: string) {
-      // Try native markdown block first, fall back to plain text
-      try {
-        const result = await botClient.chat.postMessage({
-          channel,
-          text, // fallback for notifications
-          blocks: [{ type: 'markdown', text }] as never[],
-          thread_ts: threadTs,
-        });
-        return { ts: result.ts as string };
-      } catch (error) {
-        // If markdown block is rejected, fall back to plain text
-        const errMsg = error instanceof Error ? error.message : '';
-        if (errMsg.includes('invalid_blocks') || errMsg.includes('markdown')) {
-          logger.debug('Markdown block not supported — falling back to plain text');
+      // Chunk long messages to avoid Slack's msg_too_long error
+      const chunks = chunkMessage(text);
+      let firstTs: string | undefined;
+
+      for (const chunk of chunks) {
+        // Try native markdown block first, fall back to plain text
+        try {
           const result = await botClient.chat.postMessage({
             channel,
-            text,
+            text: chunk, // fallback for notifications
+            blocks: [{ type: 'markdown', text: chunk }] as never[],
             thread_ts: threadTs,
           });
-          return { ts: result.ts as string };
+          if (!firstTs) firstTs = result.ts as string;
+        } catch (error) {
+          // If markdown block is rejected, fall back to plain text
+          const errMsg = error instanceof Error ? error.message : '';
+          if (errMsg.includes('invalid_blocks') || errMsg.includes('markdown')) {
+            logger.debug('Markdown block not supported — falling back to plain text');
+            const result = await botClient.chat.postMessage({
+              channel,
+              text: chunk,
+              thread_ts: threadTs,
+            });
+            if (!firstTs) firstTs = result.ts as string;
+          } else {
+            throw error;
+          }
         }
-        throw error;
       }
+
+      if (chunks.length > 1) {
+        logger.info({ chunks: chunks.length, totalLength: text.length }, 'Long message split into chunks');
+      }
+
+      return { ts: firstTs as string };
     },
     async update(channel: string, ts: string, text: string) {
       try {
@@ -167,13 +246,26 @@ export async function createSlackConnection(config: {
       const threadTs = msg.thread_ts as string | undefined;
       const channelType = msg.channel_type as string | undefined;
 
+      // If this is a thread reply, check if the parent is a pinned task message
+      let messageText = (msg.text as string) ?? '';
+      if (threadTs && onResolveTaskFromThread) {
+        try {
+          const taskInfo = await onResolveTaskFromThread(channel, threadTs);
+          if (taskInfo) {
+            // Prepend deterministic task context so the agent knows exactly which task
+            messageText = `[Task modification — task ID: ${taskInfo.taskId}, title: "${taskInfo.title}"]\n\nUser says: ${messageText}`;
+            logger.info({ taskId: taskInfo.taskId, title: taskInfo.title }, 'Thread reply matched to pinned task');
+          }
+        } catch { /* non-critical — fall through to normal processing */ }
+      }
+
       logger.info(
         { channel, user, ts, channelType },
         'User is asking something — routing to handler',
       );
 
       await handler.handleMessage({
-        text: (msg.text as string) ?? '',
+        text: messageText,
         channel,
         thread_ts: threadTs,
         user,
@@ -201,6 +293,28 @@ export async function createSlackConnection(config: {
   app.event('user_typing' as 'message', async ({ event }) => {
     const typingEvent = event as unknown as { channel: string; thread_ts?: string; user: string };
     handler.handleTyping(typingEvent);
+  });
+
+  // Reaction events — used for task approval (thumbs-up on proposal messages)
+  app.event('reaction_added', async ({ event }) => {
+    try {
+      const evt = event as unknown as Record<string, unknown>;
+      const reaction = evt.reaction as string;
+      const item = evt.item as Record<string, unknown>;
+      const user = evt.user as string;
+
+      // Only handle thumbs-up reactions from the owner
+      if (reaction !== '+1' && reaction !== 'thumbsup') return;
+
+      const channel = item.channel as string;
+      const messageTs = item.ts as string;
+
+      if (onTaskApprovalReaction) {
+        await onTaskApprovalReaction(channel, messageTs);
+      }
+    } catch (error) {
+      logger.debug({ error }, 'Reaction event handler error — non-critical');
+    }
   });
 
   // ── Wire Assistant Framework ──

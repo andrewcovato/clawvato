@@ -87,17 +87,3 @@ export function isModelLoaded(): boolean {
   return pipelineInstance !== null;
 }
 
-/**
- * Convert a Float32Array embedding to a format sqlite-vec can ingest.
- * sqlite-vec expects raw bytes (Uint8Array of the Float32Array buffer).
- */
-export function embeddingToBytes(embedding: Float32Array): Uint8Array {
-  return new Uint8Array(embedding.buffer, embedding.byteOffset, embedding.byteLength);
-}
-
-/**
- * Convert bytes from sqlite-vec back to a Float32Array.
- */
-export function bytesToEmbedding(bytes: Uint8Array): Float32Array {
-  return new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
-}

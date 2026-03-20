@@ -11,11 +11,17 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { logger } from '../logger.js';
 import { getConfig } from '../config.js';
-import { getDb, closeDb } from '../db/index.js';
+import { initDb, getDb, closeDb } from '../db/index.js';
 import { hasCredential, requireCredential } from '../credentials.js';
 import { createSlackConnection } from '../slack/socket-mode.js';
 import { createHybridAgent } from '../agent/hybrid.js';
 import { shouldConsolidate, consolidate } from '../memory/consolidation.js';
+import { startScheduler } from '../tasks/scheduler.js';
+import { executeScheduledTask } from '../tasks/executor.js';
+import { handleApprovalReaction } from '../tasks/approval.js';
+import { TaskChannelManager } from '../tasks/channel-manager.js';
+import { setTaskApprovalHandler, setTaskThreadResolver } from '../slack/socket-mode.js';
+import Anthropic from '@anthropic-ai/sdk';
 import type { WebClient } from '@slack/web-api';
 
 export async function startAgent(): Promise<void> {
@@ -23,17 +29,16 @@ export async function startAgent(): Promise<void> {
 
   logger.info({ dataDir: config.dataDir, trustLevel: config.trustLevel }, 'Starting Clawvato agent');
 
-  // ── Verify database ──
+  // ── Initialize database ──
+  await initDb();
   const db = getDb();
-  const version = db.prepare('SELECT version FROM schema_version ORDER BY version DESC LIMIT 1').get() as
-    | { version: number }
-    | undefined;
-  logger.info({ schemaVersion: version?.version ?? 0 }, 'Database connected');
+  const [version] = await db`SELECT version FROM schema_version ORDER BY version DESC LIMIT 1`;
+  logger.info({ schemaVersion: (version?.version as number) ?? 0 }, 'Database connected');
 
   // ── Run memory consolidation if due (>24h since last run) ──
-  if (shouldConsolidate(db)) {
+  if (await shouldConsolidate(db)) {
     try {
-      const result = consolidate(db);
+      const result = await consolidate(db);
       logger.info(result, 'Startup consolidation complete');
     } catch (error) {
       logger.warn({ error }, 'Startup consolidation failed — non-critical');
@@ -83,10 +88,29 @@ export async function startAgent(): Promise<void> {
 
   const slack = await createSlackConnection({ appToken, botToken, userToken });
 
+  // ── Resolve bot user ID ──
+  let botUserId: string | undefined;
+  try {
+    const auth = await slack.botClient.auth.test();
+    botUserId = auth.user_id as string | undefined;
+  } catch { /* non-critical */ }
+
   // ── Create the Hybrid Agent (fast path + deep path) ──
+  // ── Task channel manager (created before agent so tools get it) ──
+  let taskChannelManager: TaskChannelManager | undefined;
+  if (config.tasks.channelId) {
+    taskChannelManager = new TaskChannelManager({
+      botClient: slack.botClient,
+      messages: slack.handler.getMessages(),
+      sql: db,
+      channelId: config.tasks.channelId,
+    });
+  }
+
   const agent = await createHybridAgent({
     botClient: slack.botClient,
     userClient: slack.userClient,
+    taskChannelManager,
   });
 
   // ── Wire batch processing ──
@@ -94,16 +118,81 @@ export async function startAgent(): Promise<void> {
     await agent.processBatch(batch, slack.handler);
   });
 
-  // ── Periodic consolidation + backup (every 6h, guarded by shouldConsolidate) ──
-  const CONSOLIDATION_CHECK_MS = 6 * 60 * 60 * 1000; // 6 hours
-  const consolidationTimer = setInterval(() => {
+  // Reconcile task pins on startup
+  if (taskChannelManager) {
     try {
-      if (shouldConsolidate(db)) {
-        const result = consolidate(db);
+      const result = await taskChannelManager.reconcilePins();
+      logger.info(result, 'Task pins reconciled on startup');
+    } catch (err) {
+      logger.warn({ error: err }, 'Task pin reconciliation failed — non-critical');
+    }
+  }
+
+  // ── Build executor dependencies ──
+  const apiKey = process.env.ANTHROPIC_API_KEY ?? await requireCredential('anthropic-api-key');
+  const taskAnthropicClient = new Anthropic({ apiKey });
+  const taskFastPathTools = agent.getFastPathTools();
+
+  // ── Task scheduler ──
+  const scheduler = startScheduler({
+    sql: db,
+    executeTask: async (task) => {
+      return executeScheduledTask(task, {
+        sql: db,
+        anthropicClient: taskAnthropicClient,
+        botClient: slack.botClient,
+        fastPathTools: taskFastPathTools,
+        channelManager: taskChannelManager,
+        botUserId,
+      });
+    },
+    postReminder: taskChannelManager ? async (task) => {
+      if (!task.pin_message_ts) return;
+      try {
+        const reminderText = config.ownerSlackUserId
+          ? `<@${config.ownerSlackUserId}> Reminder: this task is waiting for your approval. React :thumbsup: to approve, or reply to discuss.`
+          : `Reminder: this task is waiting for your approval.`;
+        await taskChannelManager!.postThreadReply(task.pin_message_ts, reminderText);
+      } catch (err) {
+        logger.debug({ error: err, taskId: task.id }, 'Failed to post task reminder');
+      }
+    } : undefined,
+  });
+
+  // ── Wire task approval reactions ──
+  setTaskApprovalHandler(async (channel, messageTs) => {
+    await handleApprovalReaction(db, channel, messageTs, taskChannelManager);
+  });
+
+  // ── Wire task thread resolver (deterministic task matching for thread replies) ──
+  if (taskChannelManager) {
+    setTaskThreadResolver(async (channel, threadTs) => {
+      if (channel !== config.tasks.channelId) return null;
+      const task = await taskChannelManager!.findTaskByPinTs(threadTs);
+      if (!task) return null;
+      return { taskId: task.id, title: task.title };
+    });
+  }
+
+  // ── Periodic consolidation + pin sync (every 6h) ──
+  const CONSOLIDATION_CHECK_MS = 6 * 60 * 60 * 1000; // 6 hours
+  const consolidationTimer = setInterval(async () => {
+    try {
+      if (await shouldConsolidate(db)) {
+        const result = await consolidate(db);
         logger.info(result, 'Periodic consolidation complete');
       }
     } catch (error) {
       logger.warn({ error }, 'Periodic consolidation failed — non-critical');
+    }
+
+    // Periodic pin sync
+    if (taskChannelManager) {
+      try {
+        await taskChannelManager.reconcilePins();
+      } catch (error) {
+        logger.debug({ error }, 'Periodic pin sync failed — non-critical');
+      }
     }
   }, CONSOLIDATION_CHECK_MS);
 
@@ -112,9 +201,10 @@ export async function startAgent(): Promise<void> {
     logger.info('Shutting down...');
     try { writeFileSync(join(config.dataDir, 'last-active.txt'), String(Date.now()), 'utf-8'); } catch { /* */ }
     clearInterval(consolidationTimer);
+    scheduler.stop();
     await agent.shutdown();
     await slack.stop();
-    closeDb();
+    await closeDb();
     process.exit(0);
   };
 

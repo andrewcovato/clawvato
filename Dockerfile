@@ -17,7 +17,7 @@ COPY tools/ ./tools/
 RUN npm run build
 
 # Copy non-TS assets that tsc doesn't emit
-COPY src/db/schema.sql ./dist/db/schema.sql
+COPY src/db/schema.pg.sql ./dist/db/schema.pg.sql
 
 # Keep tsx available for tools/fireflies.ts and MCP server
 # (npm prune --omit=dev removes tsx, so we keep it)

@@ -11,31 +11,26 @@
  */
 
 import type Anthropic from '@anthropic-ai/sdk';
-import type { DatabaseSync } from 'node:sqlite';
+import type { Sql } from '../db/index.js';
 import { logger } from '../logger.js';
 import { getRecentMemories, insertMemory, type Memory } from './store.js';
 import { getPrompts } from '../prompts.js';
 import { getConfig } from '../config.js';
 
-/** Cumulative importance threshold to trigger reflection */
-// Reflection threshold loaded from config (memory.reflectionThreshold)
-
 /** Key used to store last reflection timestamp in agent_state */
 const LAST_REFLECTION_KEY = 'last_reflection_at';
-
-// Prompt loaded from config/prompts/reflection.md
 
 /**
  * Check if reflection should be triggered, and if so, run it.
  * Call this after storing new memories.
  */
 export async function maybeReflect(
-  db: DatabaseSync,
+  sql: Sql,
   client: Anthropic,
   model: string,
 ): Promise<{ reflected: boolean; insightsGenerated: number }> {
-  const lastReflectionAt = getLastReflectionTime(db);
-  const recentMemories = getRecentMemories(db, lastReflectionAt, { limit: 100 });
+  const lastReflectionAt = await getLastReflectionTime(sql);
+  const recentMemories = await getRecentMemories(sql, lastReflectionAt, { limit: 100 });
 
   if (recentMemories.length === 0) {
     return { reflected: false, insightsGenerated: 0 };
@@ -56,10 +51,10 @@ export async function maybeReflect(
     'Reflection triggered — generating insights',
   );
 
-  const insightsGenerated = await runReflection(db, client, model, recentMemories);
+  const insightsGenerated = await runReflection(sql, client, model, recentMemories);
 
   // Update last reflection time
-  setLastReflectionTime(db);
+  await setLastReflectionTime(sql);
 
   return { reflected: true, insightsGenerated };
 }
@@ -68,7 +63,7 @@ export async function maybeReflect(
  * Run the reflection process — ask Haiku to synthesize insights.
  */
 async function runReflection(
-  db: DatabaseSync,
+  sql: Sql,
   client: Anthropic,
   model: string,
   recentMemories: Memory[],
@@ -103,7 +98,7 @@ async function runReflection(
     for (const insight of insights) {
       if (!insight.content || typeof insight.content !== 'string') continue;
 
-      insertMemory(db, {
+      await insertMemory(sql, {
         type: 'reflection',
         content: config.memory.extractionContentMaxChars > 0
           ? String(insight.content).slice(0, config.memory.extractionContentMaxChars)
@@ -126,12 +121,10 @@ async function runReflection(
 /**
  * Get the last reflection timestamp from the agent_state table.
  */
-function getLastReflectionTime(db: DatabaseSync): string {
+async function getLastReflectionTime(sql: Sql): Promise<string> {
   try {
-    const row = db.prepare(
-      `SELECT value FROM agent_state WHERE key = ?`
-    ).get(LAST_REFLECTION_KEY) as { value: string } | undefined;
-    return row?.value ?? '2000-01-01T00:00:00';
+    const [row] = await sql`SELECT value FROM agent_state WHERE key = ${LAST_REFLECTION_KEY}`;
+    return (row?.value as string) ?? '2000-01-01T00:00:00';
   } catch {
     return '2000-01-01T00:00:00';
   }
@@ -140,13 +133,14 @@ function getLastReflectionTime(db: DatabaseSync): string {
 /**
  * Record the current time as the last reflection time in agent_state.
  */
-function setLastReflectionTime(db: DatabaseSync): void {
+async function setLastReflectionTime(sql: Sql): Promise<void> {
   const now = new Date().toISOString();
   try {
-    db.prepare(`
-      INSERT OR REPLACE INTO agent_state (key, value, status, updated_at)
-      VALUES (?, ?, 'active', ?)
-    `).run(LAST_REFLECTION_KEY, now, now);
+    await sql`
+      INSERT INTO agent_state (key, value, status, updated_at)
+      VALUES (${LAST_REFLECTION_KEY}, ${now}, 'active', NOW())
+      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+    `;
   } catch (error) {
     logger.debug({ error }, 'Failed to record reflection time — non-critical');
   }

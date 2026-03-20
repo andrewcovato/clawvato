@@ -1,37 +1,31 @@
 /**
  * Tests for the Memory Retriever — token-budgeted context retrieval.
  *
- * Seeds a real SQLite database with known memories and verifies the
+ * Seeds a real Postgres database with known memories and verifies the
  * retriever returns the right context within budget.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
-import { loadConfig } from '../../src/config.js';
-import { initDb, closeDb } from '../../src/db/index.js';
+import { createTestDb, type TestSql } from '../helpers/pg-test.js';
 import { insertMemory, insertPerson, getMemory } from '../../src/memory/store.js';
 import { retrieveContext, extractEntities } from '../../src/memory/retriever.js';
-import type { DatabaseSync } from 'node:sqlite';
 
-let db: DatabaseSync;
-let tmpDir: string;
+let sql: TestSql;
+let cleanup: () => Promise<void>;
 
-beforeEach(() => {
-  tmpDir = mkdtempSync(join(tmpdir(), 'clawvato-test-'));
-  loadConfig({ dataDir: tmpDir });
-  db = initDb();
+beforeEach(async () => {
+  const testDb = await createTestDb();
+  sql = testDb.sql;
+  cleanup = testDb.cleanup;
 });
 
-afterEach(() => {
-  closeDb();
-  rmSync(tmpDir, { recursive: true, force: true });
+afterEach(async () => {
+  await cleanup();
 });
 
 describe('retrieveContext', () => {
   it('returns empty context when no memories exist', async () => {
-    const result = await retrieveContext(db, 'hello world');
+    const result = await retrieveContext(sql, 'hello world');
 
     expect(result.context).toBe('');
     expect(result.memoriesRetrieved).toBe(0);
@@ -40,14 +34,14 @@ describe('retrieveContext', () => {
   });
 
   it('retrieves people mentioned in the message', async () => {
-    insertPerson(db, {
+    await insertPerson(sql, {
       name: 'Jake Wilson',
       email: 'jake@corp.com',
       role: 'Engineer',
       organization: 'Acme',
     });
 
-    const result = await retrieveContext(db, 'Can you schedule a meeting with Jake Wilson?');
+    const result = await retrieveContext(sql, 'Can you schedule a meeting with Jake Wilson?');
 
     expect(result.peopleRetrieved).toBe(1);
     expect(result.context).toContain('Jake Wilson');
@@ -56,7 +50,7 @@ describe('retrieveContext', () => {
   });
 
   it('retrieves preferences via semantic search', async () => {
-    insertMemory(db, {
+    await insertMemory(sql, {
       type: 'preference',
       content: 'Andrew prefers meetings after 10am',
       source: 'test',
@@ -64,15 +58,15 @@ describe('retrieveContext', () => {
       confidence: 1.0,
     });
 
-    // Preferences surface via FTS5 when query keywords overlap
-    const result = await retrieveContext(db, 'When does Andrew prefer meetings?');
+    // Preferences surface via FTS when query keywords overlap
+    const result = await retrieveContext(sql, 'When does Andrew prefer meetings?');
 
     expect(result.memoriesRetrieved).toBeGreaterThanOrEqual(1);
     expect(result.context).toContain('meetings after 10am');
   });
 
   it('retrieves memories matching entity names', async () => {
-    insertMemory(db, {
+    await insertMemory(sql, {
       type: 'fact',
       content: 'Jake is on the sales team',
       source: 'test',
@@ -80,20 +74,20 @@ describe('retrieveContext', () => {
       entities: ['Jake'],
     });
 
-    const result = await retrieveContext(db, 'What team is Jake on?');
+    const result = await retrieveContext(sql, 'What team is Jake on?');
 
     expect(result.context).toContain('sales team');
   });
 
   it('retrieves facts via keyword search', async () => {
-    insertMemory(db, {
+    await insertMemory(sql, {
       type: 'fact',
       content: 'The quarterly budget review happens every Friday',
       source: 'test',
       importance: 7,
     });
 
-    const result = await retrieveContext(db, 'When is the budget review?');
+    const result = await retrieveContext(sql, 'When is the budget review?');
 
     expect(result.memoriesRetrieved).toBeGreaterThanOrEqual(1);
     expect(result.context).toContain('budget review');
@@ -102,7 +96,7 @@ describe('retrieveContext', () => {
   it('respects token budget', async () => {
     // Insert many memories with common keywords
     for (let i = 0; i < 20; i++) {
-      insertMemory(db, {
+      await insertMemory(sql, {
         type: 'fact',
         content: `Meeting update number ${i}: The quarterly budget review discussion covered important financial topics`,
         source: 'test',
@@ -110,7 +104,7 @@ describe('retrieveContext', () => {
       });
     }
 
-    const result = await retrieveContext(db, 'quarterly budget review meeting', { tokenBudget: 200 });
+    const result = await retrieveContext(sql, 'quarterly budget review meeting', { tokenBudget: 200 });
 
     // Should not exceed budget
     expect(result.tokensUsed).toBeLessThanOrEqual(200);
@@ -121,21 +115,21 @@ describe('retrieveContext', () => {
   });
 
   it('touches retrieved memories (updates access tracking)', async () => {
-    const id = insertMemory(db, {
+    const id = await insertMemory(sql, {
       type: 'preference',
       content: 'Andrew prefers short meetings over long discussions',
       source: 'test',
       importance: 8,
     });
 
-    await retrieveContext(db, 'What does Andrew prefer about meetings?');
+    await retrieveContext(sql, 'What does Andrew prefer about meetings?');
 
-    const memory = getMemory(db, id);
+    const memory = await getMemory(sql, id);
     expect(memory!.access_count).toBeGreaterThanOrEqual(1);
   });
 
   it('includes decisions via semantic search', async () => {
-    insertMemory(db, {
+    await insertMemory(sql, {
       type: 'decision',
       content: 'Andrew decided to use view-only sharing by default for all files',
       source: 'test',
@@ -143,27 +137,27 @@ describe('retrieveContext', () => {
       confidence: 1.0,
     });
 
-    // Decisions surface via FTS5 when query keywords overlap
-    const result = await retrieveContext(db, 'What sharing default view-only decision?');
+    // Decisions surface via FTS when query keywords overlap
+    const result = await retrieveContext(sql, 'What sharing default view-only decision?');
 
     expect(result.context).toContain('view-only');
   });
 
   it('formats context with ## Memory header', async () => {
-    insertMemory(db, {
+    await insertMemory(sql, {
       type: 'preference',
       content: 'Andrew prefers concise emails over long ones',
       source: 'test',
       importance: 8,
     });
 
-    const result = await retrieveContext(db, 'What are Andrew preferences about emails?');
+    const result = await retrieveContext(sql, 'What are Andrew preferences about emails?');
 
     expect(result.context).toMatch(/^## Memory/);
   });
 
   it('shows confidence for low-confidence memories', async () => {
-    insertMemory(db, {
+    await insertMemory(sql, {
       type: 'fact',
       content: 'Jake might be switching teams',
       source: 'test',
@@ -171,20 +165,20 @@ describe('retrieveContext', () => {
       entities: ['Jake'],
     });
 
-    const result = await retrieveContext(db, 'What is Jake doing?');
+    const result = await retrieveContext(sql, 'What is Jake doing?');
 
     expect(result.context).toContain('50% confident');
   });
 
   it('does not show confidence for high-confidence memories', async () => {
-    insertMemory(db, {
+    await insertMemory(sql, {
       type: 'preference',
       content: 'Andrew prefers email',
       source: 'test',
       confidence: 0.95,
     });
 
-    const result = await retrieveContext(db, 'How should I contact Andrew?');
+    const result = await retrieveContext(sql, 'How should I contact Andrew?');
 
     expect(result.context).not.toContain('confident');
   });

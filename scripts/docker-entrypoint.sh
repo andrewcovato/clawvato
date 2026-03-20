@@ -1,12 +1,6 @@
 #!/bin/sh
 set -e
 
-# ── One-time DB wipe (remove RESET_DB env var after use) ──
-if [ "$RESET_DB" = "1" ]; then
-  echo "[entrypoint] RESET_DB=1 — wiping database"
-  rm -f /data/clawvato.db /data/clawvato.db-wal /data/clawvato.db-shm
-fi
-
 # ── Claude CLI auth persistence ──
 mkdir -p /data/claude-config /data/claude-config/backups
 rm -f /root/.claude

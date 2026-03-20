@@ -19,7 +19,7 @@
 import { google } from 'googleapis';
 import { createHash } from 'node:crypto';
 import type Anthropic from '@anthropic-ai/sdk';
-import type { DatabaseSync } from 'node:sqlite';
+import type { Sql } from '../db/index.js';
 import { logger } from '../logger.js';
 import { getConfig } from '../config.js';
 import { getPrompts } from '../prompts.js';
@@ -82,75 +82,69 @@ export interface DeepReadResult {
 
 // ── Document CRUD ──
 
-export function getDocument(db: DatabaseSync, sourceType: string, sourceId: string): Document | null {
-  const row = db.prepare(
-    'SELECT * FROM documents WHERE source_type = ? AND source_id = ?'
-  ).get(sourceType, sourceId);
+export async function getDocument(db: Sql, sourceType: string, sourceId: string): Promise<Document | null> {
+  const [row] = await db`SELECT * FROM documents WHERE source_type = ${sourceType} AND source_id = ${sourceId}`;
   return row ? row as unknown as Document : null;
 }
 
-export function upsertDocument(
-  db: DatabaseSync,
+export async function upsertDocument(
+  db: Sql,
   doc: Omit<Document, 'id' | 'created_at'> & { id?: string },
-): string {
-  const existing = getDocument(db, doc.source_type, doc.source_id);
+): Promise<string> {
+  const existing = await getDocument(db, doc.source_type, doc.source_id);
   const entities = doc.entities ?? '[]';
   if (existing) {
-    db.prepare(`
-      UPDATE documents SET name = ?, mime_type = ?, folder_path = ?, owner = ?,
-        modified_time = ?, content_hash = ?, summary = ?, entities = ?, last_synced_at = ?,
-        deep_read_at = ?, status = ?
-      WHERE id = ?
-    `).run(
-      doc.name, doc.mime_type ?? null, doc.folder_path ?? null, doc.owner ?? null,
-      doc.modified_time ?? null, doc.content_hash ?? null, doc.summary ?? null,
-      entities, doc.last_synced_at ?? null, doc.deep_read_at ?? null, doc.status,
-      existing.id,
-    );
+    await db`
+      UPDATE documents SET name = ${doc.name}, mime_type = ${doc.mime_type ?? null},
+        folder_path = ${doc.folder_path ?? null}, owner = ${doc.owner ?? null},
+        modified_time = ${doc.modified_time ?? null}, content_hash = ${doc.content_hash ?? null},
+        summary = ${doc.summary ?? null}, entities = ${entities},
+        last_synced_at = ${doc.last_synced_at ?? null}, deep_read_at = ${doc.deep_read_at ?? null},
+        status = ${doc.status}
+      WHERE id = ${existing.id}
+    `;
     return existing.id;
   }
 
   const id = doc.id ?? generateId();
-  db.prepare(`
+  await db`
     INSERT INTO documents (id, source_type, source_id, name, mime_type, folder_path, owner,
       modified_time, content_hash, summary, entities, last_synced_at, deep_read_at, status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    id, doc.source_type, doc.source_id, doc.name, doc.mime_type ?? null,
-    doc.folder_path ?? null, doc.owner ?? null, doc.modified_time ?? null,
-    doc.content_hash ?? null, doc.summary ?? null, entities,
-    doc.last_synced_at ?? null, doc.deep_read_at ?? null, doc.status,
-  );
+    VALUES (${id}, ${doc.source_type}, ${doc.source_id}, ${doc.name}, ${doc.mime_type ?? null},
+      ${doc.folder_path ?? null}, ${doc.owner ?? null}, ${doc.modified_time ?? null},
+      ${doc.content_hash ?? null}, ${doc.summary ?? null}, ${entities},
+      ${doc.last_synced_at ?? null}, ${doc.deep_read_at ?? null}, ${doc.status})
+  `;
   return id;
 }
 
-export function listDocuments(db: DatabaseSync, opts?: { status?: string; limit?: number }): Document[] {
+export async function listDocuments(db: Sql, opts?: { status?: string; limit?: number }): Promise<Document[]> {
   const status = opts?.status ?? 'active';
   const limit = opts?.limit ?? 200;
-  return db.prepare(
-    'SELECT * FROM documents WHERE status = ? ORDER BY modified_time DESC LIMIT ?'
-  ).all(status, limit) as unknown as Document[];
+  return await db`
+    SELECT * FROM documents WHERE status = ${status} ORDER BY modified_time DESC LIMIT ${limit}
+  ` as unknown as Document[];
 }
 
 /**
  * Find documents mentioning a specific entity (person, company, topic).
  */
-export function findDocumentsByEntity(db: DatabaseSync, entity: string, opts?: { limit?: number }): Document[] {
+export async function findDocumentsByEntity(db: Sql, entity: string, opts?: { limit?: number }): Promise<Document[]> {
   const limit = opts?.limit ?? 5;
-  const escapedEntity = entity.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
-  // Search both name and entities JSON array
-  return db.prepare(`
+  const pattern = `%${entity}%`;
+  return await db`
     SELECT * FROM documents
     WHERE status = 'active'
-      AND (entities LIKE ? ESCAPE '\\' OR name LIKE ? ESCAPE '\\')
-    ORDER BY modified_time DESC LIMIT ?
-  `).all(`%${escapedEntity}%`, `%${escapedEntity}%`, limit) as unknown as Document[];
+      AND (entities ILIKE ${pattern} OR name ILIKE ${pattern})
+    ORDER BY modified_time DESC LIMIT ${limit}
+  ` as unknown as Document[];
 }
 
-export function findDocumentByName(db: DatabaseSync, name: string): Document | null {
-  const row = db.prepare(
-    "SELECT * FROM documents WHERE name LIKE ? AND status = 'active' ORDER BY modified_time DESC LIMIT 1"
-  ).get(`%${name}%`);
+export async function findDocumentByName(db: Sql, name: string): Promise<Document | null> {
+  const [row] = await db`
+    SELECT * FROM documents WHERE name ILIKE ${`%${name}%`} AND status = 'active'
+    ORDER BY modified_time DESC LIMIT 1
+  `;
   return row ? row as unknown as Document : null;
 }
 
@@ -411,30 +405,30 @@ function buildFileEntities(entities: string[], folderPath: string | null): strin
  * Store a file summary as a memory, linking it back to the document via source.
  * Supersedes any existing memory for this file.
  */
-function storeFileSummaryAsMemory(
-  db: DatabaseSync,
+async function storeFileSummaryAsMemory(
+  db: Sql,
   fileId: string,
   fileName: string,
   folderPath: string | null,
   summary: string,
   entities: string[],
   modifiedTime: string,
-): void {
+): Promise<void> {
   const source = `drive:${fileId}:${modifiedTime}`;
   const content = buildFileMemoryContent(fileName, folderPath, summary);
   const allEntities = buildFileEntities(entities, folderPath);
 
   // Supersede any existing memory from this file
   const existingPattern = `drive:${fileId}:%`;
-  const existing = db.prepare(`
+  const [existing] = await db`
     SELECT id FROM memories
-    WHERE source LIKE ? AND valid_until IS NULL AND type = 'fact'
+    WHERE source LIKE ${existingPattern} AND valid_until IS NULL AND type = 'fact'
     ORDER BY created_at DESC LIMIT 1
-  `).get(existingPattern) as { id: string } | undefined;
+  `;
 
   logger.info({ fileId, content: content.slice(0, 200), entities: allEntities }, 'Storing file summary as memory');
 
-  const newId = insertMemory(db, {
+  const newId = await insertMemory(db, {
     type: 'fact',
     content,
     source,
@@ -444,15 +438,15 @@ function storeFileSummaryAsMemory(
   });
 
   if (existing) {
-    supersedeMemory(db, existing.id, newId);
-    deleteEmbedding(db, existing.id);
+    await supersedeMemory(db, existing.id as string, newId);
+    await deleteEmbedding(db, existing.id as string);
   }
 
   // Embed the new memory
-  if (hasVectorSupport(db)) {
-    embedBatch([content]).then(embeddings => {
+  if (await hasVectorSupport(db)) {
+    embedBatch([content]).then(async embeddings => {
       if (embeddings.length > 0) {
-        insertEmbedding(db, newId, embeddings[0]);
+        await insertEmbedding(db, newId, embeddings[0]);
       }
     }).catch(() => { /* non-critical */ });
   }
@@ -466,7 +460,7 @@ function storeFileSummaryAsMemory(
  */
 export async function syncDrive(
   auth: InstanceType<typeof google.auth.OAuth2>,
-  db: DatabaseSync,
+  db: Sql,
   client: Anthropic,
   model: string,
   opts?: { folderId?: string; maxFiles?: number },
@@ -536,7 +530,7 @@ export async function syncDrive(
 
   // ── 2. Compare against document registry ──
   const existingDocs = new Map<string, Document>();
-  for (const doc of listDocuments(db, { limit: 10000 })) {
+  for (const doc of await listDocuments(db, { limit: 10000 })) {
     if (doc.source_type === 'gdrive') {
       existingDocs.set(doc.source_id, doc);
     }
@@ -580,7 +574,7 @@ export async function syncDrive(
       summariesGenerated++;
       logger.debug({ name: file.name, folderPath, summaryLen: summary.length, entities: fileEntities.length }, 'Generated summary for new file');
 
-      upsertDocument(db, {
+      await upsertDocument(db, {
         source_type: 'gdrive',
         source_id: file.id,
         name: file.name,
@@ -598,7 +592,7 @@ export async function syncDrive(
 
       // Store summary as a memory so it flows through the standard retrieval pipeline
       if (summary) {
-        storeFileSummaryAsMemory(db, file.id, file.name, folderPath, summary, fileEntities, file.modifiedTime);
+        await storeFileSummaryAsMemory(db, file.id, file.name, folderPath, summary, fileEntities, file.modifiedTime);
       }
       newFiles++;
 
@@ -615,7 +609,7 @@ export async function syncDrive(
         const fileEntities = JSON.stringify(genEntities);
         summariesGenerated++;
 
-        upsertDocument(db, {
+        await upsertDocument(db, {
           source_type: 'gdrive',
           source_id: file.id,
           name: file.name,
@@ -632,25 +626,27 @@ export async function syncDrive(
         });
 
         // Flag memories from old version as potentially stale
-        flagStaleMemories(db, file.id, file.modifiedTime);
+        await flagStaleMemories(db, file.id, file.modifiedTime);
 
         // Update the summary memory
         if (summary) {
           const entityList = typeof fileEntities === 'string' ? JSON.parse(fileEntities) : fileEntities;
-          storeFileSummaryAsMemory(db, file.id, file.name, existing.folder_path, summary, entityList, file.modifiedTime);
+          await storeFileSummaryAsMemory(db, file.id, file.name, existing.folder_path, summary, entityList, file.modifiedTime);
         }
         updatedFiles++;
       } else {
         // Content unchanged — just update sync time
-        db.prepare(
-          "UPDATE documents SET last_synced_at = ?, modified_time = ? WHERE source_type = 'gdrive' AND source_id = ?"
-        ).run(now, file.modifiedTime, file.id);
+        await db`
+          UPDATE documents SET last_synced_at = ${now}, modified_time = ${file.modifiedTime}
+          WHERE source_type = 'gdrive' AND source_id = ${file.id}
+        `;
       }
     } else {
       // Unchanged — update sync time
-      db.prepare(
-        "UPDATE documents SET last_synced_at = ? WHERE source_type = 'gdrive' AND source_id = ?"
-      ).run(now, file.id);
+      await db`
+        UPDATE documents SET last_synced_at = ${now}
+        WHERE source_type = 'gdrive' AND source_id = ${file.id}
+      `;
     }
     } // end sequential DB writes
   } // end batch loop
@@ -659,16 +655,17 @@ export async function syncDrive(
   const toBackfill: Array<{ fileId: string; name: string; folderPath: string | null; summary: string; entities: string[]; modifiedTime: string; existingMemoryId?: string }> = [];
 
   for (const file of driveFiles) {
-    const doc = getDocument(db, 'gdrive', file.id);
+    const doc = await getDocument(db, 'gdrive', file.id);
     if (!doc || !doc.summary) continue;
 
     const entities = doc.entities ? JSON.parse(doc.entities) as string[] : [];
     const expectedContent = buildFileMemoryContent(doc.name, doc.folder_path, doc.summary);
 
     // Check if a current, correct memory exists for this file
-    const existingMemory = db.prepare(
-      "SELECT id, content FROM memories WHERE source LIKE ? AND valid_until IS NULL AND type = 'fact' LIMIT 1"
-    ).get(`drive:${file.id}:%`) as { id: string; content: string } | undefined;
+    const [existingMemory] = await db`
+      SELECT id, content FROM memories
+      WHERE source LIKE ${`drive:${file.id}:%`} AND valid_until IS NULL AND type = 'fact' LIMIT 1
+    ` as unknown as [{ id: string; content: string } | undefined];
 
     const needsUpdate = !existingMemory || existingMemory.content !== expectedContent;
 
@@ -696,7 +693,7 @@ export async function syncDrive(
       const content = buildFileMemoryContent(item.name, item.folderPath, item.summary);
       const entities = buildFileEntities(item.entities, item.folderPath);
 
-      const newId = insertMemory(db, {
+      const newId = await insertMemory(db, {
         type: 'fact',
         content,
         source,
@@ -707,8 +704,8 @@ export async function syncDrive(
 
       // Supersede the old memory if it existed but was outdated
       if (item.existingMemoryId) {
-        supersedeMemory(db, item.existingMemoryId, newId);
-        deleteEmbedding(db, item.existingMemoryId);
+        await supersedeMemory(db, item.existingMemoryId, newId);
+        await deleteEmbedding(db, item.existingMemoryId);
       }
 
       newMemoryIds.push({ id: newId, content });
@@ -716,11 +713,11 @@ export async function syncDrive(
     }
 
     // Batch embed all at once (one call instead of N)
-    if (newMemoryIds.length > 0 && hasVectorSupport(db)) {
+    if (newMemoryIds.length > 0 && await hasVectorSupport(db)) {
       try {
         const embeddings = await embedBatch(newMemoryIds.map(m => m.content));
         for (let i = 0; i < newMemoryIds.length; i++) {
-          insertEmbedding(db, newMemoryIds[i].id, embeddings[i]);
+          await insertEmbedding(db, newMemoryIds[i].id, embeddings[i]);
         }
         logger.info({ count: newMemoryIds.length }, 'Batch embedded backfilled memories');
       } catch (error) {
@@ -735,10 +732,8 @@ export async function syncDrive(
   let removedFiles = 0;
   for (const [sourceId, doc] of existingDocs) {
     if (!seenIds.has(sourceId) && doc.status === 'active') {
-      db.prepare(
-        "UPDATE documents SET status = 'removed', last_synced_at = ? WHERE id = ?"
-      ).run(now, doc.id);
-      flagStaleMemories(db, sourceId, 'removed');
+      await db`UPDATE documents SET status = 'removed', last_synced_at = ${now} WHERE id = ${doc.id}`;
+      await flagStaleMemories(db, sourceId, 'removed');
       removedFiles++;
     }
   }
@@ -761,7 +756,7 @@ export async function syncDrive(
  */
 export async function deepReadFile(
   auth: InstanceType<typeof google.auth.OAuth2>,
-  db: DatabaseSync,
+  db: Sql,
   client: Anthropic,
   model: string,
   fileId: string,
@@ -869,7 +864,7 @@ export async function deepReadFile(
       const entities = Array.isArray(fact.entities) ? fact.entities.map(String) : [];
 
       // Check for conflicts with existing memories
-      const duplicates = findDuplicates(db, factContent, factType);
+      const duplicates = await findDuplicates(db, factContent, factType);
       const closeMatch = duplicates.find(d => contentSimilarity(d.content, factContent) > 0.7);
 
       if (closeMatch) {
@@ -882,16 +877,16 @@ export async function deepReadFile(
         }
 
         if (confidence > closeMatch.confidence || !isSlackSource) {
-          const newId = insertMemory(db, {
+          const newId = await insertMemory(db, {
             type: factType, content: factContent, source, importance, confidence, entities,
           });
-          supersedeMemory(db, closeMatch.id, newId);
-          deleteEmbedding(db, closeMatch.id);
+          await supersedeMemory(db, closeMatch.id, newId);
+          await deleteEmbedding(db, closeMatch.id);
           newMemoryIds.push({ id: newId, content: factContent });
           factsExtracted++;
         }
       } else {
-        const newId = insertMemory(db, {
+        const newId = await insertMemory(db, {
           type: factType, content: factContent, source, importance, confidence, entities,
         });
         newMemoryIds.push({ id: newId, content: factContent });
@@ -900,11 +895,11 @@ export async function deepReadFile(
     }
 
     // Embed new memories
-    if (newMemoryIds.length > 0 && hasVectorSupport(db)) {
+    if (newMemoryIds.length > 0 && await hasVectorSupport(db)) {
       try {
         const embeddings = await embedBatch(newMemoryIds.map(m => m.content));
         for (let i = 0; i < newMemoryIds.length; i++) {
-          insertEmbedding(db, newMemoryIds[i].id, embeddings[i]);
+          await insertEmbedding(db, newMemoryIds[i].id, embeddings[i]);
         }
       } catch (error) {
         logger.debug({ error }, 'Embedding generation failed for doc facts');
@@ -912,10 +907,10 @@ export async function deepReadFile(
     }
 
     // Update document record
-    db.prepare(`
-      UPDATE documents SET deep_read_at = datetime('now'), last_synced_at = datetime('now')
-      WHERE source_type = 'gdrive' AND source_id = ?
-    `).run(fileId);
+    await db`
+      UPDATE documents SET deep_read_at = NOW(), last_synced_at = NOW()
+      WHERE source_type = 'gdrive' AND source_id = ${fileId}
+    `;
 
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
@@ -1017,14 +1012,14 @@ async function synthesizeFacts(
  * Flag memories sourced from a file as potentially stale.
  * Reduces confidence of memories from older versions of the file.
  */
-function flagStaleMemories(db: DatabaseSync, fileId: string, newModifiedTime: string): void {
+async function flagStaleMemories(db: Sql, fileId: string, newModifiedTime: string): Promise<void> {
   const pattern = `drive:${fileId}:%`;
-  const result = db.prepare(`
+  const result = await db`
     UPDATE memories SET confidence = confidence * 0.5
-    WHERE source LIKE ? AND valid_until IS NULL AND confidence > 0.3
-  `).run(pattern);
+    WHERE source LIKE ${pattern} AND valid_until IS NULL AND confidence > 0.3
+  `;
 
-  const count = Number(result.changes ?? 0);
+  const count = Number(result.count ?? 0);
   if (count > 0) {
     logger.info({ fileId, memoriesFlagged: count }, 'Flagged stale memories from modified file');
   }
