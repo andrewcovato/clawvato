@@ -1,12 +1,9 @@
 /**
  * Drive Collector — file metadata + content summaries for sweep synthesis.
  *
- * Lists new/modified files since last sweep, extracts a content snippet
- * from each, and formats as markdown for cross-referencing with Slack,
- * Gmail, and Fireflies content during Opus synthesis.
- *
- * For backfill: processes all files (slow, one-time cost).
- * For incremental: only new/modified files (fast, ~5-10 files).
+ * Lists new/modified files since last sweep via Google Drive API,
+ * extracts a content snippet from each, and formats as markdown for
+ * cross-referencing during Opus synthesis.
  *
  * High-water mark: sweep:drive:last_sync (ISO date of last sync)
  */
@@ -42,22 +39,9 @@ export function createDriveCollector(
       const lastSync = await getHighWaterMark(sql, hwmKey);
 
       try {
-        // Query files modified since last sweep — business-relevant types only
-        const relevantTypes = [
-          "mimeType = 'application/vnd.google-apps.document'",       // Google Docs
-          "mimeType = 'application/vnd.google-apps.spreadsheet'",    // Google Sheets
-          "mimeType = 'application/vnd.google-apps.presentation'",   // Google Slides
-          "mimeType = 'application/pdf'",                             // PDFs
-          "mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'",  // .docx
-          "mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'",        // .xlsx
-          "mimeType = 'application/vnd.openxmlformats-officedocument.presentationml.presentation'", // .pptx
-          "mimeType = 'application/msword'",                          // .doc
-          "mimeType = 'application/vnd.ms-excel'",                    // .xls
-          "mimeType = 'application/vnd.ms-powerpoint'",               // .ppt
-          "mimeType = 'text/plain'",                                  // .txt
-          "mimeType = 'text/csv'",                                    // .csv
-        ];
-        let q = `trashed = false and (${relevantTypes.join(' or ')})`;
+        // Query all non-folder, non-trashed files — no MIME type filter.
+        // Synthesis decides what's relevant, not the collector.
+        let q = "trashed = false and mimeType != 'application/vnd.google-apps.folder'";
         if (lastSync) {
           q += ` and modifiedTime > '${lastSync}'`;
         }
@@ -79,6 +63,9 @@ export function createDriveCollector(
             pageToken,
             fields: 'nextPageToken, files(id, name, mimeType, modifiedTime, owners, parents)',
             orderBy: 'modifiedTime desc',
+            // Include shared drives and files shared with user
+            includeItemsFromAllDrives: true,
+            supportsAllDrives: true,
           });
 
           for (const f of result.data.files ?? []) {
@@ -98,6 +85,17 @@ export function createDriveCollector(
 
         itemsScanned = files.length;
 
+        // Log what we found for debugging
+        const mimeTypeCounts = new Map<string, number>();
+        for (const f of files) {
+          mimeTypeCounts.set(f.mimeType, (mimeTypeCounts.get(f.mimeType) ?? 0) + 1);
+        }
+        logger.info({
+          fileCount: files.length,
+          mimeTypes: Object.fromEntries(mimeTypeCounts),
+          sampleFiles: files.slice(0, 10).map(f => `${f.name} (${f.mimeType})`),
+        }, 'Drive sweep: files discovered');
+
         if (files.length === 0) {
           logger.info('Drive sweep: no new/modified files');
           return { source: 'drive', itemsScanned: 0, itemsNew: 0, contentChunks: [] };
@@ -108,13 +106,17 @@ export function createDriveCollector(
         const parentIds = new Set(files.flatMap(f => f.parents));
         for (const parentId of parentIds) {
           try {
-            const folder = await drive.files.get({ fileId: parentId, fields: 'name' });
+            const folder = await drive.files.get({
+              fileId: parentId,
+              fields: 'name',
+              supportsAllDrives: true,
+            });
             if (folder.data.name) folderNames.set(parentId, folder.data.name);
           } catch { /* root or shared drive */ }
         }
 
         // Process files: metadata + content snippet
-        const CONTENT_SNIPPET_CHARS = 2000; // First 2K chars of content
+        const CONTENT_SNIPPET_CHARS = 2000;
         const BATCH_SIZE = 5;
         const fileEntries: string[] = [];
 
@@ -152,8 +154,6 @@ export function createDriveCollector(
 
           fileEntries.push(...results);
           itemsNew += batch.length;
-
-          logger.debug({ batch: Math.floor(i / BATCH_SIZE) + 1, processed: fileEntries.length }, 'Drive sweep: batch processed');
         }
 
         contentChunks.push(`## Google Drive: Files\n\n${fileEntries.join('\n\n---\n\n')}`);
