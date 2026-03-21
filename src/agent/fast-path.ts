@@ -11,6 +11,8 @@
  * - slack_get_channel_history (single channel lookup)
  */
 
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import Anthropic from '@anthropic-ai/sdk';
 import type { WebClient } from '@slack/web-api';
 import type { Sql } from '../db/index.js';
@@ -179,6 +181,77 @@ export function createFastPathMemoryTools(db: Sql): Array<{ definition: Anthropi
         logger.info({ memoryId, reason }, 'Memory invalidated by agent');
 
         return { content: `Memory ${memoryId.slice(0, 8)} invalidated (${reason}).` };
+      },
+    },
+    {
+      definition: {
+        name: 'read_file',
+        description:
+          'Read a file from the server filesystem. Returns the file content (or a portion of it). ' +
+          'Use for reading debug workspaces, config files, logs, or any server-side file.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            path: { type: 'string', description: 'Absolute file path' },
+            offset: { type: 'number', description: 'Start reading from this line (0-indexed, default 0)' },
+            limit: { type: 'number', description: 'Max lines to return (default 200)' },
+          },
+          required: ['path'],
+        },
+      },
+      handler: async (args) => {
+        try {
+          const filePath = args.path as string;
+          const offset = (args.offset as number) ?? 0;
+          const limit = (args.limit as number) ?? 200;
+
+          const content = readFileSync(filePath, 'utf-8');
+          const lines = content.split('\n');
+          const slice = lines.slice(offset, offset + limit);
+          const totalLines = lines.length;
+
+          const header = `File: ${filePath} (${totalLines} lines, ${content.length} bytes)`;
+          const range = `Showing lines ${offset + 1}-${Math.min(offset + limit, totalLines)} of ${totalLines}`;
+
+          return { content: `${header}\n${range}\n\n${slice.join('\n')}` };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return { content: `Failed to read file: ${msg}`, isError: true };
+        }
+      },
+    },
+    {
+      definition: {
+        name: 'list_files',
+        description:
+          'List files and directories at a given path. Use to explore debug workspaces, data directories, etc.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            path: { type: 'string', description: 'Directory path to list' },
+          },
+          required: ['path'],
+        },
+      },
+      handler: async (args) => {
+        try {
+          const dirPath = args.path as string;
+          const entries = readdirSync(dirPath);
+          const details = entries.map(name => {
+            try {
+              const stat = statSync(join(dirPath, name));
+              const type = stat.isDirectory() ? 'dir' : 'file';
+              const size = stat.isFile() ? ` (${stat.size} bytes)` : '';
+              return `${type}: ${name}${size}`;
+            } catch {
+              return `???: ${name}`;
+            }
+          });
+          return { content: `${dirPath} (${entries.length} entries):\n${details.join('\n')}` };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return { content: `Failed to list directory: ${msg}`, isError: true };
+        }
       },
     },
   ];
