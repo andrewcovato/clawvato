@@ -39,9 +39,27 @@ export function createDriveCollector(
       const lastSync = await getHighWaterMark(sql, hwmKey);
 
       try {
-        // Query all non-folder, non-trashed files — no MIME type filter.
-        // Synthesis decides what's relevant, not the collector.
-        let q = "trashed = false and mimeType != 'application/vnd.google-apps.folder'";
+        // Query all non-folder, non-trashed files.
+        // Exclude dev noise: git objects, code files, shell scripts, images.
+        // These dominate the top-N when a git repo is synced to Drive.
+        const excludeMimes = [
+          'application/octet-stream',    // git objects, binaries
+          'application/x-python-code',   // .py
+          'text/x-python',              // .py
+          'application/x-shellscript',  // .sh
+          'application/x-perl',         // .pl
+          'text/x-sql',                 // .sql
+          'text/markdown',              // .md (dev docs, not business docs)
+          'text/texmacs',               // TeXmacs
+          'application/json',           // .json config files
+          'image/png',                  // screenshots, icons
+          'image/jpeg',                 // photos
+          'image/gif',                  // gifs
+          'video/mp4',                  // videos
+          'audio/mpeg',                 // audio
+        ];
+        const mimeExclusions = excludeMimes.map(m => `mimeType != '${m}'`).join(' and ');
+        let q = `trashed = false and mimeType != 'application/vnd.google-apps.folder' and ${mimeExclusions}`;
         if (lastSync) {
           q += ` and modifiedTime > '${lastSync}'`;
         }
