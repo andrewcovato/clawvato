@@ -148,6 +148,7 @@ export async function startAgent(): Promise<void> {
       sweepCollectors.push(createSlackCollector(slack.userClient, db, {
         excludeChannels: config.sweeps.slack.excludeChannels,
         maxMessagesPerChannel: config.sweeps.slack.maxMessagesPerChannel,
+        botUserId,
       }));
     }
 
