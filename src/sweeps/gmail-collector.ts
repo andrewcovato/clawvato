@@ -37,10 +37,13 @@ export function createGmailCollector(
       const hwmKey = 'gmail:last_date';
       const lastDate = await getHighWaterMark(sql, hwmKey);
 
-      // Build query — only fetch threads newer than HWM
+      // Build query — only fetch threads newer than HWM, skip noise
+      const noiseFilter = '-category:promotions -category:social -category:forums ' +
+        '-from:calendar-notification@google.com -subject:"Invitation:" -subject:"Accepted:" ' +
+        '-subject:"Declined:" -subject:"Updated invitation:"';
       const dateFilter = lastDate
-        ? `after:${formatGmailDate(lastDate)}`
-        : 'newer_than:7d'; // First sweep: last 7 days
+        ? `after:${formatGmailDate(lastDate)} ${noiseFilter}`
+        : `newer_than:7d ${noiseFilter}`; // First sweep: last 7 days
 
       try {
         // Fetch thread list (metadata only — fast)
