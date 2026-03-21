@@ -26,6 +26,7 @@ import type { WebClient } from '@slack/web-api';
 import { createSlackCollector } from '../sweeps/slack-collector.js';
 import { createGmailCollector } from '../sweeps/gmail-collector.js';
 import { createFirefliesCollector } from '../sweeps/fireflies-collector.js';
+import { createDriveCollector } from '../sweeps/drive-collector.js';
 import { registerSweepTask } from '../sweeps/executor.js';
 import type { Collector } from '../sweeps/types.js';
 import { getGoogleAuth } from '../google/auth.js';
@@ -152,13 +153,20 @@ export async function startAgent(): Promise<void> {
       }));
     }
 
-    // Gmail collector
-    if (config.sweeps.gmail.enabled) {
+    // Gmail + Drive collectors (share Google auth)
+    if (config.sweeps.gmail.enabled || config.sweeps.drive.enabled) {
       const googleAuth = await getGoogleAuth();
       if (googleAuth) {
-        sweepCollectors.push(createGmailCollector(googleAuth, db, {
-          maxThreads: config.sweeps.gmail.maxThreads,
-        }));
+        if (config.sweeps.gmail.enabled) {
+          sweepCollectors.push(createGmailCollector(googleAuth, db, {
+            maxThreads: config.sweeps.gmail.maxThreads,
+          }));
+        }
+        if (config.sweeps.drive.enabled) {
+          sweepCollectors.push(createDriveCollector(googleAuth, db, {
+            maxFiles: config.sweeps.drive.maxFiles,
+          }));
+        }
       }
     }
 

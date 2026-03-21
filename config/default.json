@@ -91,11 +91,15 @@
     },
     "gmail": {
       "enabled": true,
-      "maxThreads": 500
+      "maxThreads": 2000
     },
     "fireflies": {
       "enabled": true,
       "maxMeetings": 100
+    },
+    "drive": {
+      "enabled": true,
+      "maxFiles": 500
     }
   },
   "trainingWheels": {
