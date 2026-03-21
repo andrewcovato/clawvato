@@ -266,7 +266,7 @@ async function getFilePath(
  * Build a complete folder ID → path map by recursively discovering all folders.
  * Much more reliable than per-file getFilePath which makes N API calls and fails under concurrency.
  */
-async function buildFolderPathMap(
+export async function buildFolderPathMap(
   drive: ReturnType<typeof google.drive>,
   rootFolderId?: string,
 ): Promise<Map<string, string>> {

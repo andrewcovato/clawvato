@@ -11,7 +11,7 @@
 import { google } from 'googleapis';
 import type { Sql } from '../db/index.js';
 import { logger } from '../logger.js';
-import { getFileContent } from '../google/drive-sync.js';
+import { getFileContent, buildFolderPathMap } from '../google/drive-sync.js';
 import { getHighWaterMark, setHighWaterMark, type Collector, type CollectorResult } from './types.js';
 
 interface DriveSweepConfig {
@@ -110,21 +110,10 @@ export function createDriveCollector(
           return { source: 'drive', itemsScanned: 0, itemsNew: 0, contentChunks: [] };
         }
 
-        // Resolve folder paths
-        const folderNames = new Map<string, string>();
-        const parentIds = new Set(files.flatMap(f => f.parents));
-        for (const parentId of parentIds) {
-          try {
-            const folder = await drive.files.get({
-              fileId: parentId,
-              fields: 'name',
-              supportsAllDrives: true,
-            });
-            if (folder.data.name) folderNames.set(parentId, folder.data.name);
-          } catch { /* root or shared drive */ }
-        }
+        // Build full folder path map (BFS of all folders — reuses drive-sync engine)
+        const folderPathMap = await buildFolderPathMap(drive);
 
-        // Process files: metadata + content snippet
+        // Process files: full path + content snippet
         const CONTENT_SNIPPET_CHARS = 2000;
         const BATCH_SIZE = 5;
         const fileEntries: string[] = [];
@@ -133,10 +122,10 @@ export function createDriveCollector(
           const batch = files.slice(i, i + BATCH_SIZE);
           const results = await Promise.all(
             batch.map(async (file) => {
-              const folder = file.parents.length > 0
-                ? (folderNames.get(file.parents[0]) ?? 'root')
-                : 'root';
-              const type = simplifyMimeType(file.mimeType);
+              const parentPath = file.parents.length > 0
+                ? (folderPathMap.get(file.parents[0]) ?? '/')
+                : '/';
+              const fullPath = `${parentPath}/${file.name}`;
 
               // Extract content snippet
               let snippet = '';
@@ -149,15 +138,11 @@ export function createDriveCollector(
                 // Content extraction failed — metadata only
               }
 
-              const parts = [
-                `### ${file.name}`,
-                `Type: ${type} | Folder: ${folder} | Owner: ${file.owners} | Modified: ${file.modifiedTime.split('T')[0]}`,
-              ];
-              if (snippet) {
-                parts.push(`\nContent preview:\n> ${snippet.slice(0, 500).replace(/\n/g, '\n> ')}`);
-              }
+              const summary = snippet
+                ? snippet.slice(0, 500).replace(/\n/g, ' ').trim()
+                : '(no text content)';
 
-              return parts.join('\n');
+              return `${fullPath} — ${summary}`;
             }),
           );
 
