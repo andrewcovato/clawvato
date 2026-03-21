@@ -42,8 +42,22 @@ export function createDriveCollector(
       const lastSync = await getHighWaterMark(sql, hwmKey);
 
       try {
-        // Query files modified since last sweep
-        let q = "trashed = false and mimeType != 'application/vnd.google-apps.folder'";
+        // Query files modified since last sweep — business-relevant types only
+        const relevantTypes = [
+          "mimeType = 'application/vnd.google-apps.document'",       // Google Docs
+          "mimeType = 'application/vnd.google-apps.spreadsheet'",    // Google Sheets
+          "mimeType = 'application/vnd.google-apps.presentation'",   // Google Slides
+          "mimeType = 'application/pdf'",                             // PDFs
+          "mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'",  // .docx
+          "mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'",        // .xlsx
+          "mimeType = 'application/vnd.openxmlformats-officedocument.presentationml.presentation'", // .pptx
+          "mimeType = 'application/msword'",                          // .doc
+          "mimeType = 'application/vnd.ms-excel'",                    // .xls
+          "mimeType = 'application/vnd.ms-powerpoint'",               // .ppt
+          "mimeType = 'text/plain'",                                  // .txt
+          "mimeType = 'text/csv'",                                    // .csv
+        ];
+        let q = `trashed = false and (${relevantTypes.join(' or ')})`;
         if (lastSync) {
           q += ` and modifiedTime > '${lastSync}'`;
         }
