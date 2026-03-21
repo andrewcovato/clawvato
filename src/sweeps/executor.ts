@@ -27,6 +27,8 @@ export { type SweepResult } from './types.js';
 export interface SweepDeps {
   sql: Sql;
   dataDir: string;
+  /** Collect data only — persist workspace to debug dir, skip synthesis */
+  collectOnly?: boolean;
 }
 
 /**
@@ -92,8 +94,39 @@ export async function executeSweep(
     logger.debug({ error: err }, 'Sweep: failed to load memory context for dedup — proceeding without');
   }
 
+  // Write individual source files for inspection (in addition to combined file)
+  const sourceChunks = new Map<string, string[]>();
+  for (const collector of collectors) {
+    // Re-collect would be wasteful — we already have chunks grouped by order
+    // Instead, chunks are already labeled with ## headers (e.g., "## Slack: #general")
+  }
+
+  // Persist workspace to debug dir if configured
+  if (process.env.DEBUG_WORKSPACE) {
+    try {
+      const { cpSync: cp } = await import('node:fs');
+      const debugDir = join(process.env.DEBUG_WORKSPACE, `sweep-${new Date().toISOString().replace(/[:.]/g, '-')}`);
+      mkdirSync(debugDir, { recursive: true });
+      cp(workspaceDir, debugDir, { recursive: true });
+      logger.info({ debugDir }, 'Sweep workspace persisted for debugging');
+    } catch (err) {
+      logger.debug({ error: err }, 'Failed to persist debug workspace');
+    }
+  }
+
+  // Collect-only mode: stop here, skip synthesis
+  if (deps.collectOnly) {
+    const sweepContent = readFileSync(join(contextDir, 'sweep-content.md'), 'utf-8');
+    logger.info({
+      chunks: allChunks.length,
+      sources: sourcesSwept,
+      sweepContentLength: sweepContent.length,
+    }, 'Sweep: collect-only mode — workspace ready for inspection, skipping synthesis');
+    // Don't clean up workspace — leave it for inspection
+    return { sourcesSwept, itemsCollected, factsStored: 0, durationMs: Date.now() - startTime };
+  }
+
   // ── 3. Run Opus synthesis via deep path ──
-  // Log workspace content size for debugging
   const sweepContent = readFileSync(join(contextDir, 'sweep-content.md'), 'utf-8');
   logger.info({
     chunks: allChunks.length,

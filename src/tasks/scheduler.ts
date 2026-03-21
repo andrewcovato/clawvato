@@ -97,12 +97,17 @@ async function runSchedulerTick(opts: SchedulerOptions): Promise<void> {
     await markRunning(sql, task.id);
 
     try {
-      const result = await Promise.race([
-        opts.executeTask(task),
-        new Promise<TaskExecutionResult>((_, reject) =>
-          setTimeout(() => reject(new Error('Task execution timeout')), config.tasks.taskExecutionTimeoutMs)
-        ),
-      ]);
+      // Sweep tasks manage their own timeout — don't wrap in Promise.race
+      const isSweep = task.title.startsWith('sweep:');
+      const taskPromise = opts.executeTask(task);
+      const result = isSweep
+        ? await taskPromise
+        : await Promise.race([
+            taskPromise,
+            new Promise<TaskExecutionResult>((_, reject) =>
+              setTimeout(() => reject(new Error('Task execution timeout')), config.tasks.taskExecutionTimeoutMs)
+            ),
+          ]);
 
       if (result.success) {
         if (task.cron_expression) {

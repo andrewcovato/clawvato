@@ -50,7 +50,7 @@ export async function executeScheduledTask(
 
   logger.info({ taskId: task.id, title: task.title, spawned: isSpawned }, 'Executing scheduled task');
 
-  // ── Sweep task dispatch ──
+  // ── Sweep task dispatch (bypasses normal timeout — sweeps manage their own) ──
   if (task.title.startsWith('sweep:') && deps.sweepCollectors?.length) {
     return executeSweepTask(task, deps);
   }
@@ -169,6 +169,7 @@ async function executeSweepTask(
     const result = await executeSweep(deps.sweepCollectors!, {
       sql: deps.sql,
       dataDir: config.dataDir,
+      collectOnly: !!process.env.SWEEP_COLLECT_ONLY,
     });
 
     const summary = `Swept ${result.sourcesSwept} sources, collected ${result.itemsCollected} new items in ${Math.round(result.durationMs / 1000)}s.`;
