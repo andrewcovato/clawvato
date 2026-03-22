@@ -199,8 +199,8 @@ export async function executeDeepPath(
       '--allowedTools',
       ...(opts.synthesisMode
         ? [
-          // Synthesis mode: only write output. Content is in system prompt — no reads needed.
-          'Bash(cat:*)',
+          // Synthesis mode: write output only. Content is in system prompt — no reads needed.
+          'Bash(cat:*)', 'Write',
         ]
         : opts.analysisMode
         ? [
