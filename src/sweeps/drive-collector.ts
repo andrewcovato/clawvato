@@ -48,7 +48,23 @@ export function createDriveCollector(
         let q = [
           "trashed = false",
           "mimeType != 'application/vnd.google-apps.folder'",
-          "mimeType != 'application/octet-stream'",
+          "mimeType != 'application/octet-stream'",       // git objects, binaries
+          "mimeType != 'text/x-python'",                   // .py
+          "mimeType != 'application/x-python-code'",       // .py
+          "mimeType != 'text/javascript'",                 // .js
+          "mimeType != 'text/texmacs'",                    // .ts (Drive misclassifies TypeScript)
+          "mimeType != 'application/x-shellscript'",       // .sh
+          "mimeType != 'text/x-sh'",                       // .sh
+          "mimeType != 'application/x-perl'",              // .pl
+          "mimeType != 'text/x-sql'",                      // .sql
+          "mimeType != 'application/json'",                // .json config
+          "mimeType != 'application/xml'",                 // .xml
+          "mimeType != 'application/x-sqlite3'",           // .db
+          "mimeType != 'image/png'",                       // screenshots
+          "mimeType != 'image/jpeg'",                      // photos
+          "mimeType != 'image/gif'",                       // gifs
+          "mimeType != 'video/mp4'",                       // video
+          "mimeType != 'audio/mpeg'",                      // audio
         ].join(' and ');
         if (lastSync) {
           q += ` and modifiedTime > '${lastSync}'`;
