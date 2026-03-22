@@ -45,17 +45,16 @@ export function createDriveCollector(
         // Drive API query: exclude folders, git objects, hidden/lock/temp files.
         // Note: Drive API doesn't support 'starts with' — use 'contains' for filtering.
         // Post-filter anything the query can't catch.
-        // Only files modified in the last 6 months — if nobody's touched it, it's stale
-        const sixMonthsAgo = new Date(Date.now() - 180 * 86_400_000).toISOString();
         let q = [
           "trashed = false",
           "mimeType != 'application/vnd.google-apps.folder'",
           "mimeType != 'application/octet-stream'",
-          `modifiedTime > '${sixMonthsAgo}'`,
         ].join(' and ');
         if (lastSync) {
           q += ` and modifiedTime > '${lastSync}'`;
         }
+
+        const sixMonthsAgo = new Date(Date.now() - 180 * 86_400_000).toISOString();
 
         const files: Array<{
           id: string;
@@ -72,7 +71,7 @@ export function createDriveCollector(
             q,
             pageSize: Math.min(100, config.maxFiles - files.length),
             pageToken,
-            fields: 'nextPageToken, files(id, name, mimeType, modifiedTime, owners, parents)',
+            fields: 'nextPageToken, files(id, name, mimeType, modifiedTime, viewedByMeTime, owners, parents)',
             orderBy: 'modifiedTime desc',
             // Include shared drives and files shared with user
             includeItemsFromAllDrives: true,
@@ -84,6 +83,11 @@ export function createDriveCollector(
             // Post-filter: skip git files, hidden files, lock files, temp files
             if (name.startsWith('.') || name.startsWith('~')) continue;
             if (name.includes('.git') || name.endsWith('.lock')) continue;
+
+            // Staleness filter: keep if modified OR viewed by me in last 6 months
+            const modified = f.modifiedTime ?? '';
+            const viewed = (f as Record<string, unknown>).viewedByMeTime as string | undefined;
+            if (modified < sixMonthsAgo && (!viewed || viewed < sixMonthsAgo)) continue;
 
             files.push({
               id: f.id!,
