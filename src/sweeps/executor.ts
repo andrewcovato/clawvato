@@ -45,42 +45,38 @@ export async function executeSweep(
   // ── 1. Collect from all sources (fail-fast) ──
   const allChunks: string[] = [];
 
-  for (const collector of collectors) {
-    logger.info({ collector: collector.name }, 'Sweep: running collector');
+  // Run all collectors in parallel — they're independent data sources
+  logger.info({ collectors: collectors.map(c => c.name) }, 'Sweep: running all collectors in parallel');
 
-    let result;
-    try {
-      result = await collector.collect();
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : JSON.stringify(err);
-      logger.error({ error: errMsg, collector: collector.name }, 'Sweep: collector failed — ABORTING sweep');
-      return {
-        sourcesSwept,
-        itemsCollected,
-        factsStored: 0,
-        durationMs: Date.now() - startTime,
-      };
+  const results = await Promise.allSettled(
+    collectors.map(async (collector) => {
+      logger.info({ collector: collector.name }, 'Sweep: starting collector');
+      const result = await collector.collect();
+      logger.info(
+        { collector: collector.name, scanned: result.itemsScanned, new: result.itemsNew, chunks: result.contentChunks.length },
+        'Sweep: collector complete',
+      );
+      return { name: collector.name, result };
+    }),
+  );
+
+  // Check results — abort if any failed or returned empty
+  for (const settled of results) {
+    if (settled.status === 'rejected') {
+      const errMsg = settled.reason instanceof Error ? settled.reason.message : JSON.stringify(settled.reason);
+      logger.error({ error: errMsg }, 'Sweep: collector failed — ABORTING sweep');
+      return { sourcesSwept, itemsCollected, factsStored: 0, durationMs: Date.now() - startTime };
     }
 
-    // Check for unexpected empty results from enabled collectors
+    const { name, result } = settled.value;
     if (result.itemsScanned === 0 && result.itemsNew === 0 && result.contentChunks.length === 0) {
-      logger.warn({ collector: collector.name }, 'Sweep: collector returned zero items — ABORTING sweep (possible auth/config issue)');
-      return {
-        sourcesSwept,
-        itemsCollected,
-        factsStored: 0,
-        durationMs: Date.now() - startTime,
-      };
+      logger.warn({ collector: name }, 'Sweep: collector returned zero items — ABORTING sweep (possible auth/config issue)');
+      return { sourcesSwept, itemsCollected, factsStored: 0, durationMs: Date.now() - startTime };
     }
 
     sourcesSwept++;
     itemsCollected += result.itemsNew;
     allChunks.push(...result.contentChunks);
-
-    logger.info(
-      { collector: collector.name, scanned: result.itemsScanned, new: result.itemsNew, chunks: result.contentChunks.length },
-      'Sweep: collector complete',
-    );
   }
 
   if (allChunks.length === 0) {
