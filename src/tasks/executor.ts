@@ -25,6 +25,9 @@ import type { TaskExecutionResult } from './scheduler.js';
 import type { TaskChannelManager } from './channel-manager.js';
 import type { Collector } from '../sweeps/types.js';
 import { executeSweep } from '../sweeps/executor.js';
+import { extractFacts, storeExtractionResult } from '../memory/extractor.js';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 export interface TaskExecutorDeps {
   sql: Sql;
@@ -172,7 +175,31 @@ async function executeSweepTask(
       collectOnly: !!process.env.SWEEP_COLLECT_ONLY,
     });
 
-    const summary = `Swept ${result.sourcesSwept} sources, collected ${result.itemsCollected} new items in ${Math.round(result.durationMs / 1000)}s.`;
+    // Process findings from workspace → extract facts → store to memory
+    const workspaceDir = (result as unknown as Record<string, unknown>).workspaceDir as string | undefined;
+    let factsStored = 0;
+    if (workspaceDir) {
+      const findingsDir = join(workspaceDir, 'findings');
+      try {
+        const files = readdirSync(findingsDir).filter(f => !f.startsWith('.'));
+        for (const fileName of files) {
+          const content = readFileSync(join(findingsDir, fileName), 'utf-8').trim();
+          if (!content || content.length < 10) continue;
+
+          const fileSource = `sweep:${new Date().toISOString().split('T')[0]}:${fileName}`;
+          const extracted = await extractFacts(deps.anthropicClient, config.models.classifier, content, fileSource, deps.sql);
+          if (extracted.facts.length > 0) {
+            const stored = await storeExtractionResult(deps.sql, extracted, fileSource);
+            factsStored += stored.memoriesStored;
+            logger.info({ fileName, facts: extracted.facts.length, stored: stored.memoriesStored }, 'Sweep: findings extracted to memory');
+          }
+        }
+      } catch (err) {
+        logger.warn({ error: err }, 'Sweep: findings extraction failed');
+      }
+    }
+
+    const summary = `Swept ${result.sourcesSwept} sources, collected ${result.itemsCollected} new items, stored ${factsStored} facts in ${Math.round(result.durationMs / 1000)}s.`;
 
     // Post result to task channel
     if (deps.channelManager && result.itemsCollected > 0) {
