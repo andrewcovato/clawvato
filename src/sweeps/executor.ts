@@ -153,7 +153,7 @@ export async function executeSweep(
     systemPromptFileSize: fullPrompt.length,
   }, 'Sweep: starting Opus synthesis');
 
-  const sweepPrompt = `Synthesize the content provided in your system prompt. Write findings to ${workspaceDir}/findings/findings.md using a single cat command.`;
+  const sweepPrompt = `Synthesize the content provided in your system prompt. Use the Write tool to write findings to ${workspaceDir}/findings/findings.md. One tool call only.`;
 
   const result = await executeDeepPath(
     sweepPrompt,

@@ -4,7 +4,7 @@ The sweep content and existing memory are provided below in this prompt. Do NOT 
 
 ## Your Task
 
-Write a single findings file using one cat command. This is your ONLY tool call.
+Write a single findings file using the Write tool. This is your ONLY tool call.
 
 ## Synthesis Rules
 
@@ -33,10 +33,9 @@ Write a single findings file using one cat command. This is your ONLY tool call.
 
 ## Output
 
-Write ALL findings in a single cat command:
+Use the Write tool to write ALL findings to `{{WORKSPACE_DIR}}/findings/findings.md`. One tool call. Organize by topic:
 
-```bash
-cat << 'FINDINGS_EOF' > {{WORKSPACE_DIR}}/findings/findings.md
+```
 # Sweep Findings
 
 ## Client Updates
@@ -51,7 +50,6 @@ cat << 'FINDINGS_EOF' > {{WORKSPACE_DIR}}/findings/findings.md
 ## Files
 - /path/to/file.pdf — what it contains and why it matters
 - ...
-FINDINGS_EOF
 ```
 
 ## Data Fidelity
