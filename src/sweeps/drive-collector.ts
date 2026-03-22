@@ -45,13 +45,13 @@ export function createDriveCollector(
         // Drive API query: exclude folders, git objects, hidden/lock/temp files.
         // Note: Drive API doesn't support 'starts with' — use 'contains' for filtering.
         // Post-filter anything the query can't catch.
-        // Only files viewed in the last 6 months — stale files aren't worth sweeping
+        // Only files modified in the last 6 months — if nobody's touched it, it's stale
         const sixMonthsAgo = new Date(Date.now() - 180 * 86_400_000).toISOString();
         let q = [
           "trashed = false",
           "mimeType != 'application/vnd.google-apps.folder'",
           "mimeType != 'application/octet-stream'",
-          `viewedByMeTime > '${sixMonthsAgo}'`,
+          `modifiedTime > '${sixMonthsAgo}'`,
         ].join(' and ');
         if (lastSync) {
           q += ` and modifiedTime > '${lastSync}'`;
