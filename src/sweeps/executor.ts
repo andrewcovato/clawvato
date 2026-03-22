@@ -127,24 +127,40 @@ export async function executeSweep(
   }
 
   // ── 3. Run Opus synthesis via deep path ──
+  // Content goes in the system prompt — no Read tool calls needed.
+  // The CLI only needs Bash(cat:*) to write the findings file.
   const sweepContent = readFileSync(join(contextDir, 'sweep-content.md'), 'utf-8');
+
+  let memoryContent = '';
+  try {
+    memoryContent = readFileSync(join(contextDir, 'memory.md'), 'utf-8');
+  } catch { /* no memory file — first sweep */ }
+
   logger.info({
     chunks: allChunks.length,
     sources: sourcesSwept,
     sweepContentLength: sweepContent.length,
-    sweepContentPreview: sweepContent.slice(0, 500),
+    memoryContentLength: memoryContent.length,
   }, 'Sweep: starting Opus synthesis');
 
-  const sweepPrompt = 'Process the sweep content in workspace/context/sweep-content.md. ' +
-    'Cross-reference across all sources, deduplicate against existing memory in workspace/context/memory.md, ' +
-    'and write synthesized findings to workspace/findings/findings.md.';
+  // Build the system prompt with all content inline
+  const synthesisPrompt = getPrompts().sweepSynthesis.replaceAll('{{WORKSPACE_DIR}}', workspaceDir);
+  const fullPrompt = [
+    synthesisPrompt,
+    '\n## Sweep Content\n',
+    sweepContent,
+    memoryContent ? '\n## Existing Memory (for deduplication)\n' + memoryContent : '',
+  ].join('\n');
+
+  const sweepPrompt = `Synthesize the content provided in your system prompt. Write findings to ${workspaceDir}/findings/findings.md using a single cat command.`;
 
   const result = await executeDeepPath(
     sweepPrompt,
     {
       dataDir: deps.dataDir,
       workspaceDir,
-      promptOverride: getPrompts().sweepSynthesis.replaceAll('{{WORKSPACE_DIR}}', workspaceDir),
+      promptOverride: fullPrompt,
+      synthesisMode: true,
     },
     undefined, // no SlackHandler — background task
   );

@@ -32,6 +32,8 @@ export interface DeepPathOptions {
   promptOverride?: string;
   /** Reduce tools for analysis-only mode */
   analysisMode?: boolean;
+  /** Minimal tools for synthesis — only cat for writing output */
+  synthesisMode?: boolean;
 }
 
 export interface DeepPathResult {
@@ -185,7 +187,12 @@ export async function executeDeepPath(
       '--max-turns', String(config.agent.deepPathMaxTurns),
       // Pre-approve tools based on mode
       '--allowedTools',
-      ...(opts.analysisMode
+      ...(opts.synthesisMode
+        ? [
+          // Synthesis mode: only write output. Content is in system prompt — no reads needed.
+          'Bash(cat:*)',
+        ]
+        : opts.analysisMode
         ? [
           // Analysis mode: read workspace + search memory only (no external research)
           'Bash(cat:*)', 'Bash(ls:*)',
@@ -349,7 +356,7 @@ function spawnClaudeStreaming(
               void opts.onProgress(desc);
             }
 
-            logger.debug({ tool: toolName, turn: toolCallCount }, 'SDK tool call');
+            logger.info({ tool: toolName, turn: toolCallCount, input: toolInput.slice(0, 200) }, 'SDK tool call');
           }
         }
       } else if (type === 'result') {
