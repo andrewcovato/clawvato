@@ -5,23 +5,21 @@
  * pipes everything through a single Opus CLI synthesis pass that
  * cross-references across sources, and stores the resulting facts.
  *
- * Triggered by the task scheduler as a recurring task.
+ * Fail-fast: if ANY enabled collector errors, the entire sweep aborts.
+ * No partial data synthesis — it's all or nothing.
  */
 
-import { writeFileSync, readFileSync, mkdtempSync, mkdirSync } from 'node:fs';
+import { writeFileSync, readFileSync, mkdtempSync, mkdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import type Anthropic from '@anthropic-ai/sdk';
 import type { Sql } from '../db/index.js';
 import { logger } from '../logger.js';
 import { getConfig } from '../config.js';
 import { getPrompts } from '../prompts.js';
-
 import { executeDeepPath } from '../agent/deep-path.js';
 import { retrieveContext } from '../memory/retriever.js';
 import { findTaskByTitle, createTask } from '../tasks/store.js';
 import type { Collector, SweepResult } from './types.js';
 
-// Re-export for convenience
 export { type SweepResult } from './types.js';
 
 export interface SweepDeps {
@@ -33,6 +31,7 @@ export interface SweepDeps {
 
 /**
  * Execute a full sweep: run all collectors, synthesize, store facts.
+ * Aborts if any collector fails — no partial synthesis.
  */
 export async function executeSweep(
   collectors: Collector[],
@@ -43,26 +42,45 @@ export async function executeSweep(
   let itemsCollected = 0;
   let sourcesSwept = 0;
 
-  // ── 1. Collect from all sources ──
+  // ── 1. Collect from all sources (fail-fast) ──
   const allChunks: string[] = [];
 
   for (const collector of collectors) {
+    logger.info({ collector: collector.name }, 'Sweep: running collector');
+
+    let result;
     try {
-      logger.info({ collector: collector.name }, 'Sweep: running collector');
-      const result = await collector.collect();
-      sourcesSwept++;
-      itemsCollected += result.itemsNew;
-
-      // Respect per-source chunk limit
-      allChunks.push(...result.contentChunks);
-
-      logger.info(
-        { collector: collector.name, scanned: result.itemsScanned, new: result.itemsNew, chunks: result.contentChunks.length },
-        'Sweep: collector complete',
-      );
+      result = await collector.collect();
     } catch (err) {
-      logger.warn({ error: err, collector: collector.name }, 'Sweep: collector failed — continuing with others');
+      const errMsg = err instanceof Error ? err.message : JSON.stringify(err);
+      logger.error({ error: errMsg, collector: collector.name }, 'Sweep: collector failed — ABORTING sweep');
+      return {
+        sourcesSwept,
+        itemsCollected,
+        factsStored: 0,
+        durationMs: Date.now() - startTime,
+      };
     }
+
+    // Check for unexpected empty results from enabled collectors
+    if (result.itemsScanned === 0 && result.itemsNew === 0 && result.contentChunks.length === 0) {
+      logger.warn({ collector: collector.name }, 'Sweep: collector returned zero items — ABORTING sweep (possible auth/config issue)');
+      return {
+        sourcesSwept,
+        itemsCollected,
+        factsStored: 0,
+        durationMs: Date.now() - startTime,
+      };
+    }
+
+    sourcesSwept++;
+    itemsCollected += result.itemsNew;
+    allChunks.push(...result.contentChunks);
+
+    logger.info(
+      { collector: collector.name, scanned: result.itemsScanned, new: result.itemsNew, chunks: result.contentChunks.length },
+      'Sweep: collector complete',
+    );
   }
 
   if (allChunks.length === 0) {
@@ -79,27 +97,8 @@ export async function executeSweep(
   mkdirSync(contextDir, { recursive: true });
   mkdirSync(findingsDir, { recursive: true });
 
-  // Write all collected content
+  // Write sweep content for debug inspection
   writeFileSync(join(contextDir, 'sweep-content.md'), allChunks.join('\n\n---\n\n'));
-
-  // Write existing memory context so synthesis can deduplicate
-  try {
-    const memoryContext = await retrieveContext(deps.sql, 'recent facts decisions people projects', {
-      tokenBudget: config.context.deepPathLongTermTokenBudget,
-    });
-    if (memoryContext.context) {
-      writeFileSync(join(contextDir, 'memory.md'), memoryContext.context);
-    }
-  } catch (err) {
-    logger.debug({ error: err }, 'Sweep: failed to load memory context for dedup — proceeding without');
-  }
-
-  // Write individual source files for inspection (in addition to combined file)
-  const sourceChunks = new Map<string, string[]>();
-  for (const collector of collectors) {
-    // Re-collect would be wasteful — we already have chunks grouped by order
-    // Instead, chunks are already labeled with ## headers (e.g., "## Slack: #general")
-  }
 
   // Persist workspace to debug dir if configured
   if (process.env.DEBUG_WORKSPACE) {
@@ -114,7 +113,7 @@ export async function executeSweep(
     }
   }
 
-  // Collect-only mode: stop here, skip synthesis
+  // Collect-only mode: stop here
   if (deps.collectOnly) {
     const sweepContent = readFileSync(join(contextDir, 'sweep-content.md'), 'utf-8');
     logger.info({
@@ -122,28 +121,22 @@ export async function executeSweep(
       sources: sourcesSwept,
       sweepContentLength: sweepContent.length,
     }, 'Sweep: collect-only mode — workspace ready for inspection, skipping synthesis');
-    // Don't clean up workspace — leave it for inspection
     return { sourcesSwept, itemsCollected, factsStored: 0, durationMs: Date.now() - startTime };
   }
 
   // ── 3. Run Opus synthesis via deep path ──
-  // Content goes in the system prompt — no Read tool calls needed.
-  // The CLI only needs Bash(cat:*) to write the findings file.
+  // Build system prompt with all content inline, write to file
+  // (too large for CLI args — use --append-system-prompt-file)
   const sweepContent = readFileSync(join(contextDir, 'sweep-content.md'), 'utf-8');
 
   let memoryContent = '';
   try {
-    memoryContent = readFileSync(join(contextDir, 'memory.md'), 'utf-8');
-  } catch { /* no memory file — first sweep */ }
+    const memoryContext = await retrieveContext(deps.sql, 'recent facts decisions people projects', {
+      tokenBudget: config.context.deepPathLongTermTokenBudget,
+    });
+    if (memoryContext.context) memoryContent = memoryContext.context;
+  } catch { /* first sweep — no memory */ }
 
-  logger.info({
-    chunks: allChunks.length,
-    sources: sourcesSwept,
-    sweepContentLength: sweepContent.length,
-    memoryContentLength: memoryContent.length,
-  }, 'Sweep: starting Opus synthesis');
-
-  // Build the system prompt with all content inline
   const synthesisPrompt = getPrompts().sweepSynthesis.replaceAll('{{WORKSPACE_DIR}}', workspaceDir);
   const fullPrompt = [
     synthesisPrompt,
@@ -152,6 +145,18 @@ export async function executeSweep(
     memoryContent ? '\n## Existing Memory (for deduplication)\n' + memoryContent : '',
   ].join('\n');
 
+  // Write system prompt to file (avoids E2BIG on large prompts)
+  const systemPromptFile = join(workspaceDir, '.system-prompt.md');
+  writeFileSync(systemPromptFile, fullPrompt);
+
+  logger.info({
+    chunks: allChunks.length,
+    sources: sourcesSwept,
+    sweepContentLength: sweepContent.length,
+    memoryContentLength: memoryContent.length,
+    systemPromptFileSize: fullPrompt.length,
+  }, 'Sweep: starting Opus synthesis');
+
   const sweepPrompt = `Synthesize the content provided in your system prompt. Write findings to ${workspaceDir}/findings/findings.md using a single cat command.`;
 
   const result = await executeDeepPath(
@@ -159,24 +164,22 @@ export async function executeSweep(
     {
       dataDir: deps.dataDir,
       workspaceDir,
-      promptOverride: fullPrompt,
       synthesisMode: true,
+      systemPromptFile,
     },
     undefined, // no SlackHandler — background task
   );
 
+  // Clean up system prompt file
+  try { unlinkSync(systemPromptFile); } catch { /* */ }
+
   if (!result.success) {
-    logger.warn({ error: result.error }, 'Sweep: synthesis failed');
+    logger.warn({ error: result.error, durationMs: result.durationMs }, 'Sweep: synthesis failed');
     return { sourcesSwept, itemsCollected, factsStored: 0, durationMs: Date.now() - startTime };
   }
 
-  // ── 4. Process findings (handled by caller via processWorkspaceFiles) ──
-  // The workspace dir is returned so the caller can process findings
-  // and clean up. For the task executor integration, we return the workspace path
-  // in the result for post-processing.
-
   const durationMs = Date.now() - startTime;
-  logger.info({ sourcesSwept, itemsCollected, durationMs }, 'Sweep: synthesis complete');
+  logger.info({ sourcesSwept, itemsCollected, durationMs, synthesisDurationMs: result.durationMs }, 'Sweep: synthesis complete');
 
   return {
     sourcesSwept,
@@ -200,7 +203,7 @@ export async function registerSweepTask(sql: Sql, cron: string): Promise<void> {
 
   await createTask(sql, {
     title: 'sweep:all-sources',
-    description: 'Background sweep of all data sources (Slack, Gmail, Fireflies). Collects new content, synthesizes cross-source, stores to memory.',
+    description: 'Background sweep of all data sources (Slack, Gmail, Drive, Fireflies). Collects new content, synthesizes cross-source, stores to memory.',
     cron_expression: cron,
     priority: 3,
     created_by_type: 'system',

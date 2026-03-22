@@ -34,6 +34,8 @@ export interface DeepPathOptions {
   analysisMode?: boolean;
   /** Minimal tools for synthesis — only cat for writing output */
   synthesisMode?: boolean;
+  /** Path to a file containing the system prompt (for large prompts that exceed CLI arg limits) */
+  systemPromptFile?: string;
 }
 
 export interface DeepPathResult {
@@ -175,7 +177,15 @@ export async function executeDeepPath(
   const { configPath, cleanup } = buildMcpConfig(opts.dataDir);
 
   try {
-    const sdkSystemPrompt = buildSdkSystemPrompt(opts);
+    // Use file-based system prompt if provided (for large prompts that exceed CLI arg limits)
+    // Otherwise, pass inline via --append-system-prompt
+    const systemPromptArgs: string[] = [];
+    if (opts.systemPromptFile) {
+      systemPromptArgs.push('--append-system-prompt-file', opts.systemPromptFile);
+    } else {
+      const sdkSystemPrompt = buildSdkSystemPrompt(opts);
+      systemPromptArgs.push('--append-system-prompt', sdkSystemPrompt);
+    }
 
     const args = [
       '--print',
@@ -183,7 +193,7 @@ export async function executeDeepPath(
       '--output-format', 'stream-json',
       '--model', config.models.planner,
       '--mcp-config', configPath,
-      '--append-system-prompt', sdkSystemPrompt,
+      ...systemPromptArgs,
       '--max-turns', String(config.agent.deepPathMaxTurns),
       // Pre-approve tools based on mode
       '--allowedTools',

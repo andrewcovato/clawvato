@@ -42,14 +42,13 @@ export function createDriveCollector(
         // Query business files — exclude folders, git repos, hidden files, lock files.
         // Git repos synced to Drive flood results with .git/ objects.
         // GitHub integration (future) handles code — Drive sweep is for business docs.
+        // Drive API query: exclude folders, git objects, hidden/lock/temp files.
+        // Note: Drive API doesn't support 'starts with' — use 'contains' for filtering.
+        // Post-filter anything the query can't catch.
         let q = [
           "trashed = false",
           "mimeType != 'application/vnd.google-apps.folder'",
-          "mimeType != 'application/octet-stream'",  // git objects, binaries
-          "not name contains '.git'",                 // .git/, .gitignore, etc.
-          "not name contains '.lock'",                // lock files
-          "not name starts with '.'",                 // hidden files (.DS_Store, .env, etc.)
-          "not name starts with '~'",                 // temp files (~$doc.docx)
+          "mimeType != 'application/octet-stream'",
         ].join(' and ');
         if (lastSync) {
           q += ` and modifiedTime > '${lastSync}'`;
@@ -78,9 +77,14 @@ export function createDriveCollector(
           });
 
           for (const f of result.data.files ?? []) {
+            const name = f.name ?? '';
+            // Post-filter: skip git files, hidden files, lock files, temp files
+            if (name.startsWith('.') || name.startsWith('~')) continue;
+            if (name.includes('.git') || name.endsWith('.lock')) continue;
+
             files.push({
               id: f.id!,
-              name: f.name!,
+              name,
               mimeType: f.mimeType!,
               modifiedTime: f.modifiedTime!,
               owners: (f.owners ?? []).map(o => o.displayName ?? 'unknown').join(', '),
