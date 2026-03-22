@@ -176,6 +176,7 @@ async function executeSweepTask(
     });
 
     // Process findings from workspace → extract facts → store to memory
+    // Chunk the findings file so each piece fits within Haiku's context window
     const workspaceDir = (result as unknown as Record<string, unknown>).workspaceDir as string | undefined;
     let factsStored = 0;
     if (workspaceDir) {
@@ -186,16 +187,32 @@ async function executeSweepTask(
           const content = readFileSync(join(findingsDir, fileName), 'utf-8').trim();
           if (!content || content.length < 10) continue;
 
-          const fileSource = `sweep:${new Date().toISOString().split('T')[0]}:${fileName}`;
-          const extracted = await extractFacts(deps.anthropicClient, config.models.classifier, content, fileSource, deps.sql);
-          if (extracted.facts.length > 0) {
-            const stored = await storeExtractionResult(deps.sql, extracted, fileSource);
-            factsStored += stored.memoriesStored;
-            logger.info({ fileName, facts: extracted.facts.length, stored: stored.memoriesStored }, 'Sweep: findings extracted to memory');
+          logger.info({ fileName, contentLength: content.length }, 'Sweep: processing findings file');
+
+          // Split into chunks by ## headers (each section is independent)
+          // Fall back to fixed-size chunks if no headers
+          const MAX_CHUNK_CHARS = 15_000; // ~4K tokens, well within Haiku's limit
+          const chunks = chunkByHeaders(content, MAX_CHUNK_CHARS);
+
+          for (let i = 0; i < chunks.length; i++) {
+            const chunk = chunks[i];
+            const fileSource = `sweep:${new Date().toISOString().split('T')[0]}:${fileName}:chunk${i + 1}`;
+            try {
+              const extracted = await extractFacts(deps.anthropicClient, config.models.classifier, chunk, fileSource, deps.sql);
+              if (extracted.facts.length > 0) {
+                const stored = await storeExtractionResult(deps.sql, extracted, fileSource);
+                factsStored += stored.memoriesStored;
+                logger.info({ chunk: i + 1, totalChunks: chunks.length, facts: extracted.facts.length, stored: stored.memoriesStored }, 'Sweep: chunk extracted');
+              }
+            } catch (err) {
+              const errMsg = err instanceof Error ? err.message : JSON.stringify(err);
+              logger.warn({ error: errMsg, chunk: i + 1 }, 'Sweep: chunk extraction failed — continuing');
+            }
           }
         }
       } catch (err) {
-        logger.warn({ error: err }, 'Sweep: findings extraction failed');
+        const errMsg = err instanceof Error ? err.message : JSON.stringify(err);
+        logger.warn({ error: errMsg }, 'Sweep: findings extraction failed');
       }
     }
 
@@ -229,4 +246,37 @@ async function executeSweepTask(
 
     return { success: false, response: '', error: errMsg };
   }
+}
+
+/**
+ * Split markdown content into chunks by ## headers, respecting a max size.
+ * Each chunk contains one or more sections. If a single section exceeds
+ * maxChars, it gets its own chunk.
+ */
+function chunkByHeaders(content: string, maxChars: number): string[] {
+  const sections = content.split(/^(?=## )/m);
+  const chunks: string[] = [];
+  let current = '';
+
+  for (const section of sections) {
+    if (current.length + section.length > maxChars && current.length > 0) {
+      chunks.push(current.trim());
+      current = section;
+    } else {
+      current += section;
+    }
+  }
+
+  if (current.trim()) {
+    chunks.push(current.trim());
+  }
+
+  // If no headers found, fall back to fixed-size chunks
+  if (chunks.length === 0 && content.length > 0) {
+    for (let i = 0; i < content.length; i += maxChars) {
+      chunks.push(content.slice(i, i + maxChars).trim());
+    }
+  }
+
+  return chunks;
 }
