@@ -39,13 +39,45 @@ else
   echo "[entrypoint] WARNING: No gws auth configured"
 fi
 
+# ── Pre-approve workspace trust for CC ──
+# CC asks "Yes, I trust this folder" on first run. Pre-create the
+# project trust file so the prompt never appears.
+# Trust is stored per-project in ~/.claude/projects/ keyed by path hash.
+CLAWVATO_CLAUDE_DIR="$CLAWVATO_HOME/.claude"
+mkdir -p "$CLAWVATO_CLAUDE_DIR"
+
+# Create a settings file that trusts /app
+# Also set acceptedTos to skip any TOS prompts
+cat > "$CLAWVATO_HOME/.claude.json" << 'TRUST_EOF'
+{
+  "hasCompletedOnboarding": true,
+  "acceptedTos": true
+}
+TRUST_EOF
+
+# Pre-create project trust for /app
+APP_PROJECTS_DIR="$CLAWVATO_CLAUDE_DIR/projects"
+mkdir -p "$APP_PROJECTS_DIR"
+# CC uses the project path to create a hash-based directory.
+# We create a global allowedDirectories setting instead.
+cat > "$CLAWVATO_CLAUDE_DIR/settings.json" << 'SETTINGS_EOF'
+{
+  "permissions": {
+    "allow": [],
+    "deny": []
+  }
+}
+SETTINGS_EOF
+
+chown -R clawvato:clawvato "$CLAWVATO_HOME" 2>/dev/null || true
+
 # ── Start the agent as non-root user ──
 # CC-native needs non-root for --dangerously-skip-permissions
-# Hybrid engine also works fine as non-root
+# Use su with --preserve-environment to pass all env vars
 if [ "${ENGINE:-hybrid}" = "cc-native" ]; then
   echo "[entrypoint] Starting CC-Native Engine (as clawvato user)"
-  exec su -s /bin/bash clawvato -c "/app/scripts/cc-native-entrypoint.sh"
+  exec su -p -s /bin/bash clawvato -c "/app/scripts/cc-native-entrypoint.sh"
 else
   echo "[entrypoint] Starting Hybrid Engine (as clawvato user)"
-  exec su -s /bin/bash clawvato -c "node dist/cli/index.js start"
+  exec su -p -s /bin/bash clawvato -c "node dist/cli/index.js start"
 fi

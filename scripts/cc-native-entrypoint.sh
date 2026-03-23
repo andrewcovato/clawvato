@@ -104,17 +104,26 @@ while true; do
   CC_LOG="/tmp/cc-session-${SESSION_COUNTER}.log"
   echo "[supervisor] Logging CC output to $CC_LOG"
 
-  script -qfc "claude \
+  # Stream CC output to both file AND stderr (Railway logs) via tee.
+  # script provides the PTY; tee splits output for visibility.
+  #
+  # The stdin wrapper sends Enter after 5s as a fallback to auto-approve
+  # any remaining interactive prompts (trust, TOS, etc.) that
+  # --dangerously-skip-permissions doesn't cover.
+  {
+    sleep 5; printf '\n'
+    sleep 2; printf '\n'
+    sleep 2; printf '\n'
+    # Keep stdin open so PTY doesn't close
+    while true; do sleep 3600; done
+  } | script -qfc "claude \
     --dangerously-skip-permissions \
     --dangerously-load-development-channels server:slack-channel \
     --mcp-config '$PROJECT_DIR/.cc-native-mcp.json' \
     --append-system-prompt-file '$PROJECT_DIR/config/prompts/cc-native-system.md' \
     --max-turns $MAX_TURNS \
-    --model claude-opus-4-6" "$CC_LOG" \
+    --model claude-opus-4-6" /dev/stdout 2>&1 | tee "$CC_LOG" >&2 \
     || true  # Don't exit the loop on CC crash
-
-  echo "[supervisor] === Last 30 lines of CC output ==="
-  tail -30 "$CC_LOG" 2>/dev/null || true
 
   EXIT_CODE=$?
   echo "[supervisor] CC session #$SESSION_COUNTER exited (code: $EXIT_CODE)"
