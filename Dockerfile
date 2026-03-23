@@ -31,12 +31,20 @@ RUN npm install -g @anthropic-ai/claude-code @googleworkspace/cli || true
 ENV DATA_DIR=/data
 RUN mkdir -p /data
 
+# Create non-root user — required for --dangerously-skip-permissions
+# (Claude Code refuses this flag under root for security reasons)
+RUN useradd -m -s /bin/bash clawvato && \
+    chown -R clawvato:clawvato /app /data
+
 # Copy scripts and cc-native source (needed by tsx at runtime)
-COPY scripts/ /app/scripts/
+COPY --chown=clawvato:clawvato scripts/ /app/scripts/
 RUN chmod +x /app/scripts/*.sh
 
 # Copy cc-native MCP config
-COPY .cc-native-mcp.json /app/.cc-native-mcp.json
+COPY --chown=clawvato:clawvato .cc-native-mcp.json /app/.cc-native-mcp.json
+
+# NOTE: Don't set USER here — entrypoint needs root to fix /data permissions
+# on Railway's volume mount, then drops to clawvato user for CC
 
 # Startup: ensure /data/claude-config exists (volume mounted at runtime, not build time)
 # then symlink ~/.claude to it so auth tokens persist across redeploys.
