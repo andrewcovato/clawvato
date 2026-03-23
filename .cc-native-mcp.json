@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "memory": {
+      "command": "npx",
+      "args": ["tsx", "src/mcp/memory/stdio.ts"]
+    },
+    "slack-channel": {
+      "command": "npx",
+      "args": ["tsx", "src/cc-native/slack-channel.ts"],
+      "env": {
+        "LOG_DESTINATION": "stderr"
+      }
+    }
+  }
+}

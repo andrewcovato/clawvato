@@ -161,6 +161,7 @@ Training wheels were removed in Session 16 because they were blocking internal t
 ## Engineering Philosophy
 - **Always take the pain now — build for durability.** No short-term hacks or workarounds. If something needs doing, do it right the first time.
 - Don't create band-aids that will need to be replaced later. If a feature is missing, build it properly in the right layer.
+- **Always build for the future, especially when using Anthropic tech.** Claude Code, MCP, channels, plugins, and the Agent SDK are shipping updates at lightning pace (~days between releases). Design abstractions that can adopt new capabilities as they land rather than locking into today's constraints. When a limitation exists today (e.g., channels in research preview, `--session` untested), build the layer that will use it but keep a working fallback. Never let "it doesn't exist yet" be the reason for a permanent architectural decision.
 
 ## Bug Fixing Protocol
 - **Do NOT jump straight to coding a fix** when the owner mentions a bug or unexpected behavior.
