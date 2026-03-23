@@ -19,6 +19,22 @@ if [ ! -f "$CLAWVATO_HOME/.claude.json" ]; then
     echo '{"hasCompletedOnboarding":true}' > "$CLAWVATO_HOME/.claude.json"
   fi
 fi
+
+# Pre-approve workspace trust for /app so CC never shows the trust prompt.
+# Trust is stored in .claude.json under the project path key with
+# hasTrustDialogAccepted: true (discovered from local CC config).
+# Use node to merge into existing .claude.json without clobbering it.
+node -e "
+  const fs = require('fs');
+  const p = '$CLAWVATO_HOME/.claude.json';
+  let data = {};
+  try { data = JSON.parse(fs.readFileSync(p, 'utf8')); } catch {}
+  data['/app'] = data['/app'] || {};
+  data['/app'].hasTrustDialogAccepted = true;
+  data.hasCompletedOnboarding = true;
+  fs.writeFileSync(p, JSON.stringify(data, null, 2));
+  console.log('[entrypoint] Pre-approved workspace trust for /app');
+"
 chown clawvato:clawvato "$CLAWVATO_HOME/.claude.json" 2>/dev/null || true
 
 # ── gws (Google Workspace CLI) auth ──
