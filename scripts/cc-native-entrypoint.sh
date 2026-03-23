@@ -136,6 +136,8 @@ while true; do
   # subsequent restarts skip the prompt automatically.
   CC_LOG="/tmp/cc-session-${SESSION_COUNTER}.log"
 
+  export MCP_CONFIG  # Make available to expect via $env(MCP_CONFIG)
+
   expect << 'EXPECT_SCRIPT' 2>&1 | tee "$CC_LOG" >&2
     set timeout 120
     log_user 1
@@ -143,7 +145,7 @@ while true; do
     spawn env HOME=/home/clawvato claude \
       --dangerously-skip-permissions \
       --dangerously-load-development-channels server:slack-channel \
-      --mcp-config "$MCP_CONFIG" \
+      --mcp-config $env(MCP_CONFIG) \
       --append-system-prompt-file /app/config/prompts/cc-native-system.md \
       --max-turns 200 \
       --model claude-opus-4-6
