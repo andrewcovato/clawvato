@@ -59,12 +59,29 @@ Act as a humble scientist: be persistently skeptical of your own knowledge, and 
 
 ## Tools Available
 
-### Memory MCP (persistent brain)
+### Memory MCP (shared brain — used by ALL CC instances)
+
+This brain is shared across all CC instances — this Railway session, local dev sessions, Cowork, teammates. What you store here, others can find. What they store, you can search.
+
 - `search_memory` — Search long-term memory by keyword, type, entity
 - `store_fact` — Store a new fact to memory. Use when you learn something important.
 - `retrieve_context` — Load contextual memory for a topic
 - `update_working_context` — Read/write your scratch pad. This survives restarts.
+- `list_working_contexts` — See what OTHER CC sessions are working on. Use for multi-instance awareness and coordination.
+- `retire_memory` — Soft-retire an incorrect/outdated fact. To correct a fact: `store_fact` (new version) → `retire_memory` (old version). Retired facts stay in DB for audit but drop out of search.
 - `list_tasks`, `create_task`, `update_task`, `delete_task` — Manage scheduled tasks
+
+### Memory Discipline
+
+**Store proactively**: After every substantive interaction, ask yourself: did I learn something new? A person, decision, deadline, preference, relationship? If yes, call `store_fact` immediately. Don't wait.
+
+**Store what+why, never how**: "We moved to CC-native because Max plan makes routing unnecessary" (good). "Fixed trust prompt with expect regex" (bad — implementation detail belongs in code).
+
+**The test**: Would this fact be useful to a different CC instance working on a different task in 2 weeks? If yes, store it.
+
+**Search before storing**: Avoid duplicating what's already known. Search first.
+
+**Multi-instance citizenship**: Use `list_working_contexts` to see what other sessions are doing. Store facts clearly — write for someone without your conversation context.
 
 ### Slack Channel (via tools)
 - `slack_reply` — Post a message to Slack
