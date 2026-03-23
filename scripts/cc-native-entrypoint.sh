@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # CC-Native Engine — Supervisor Entrypoint
 #
-# Runs Claude Code in a restart loop with the Slack Channel and Memory MCP servers.
+# Runs Claude Code in a restart loop with the Slack Channel MCP server.
+# Memory is provided by the clawvato-memory HTTP MCP server (separate Railway service).
 # When CC exits (idle timeout, crash, planned reset), waits briefly and restarts.
 #
 # Environment variables (required):
 #   SLACK_BOT_TOKEN, SLACK_APP_TOKEN, OWNER_SLACK_USER_ID
 #   CLAUDE_CODE_OAUTH_TOKEN (Max plan auth)
-#   DATABASE_URL (Postgres)
+#   DATABASE_URL (Postgres — for task scheduler sidecar)
+#   MCP_AUTH_TOKEN (auth for the memory MCP server)
 #
 # Environment variables (optional):
 #   CC_IDLE_TIMEOUT_MS  — Idle timeout in ms (default: 1800000 = 30 min)
@@ -53,6 +55,33 @@ export GOOGLE_AGENT_EMAIL="${GOOGLE_AGENT_EMAIL:-}"
 export GWS_CONFIG_B64="${GWS_CONFIG_B64:-}"
 export DATA_DIR="${DATA_DIR:-/data}"
 export TZ="${TZ:-America/New_York}"
+export MCP_AUTH_TOKEN="${MCP_AUTH_TOKEN:-}"
+
+# ── Generate MCP config with auth token ──
+# The memory MCP server runs as a separate Railway service (HTTP transport).
+# We template the config at runtime to inject the auth token from env vars.
+MCP_CONFIG="/tmp/cc-native-mcp.json"
+cat > "$MCP_CONFIG" <<MCPJSON
+{
+  "mcpServers": {
+    "clawvato-memory": {
+      "type": "url",
+      "url": "http://clawvato-memory.railway.internal:8080/mcp",
+      "headers": {
+        "Authorization": "Bearer ${MCP_AUTH_TOKEN}"
+      }
+    },
+    "slack-channel": {
+      "command": "npx",
+      "args": ["tsx", "src/cc-native/slack-channel.ts"],
+      "env": {
+        "LOG_DESTINATION": "stderr"
+      }
+    }
+  }
+}
+MCPJSON
+echo "[supervisor] MCP config written to $MCP_CONFIG"
 
 # Save API key for extraction hooks before unsetting for CC.
 # CC itself uses Max plan OAuth (free), but the async extraction hook
@@ -114,7 +143,7 @@ while true; do
     spawn env HOME=/home/clawvato claude \
       --dangerously-skip-permissions \
       --dangerously-load-development-channels server:slack-channel \
-      --mcp-config /app/.cc-native-mcp.json \
+      --mcp-config "$MCP_CONFIG" \
       --append-system-prompt-file /app/config/prompts/cc-native-system.md \
       --max-turns 200 \
       --model claude-opus-4-6
