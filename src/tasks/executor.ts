@@ -199,14 +199,14 @@ async function executeSweepTask(
 
           // Split into chunks by ## headers (each section is independent)
           // Fall back to fixed-size chunks if no headers
-          const MAX_CHUNK_CHARS = 3_000; // ~750 tokens input → keeps Haiku output under 8192 token model limit
+          const MAX_CHUNK_CHARS = 10_000; // ~2.5K tokens input → Sonnet handles with 64K output limit
           const chunks = chunkByHeaders(content, MAX_CHUNK_CHARS);
 
           for (let i = 0; i < chunks.length; i++) {
             const chunk = chunks[i];
             const fileSource = `sweep:${new Date().toISOString().split('T')[0]}:${fileName}:chunk${i + 1}`;
             try {
-              const extracted = await extractFacts(deps.anthropicClient, config.models.classifier, chunk, fileSource, deps.sql);
+              const extracted = await extractFacts(deps.anthropicClient, config.models.executor, chunk, fileSource, deps.sql);
               if (extracted.facts.length > 0) {
                 const stored = await storeExtractionResult(deps.sql, extracted, fileSource);
                 factsStored += stored.memoriesStored;
