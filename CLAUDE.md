@@ -143,7 +143,8 @@ Key patterns:
 - `Sql` type (from postgres.js) replaces `DatabaseSync` as the DB handle passed through the codebase
 - `initDb()` is async — must be awaited before any DB operations
 - Schema loaded from `src/db/schema.pg.sql` via `sql.unsafe(schema)`
-- Tables: memories, memory_categories, memory_entities, people, actions, action_patterns, documents, agent_state, schema_version
+- Tables: memories, memory_categories, memory_entities, actions, action_patterns, documents, agent_state, scheduled_tasks, schema_version
+- NOTE: `people` table was removed (2026-03-20) — all knowledge stored as facts in `memories` with entity tags
 - `tsvector` generated column on memories with GIN index (replaces FTS5)
 - `vector(384)` column on memories with HNSW index (replaces sqlite-vec)
 - Hybrid search: single CTE query combining tsvector + pgvector with RRF scoring
@@ -154,15 +155,8 @@ Only the owner (identified by `OWNER_SLACK_USER_ID`) can issue instructions. Eve
 - **PreToolUse**: sender verification, rate limiting, path validation
 - **PostToolUse**: audit logging, output secret scanning
 
-### Training Wheels (Trust Levels 0-3)
-- **Level 0**: All actions require confirmation
-- **Level 1** (current): Read-only + internal memory writes auto-approved
-- **Level 2**: Graduated patterns auto-approved
-- **Level 3**: Most actions auto-approved (destructive still confirmed)
-
-Memory tools (`update_working_context`, `store_fact`, `mcp__memory__*`) are classified as reads (internal agent state, not external writes).
-
-Graduation: 10+ approvals with <5% rejection rate and zero rejections in last 5.
+### Training Wheels (Trust Levels 0-3) — CURRENTLY DISABLED
+Training wheels were removed in Session 16 because they were blocking internal tools. Pre-tool security checks and output sanitization remain active. The graduation system is implemented but not enforced.
 
 ## Engineering Philosophy
 - **Always take the pain now — build for durability.** No short-term hacks or workarounds. If something needs doing, do it right the first time.
@@ -220,8 +214,10 @@ Graduation: 10+ approvals with <5% rejection rate and zero rejections in last 5.
 ### Hybrid Agent Flow
 1. Slack message → EventQueue (4s debounce) → `hybrid.processBatch()`
 2. `assembleContext()` builds shared context (memory + conversation + working ctx)
-3. `routeMessage()` — Haiku classifies FAST or HEAVY using full context
-4. Execute chosen path → post response → background extraction
+3. `routeMessage()` — Haiku classifies FAST, MEDIUM, or DEEP using full context
+4. FAST/MEDIUM: `executeFastPath()` with appropriate model
+5. DEEP: `planContext()` (Opus, replaces old preflight — gathers context + converses with user) → `executeDeepPath()` with pre-loaded workspace
+6. Post response → background extraction (Haiku extracts facts from conversation)
 
 ### Deep Path Stream-JSON
 The deep path spawns `claude --print --verbose --output-format stream-json` and parses events line by line:
@@ -272,7 +268,7 @@ Supports `LOG_DESTINATION=stderr` for MCP server mode.
 | `context.longTermTokenBudget` | 1,500 | Memory retrieval budget |
 | `context.workingContextTokenBudget` | 1,000 | Scratch pad budget |
 | `context.shortTermMessageLimit` | 50 | Max Slack messages fetched |
-| `memory.extractionMaxTokens` | 1,000 | Haiku extraction response limit |
+| `memory.extractionMaxTokens` | 8,000 | Haiku extraction response limit |
 | `memory.reflectionMaxTokens` | 1,000 | Haiku reflection response limit |
 | `slack.interruptConfidenceThreshold` | 0.7 | Below this, ask user to clarify |
 | `trainingWheels.graduationThreshold` | 10 | Approvals needed for graduation |
