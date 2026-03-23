@@ -30,10 +30,15 @@ RUN npm install -g @anthropic-ai/claude-code @googleworkspace/cli || true
 ENV DATA_DIR=/data
 RUN mkdir -p /data
 
+# Copy scripts and cc-native source (needed by tsx at runtime)
+COPY scripts/ /app/scripts/
+RUN chmod +x /app/scripts/*.sh
+
+# Copy cc-native MCP config
+COPY .cc-native-mcp.json /app/.cc-native-mcp.json
+
 # Startup: ensure /data/claude-config exists (volume mounted at runtime, not build time)
 # then symlink ~/.claude to it so auth tokens persist across redeploys.
 # Also restore .claude.json if missing (Claude CLI needs it for onboarding state).
-COPY scripts/docker-entrypoint.sh /app/scripts/docker-entrypoint.sh
-RUN chmod +x /app/scripts/docker-entrypoint.sh
-
+# ENGINE=cc-native selects the cc-native entrypoint.
 CMD ["/app/scripts/docker-entrypoint.sh"]

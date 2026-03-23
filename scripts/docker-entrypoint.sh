@@ -37,4 +37,9 @@ else
 fi
 
 # ── Start the agent ──
-exec node dist/cli/index.js start
+if [ "${ENGINE:-hybrid}" = "cc-native" ]; then
+  echo "[entrypoint] Starting CC-Native Engine"
+  exec /app/scripts/cc-native-entrypoint.sh
+else
+  exec node dist/cli/index.js start
+fi
