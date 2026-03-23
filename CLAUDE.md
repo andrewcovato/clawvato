@@ -168,6 +168,11 @@ Training wheels were removed in Session 16 because they were blocking internal t
 - Present the diagnosis and proposed approach to the owner for confirmation before writing any code.
 - Don't make ad-hoc one-off prompt fixes — diagnose with logs first.
 
+## Git Push Protocol
+- **Proactively suggest pushing** when you've reached a natural milestone: a feature is complete, a bug fix is verified, a sprint wraps up, or you've accumulated 5+ unpushed commits.
+- Ask: "We have N unpushed commits — good time to push?"
+- Don't wait until session end — push at logical breakpoints throughout the session.
+
 ## Coding Conventions
 
 ### Prompts — NEVER hardcode in TypeScript
