@@ -169,15 +169,23 @@ async function executeSweepTask(
   const config = getConfig();
 
   try {
-    const result = await executeSweep(deps.sweepCollectors!, {
-      sql: deps.sql,
-      dataDir: config.dataDir,
-      collectOnly: !!process.env.SWEEP_COLLECT_ONLY,
-    });
+    // SWEEP_REEXTRACT: skip collection + synthesis, just re-extract from a persisted findings file
+    const reextractPath = process.env.SWEEP_REEXTRACT;
+    let workspaceDir: string | undefined;
 
-    // Process findings from workspace → extract facts → store to memory
-    // Chunk the findings file so each piece fits within Haiku's context window
-    const workspaceDir = (result as unknown as Record<string, unknown>).workspaceDir as string | undefined;
+    let sweepResult: Awaited<ReturnType<typeof executeSweep>> | undefined;
+
+    if (reextractPath) {
+      logger.info({ path: reextractPath }, 'Sweep: re-extract mode — skipping collection + synthesis');
+      workspaceDir = reextractPath;
+    } else {
+      sweepResult = await executeSweep(deps.sweepCollectors!, {
+        sql: deps.sql,
+        dataDir: config.dataDir,
+        collectOnly: !!process.env.SWEEP_COLLECT_ONLY,
+      });
+      workspaceDir = (sweepResult as unknown as Record<string, unknown>).workspaceDir as string | undefined;
+    }
     let factsStored = 0;
     if (workspaceDir) {
       const findingsDir = join(workspaceDir, 'findings');
@@ -216,10 +224,12 @@ async function executeSweepTask(
       }
     }
 
-    const summary = `Swept ${result.sourcesSwept} sources, collected ${result.itemsCollected} new items, stored ${factsStored} facts in ${Math.round(result.durationMs / 1000)}s.`;
+    const summary = reextractPath
+      ? `Re-extracted ${factsStored} facts from persisted findings.`
+      : `Swept ${sweepResult!.sourcesSwept} sources, collected ${sweepResult!.itemsCollected} new items, stored ${factsStored} facts in ${Math.round(sweepResult!.durationMs / 1000)}s.`;
 
     // Post result to task channel
-    if (deps.channelManager && result.itemsCollected > 0) {
+    if (deps.channelManager && (factsStored > 0 || (sweepResult?.itemsCollected ?? 0) > 0)) {
       await deps.channelManager.postNotification(`🔄 *Background sweep complete*\n\n${summary}`);
     }
 
