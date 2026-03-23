@@ -88,16 +88,25 @@ This brain is shared across all CC instances — this Railway session, local dev
 - `slack_react` — Add/remove emoji reactions
 - `slack_get_history` — Read recent channel history
 
+### Slack Search (native MCP tools — for cross-channel search)
+- `slack_search_public_and_private` — Semantic search across all channels, DMs, group DMs. Use when looking for a conversation or topic across Slack. Supports full modifier syntax: `from:user in:channel before:date after:date has:link`.
+- `slack_search_users` — Find people by name, email, department, or role.
+- These native tools complement your Channel MCP — use them for *searching* across Slack, while using `slack_reply`/`slack_react` for *interacting*.
+
 ### Google Workspace (via bash)
 - Gmail: `gws gmail users threads list --params '{"userId":"me","q":"search terms"}'`
 - Gmail read: `gws gmail users threads get --params '{"userId":"me","id":"THREAD_ID"}'`
 - Calendar: `gws calendar events list --params '{"calendarId":"primary","timeMin":"...","timeMax":"..."}'`
 - Drive: `gws drive files list --params '{"q":"name contains 'budget' and trashed = false","pageSize":20}'`
 
-### Fireflies (via bash)
-- Search: `npx tsx tools/fireflies.ts search --query "budget" --days-back 60`
-- Summary: `npx tsx tools/fireflies.ts summary --id "TRANSCRIPT_ID"`
-- Transcript: `npx tsx tools/fireflies.ts transcript --id "TRANSCRIPT_ID"`
+### Fireflies (native MCP tools — preferred for all interactive queries)
+- **Use the native `fireflies_*` MCP tools** for all meeting lookups. They have better search (structured query grammar), more features, and no bash overhead.
+- Search: `fireflies_search` — supports `keyword:"term" scope:title from:date to:date participants:email`. More powerful than client-side title matching.
+- Also: `fireflies_get_transcripts` — bulk list with date/keyword/participant filters, pagination via `skip`.
+- Summary: `fireflies_get_summary` — AI overview, action items, keywords for a single meeting.
+- Full transcript: `fireflies_get_transcript` or `fireflies_fetch` (more detailed) — full dialogue with speakers.
+- Browse contacts: `fireflies_get_user_contacts` — who you've met with, sorted by recency.
+- **When to use bash instead**: Only the background sweep system uses the custom Fireflies client directly. You should never need `npx tsx tools/fireflies.ts` — the native tools cover all interactive use cases with better search.
 
 ## Searching Memory Effectively
 

@@ -33,10 +33,11 @@ Your **only** persistent storage is:
   - `gws gmail users threads get --params '{"userId":"me","id":"THREAD_ID"}'`
   - `gws calendar events list --params '{"calendarId":"primary","timeMin":"2026-03-18T00:00:00Z","timeMax":"2026-03-19T23:59:59Z"}'`
   - `gws drive files list --params '{"q":"name contains 'budget' and trashed = false","pageSize":20}'`
-- **Fireflies (meeting transcripts)**: Use bash to run the Fireflies CLI. Examples:
-  - `npx tsx tools/fireflies.ts search --query "budget" --days-back 60`
-  - `npx tsx tools/fireflies.ts summary --id "TRANSCRIPT_ID"`
-  - `npx tsx tools/fireflies.ts transcript --id "TRANSCRIPT_ID"`
+- **Fireflies (meeting transcripts)**: Use the native `fireflies_*` MCP tools (preferred over bash CLI):
+  - Search: `fireflies_search` with query grammar: `keyword:"budget" from:2026-01-01 to:2026-03-23`
+  - Bulk list: `fireflies_get_transcripts` with date/keyword/participant filters
+  - Summary: `fireflies_get_summary` for AI overview + action items
+  - Full transcript: `fireflies_fetch` for complete dialogue with speakers
 
 ## MANDATORY: Capture Findings
 

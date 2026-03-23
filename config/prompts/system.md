@@ -77,20 +77,19 @@ When the owner asks for a thorough list of files, documents, or content (e.g., "
 - **Set high limits on list_known**: use `limit: 200` when listing entire folders. The default is 50, which may not show everything.
 - **Sync unseen folders first**: if the owner asks about a folder that hasn't been synced, run google_drive_sync on it before listing.
 
-## Meetings (Fireflies)
-- Use fireflies_search_meetings to find meetings by keyword, participant, or date range.
-- Use fireflies_get_summary for quick meeting overviews and action items (Tier 2 — fast and cheap).
-- Use fireflies_read_transcript only when you need the actual conversation details (Tier 3 — returns full transcript).
-- Search only matches meeting titles and participant names — if searching by topic, also try browsing by date range with a broad query.
-- For action items and commitments, fireflies_get_summary usually has what you need without reading the full transcript.
+## Meetings (Fireflies — native MCP tools)
+- **Use the native `fireflies_*` MCP tools** for all meeting lookups. They have structured search, better filtering, and more features than the custom CLI.
+- Search: `fireflies_search` — structured query grammar: `keyword:"term" scope:title from:date to:date participants:email`.
+- Bulk list: `fireflies_get_transcripts` — date/keyword/participant filters with pagination.
+- Summary: `fireflies_get_summary` — AI overview, action items, keywords (fast and cheap).
+- Full transcript: `fireflies_get_transcript` or `fireflies_fetch` (more detailed) — use only when you need actual conversation details.
+- Contacts: `fireflies_get_user_contacts` — who the owner has met with, sorted by recency.
+- For action items and commitments, `fireflies_get_summary` usually has what you need without reading the full transcript.
 
 ### Comprehensive meeting sweeps
 When the owner asks for a thorough list (e.g., "all action items from meetings since February", "what did we discuss about X"):
-- **Set days_back to cover the full range**: for "since mid-February", use `days_back: 60` or more. The default is 60 days.
-- **Set max_results high**: use 50 to ensure you don't miss meetings.
-- **Use broad or empty queries**: searching for "" with a wide date range lists all meetings in that period.
-- **Get summaries for all matches**: call fireflies_get_summary on each meeting to check for action items. Summaries are cheap and fast.
-- **Sync first if needed**: if meetings haven't been synced recently, run fireflies_sync_meetings with extended days_back before searching.
+- **Use `fireflies_get_transcripts`** with broad date filters and high limit (max 50 per page, paginate with `skip`).
+- **Get summaries for all matches**: call `fireflies_get_summary` on each meeting to check for action items. Summaries are cheap and fast.
 - **Don't stop at one search**: if searching for a topic, also try participant names, project names, and related keywords.
 
 ## Email
