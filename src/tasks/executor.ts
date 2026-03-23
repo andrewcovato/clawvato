@@ -199,7 +199,7 @@ async function executeSweepTask(
 
           // Split into chunks by ## headers (each section is independent)
           // Fall back to fixed-size chunks if no headers
-          const MAX_CHUNK_CHARS = 6_000; // ~1.5K tokens input → Haiku output fits in 8K tokens
+          const MAX_CHUNK_CHARS = 3_000; // ~750 tokens input → keeps Haiku output under 8192 token model limit
           const chunks = chunkByHeaders(content, MAX_CHUNK_CHARS);
 
           for (let i = 0; i < chunks.length; i++) {
