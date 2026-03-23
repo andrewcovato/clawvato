@@ -115,20 +115,23 @@ while true; do
     # Raw output looks like: [1Ctrust[1Cthis[1Cfolder
     # Use -re (regex) to match through the ANSI noise.
     # Match on "folder" alone — unique enough and less likely to be split.
+    # Only watch for prompts during the first 30s of startup.
+    # After that, CC is running normally and we don't want to
+    # accidentally match "folder" in regular output.
+    set timeout 30
+
     expect {
-      -re "folder" {
-        # Option 1 "Yes, I trust this folder" is pre-selected (❯).
-        # Just send Enter to confirm.
+      -re "trust.*folder|folder.*trust" {
+        # Trust prompt — option 1 is pre-selected, just send Enter
         sleep 1
         send "\r"
-        exp_continue
+        # Don't exp_continue — trust prompt only appears once
       }
       -re "Y/n" {
         send "Y\r"
-        exp_continue
       }
       timeout {
-        # No more prompts after 120s — CC should be running with channels
+        # No prompts in 30s — CC is past startup
       }
     }
 
