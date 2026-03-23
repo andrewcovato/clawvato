@@ -93,16 +93,19 @@ while true; do
   CC_LOG="/tmp/cc-session-${SESSION_COUNTER}.log"
   echo "[supervisor] Logging CC output to $CC_LOG"
 
-  # Stream CC output to both file AND stderr (Railway logs) via tee.
-  # script provides the PTY; tee splits output for visibility.
+  # Stream CC output to stderr (Railway logs).
+  # script provides the PTY so CC runs in interactive mode.
   #
-  # The stdin wrapper sends Enter after 5s as a fallback to auto-approve
-  # any remaining interactive prompts (trust, TOS, etc.) that
-  # --dangerously-skip-permissions doesn't cover.
+  # Auto-approve: CC's TUI expects \r (carriage return) for Enter, not \n.
+  # Send \r repeatedly starting early to catch the trust prompt whenever
+  # it appears. Once trust is persisted (~/.claude/ on volume), subsequent
+  # restarts won't need this.
   {
-    sleep 5; printf '\n'
-    sleep 2; printf '\n'
-    sleep 2; printf '\n'
+    # Send Enter (\r) every 2s for the first 30s to catch any prompts
+    for i in $(seq 1 15); do
+      sleep 2
+      printf '\r'
+    done
     # Keep stdin open so PTY doesn't close
     while true; do sleep 3600; done
   } | script -qfc "claude \
