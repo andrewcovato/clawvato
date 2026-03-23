@@ -51,21 +51,7 @@ cat > "$CLAWVATO_HOME/.claude/settings.json" << 'SETTINGS_EOF'
     "allow": [],
     "deny": []
   },
-  "skipDangerousModePermissionPrompt": true,
-  "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "mcp__slack-channel__slack_reply",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "npx tsx /app/scripts/extract-from-reply.ts",
-            "async": true
-          }
-        ]
-      }
-    ]
-  }
+  "skipDangerousModePermissionPrompt": true
 }
 SETTINGS_EOF
 chown -R clawvato:clawvato "$CLAWVATO_HOME/.claude" 2>/dev/null || true
