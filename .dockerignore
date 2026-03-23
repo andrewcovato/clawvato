@@ -1,6 +1,7 @@
 node_modules
 dist
 .git
+.claude
 .env
 .env.local
 *.db
@@ -12,3 +13,4 @@ coverage
 .project
 tests
 docs
+.workspaces
