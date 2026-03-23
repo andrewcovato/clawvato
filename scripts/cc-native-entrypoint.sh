@@ -93,29 +93,50 @@ while true; do
   CC_LOG="/tmp/cc-session-${SESSION_COUNTER}.log"
   echo "[supervisor] Logging CC output to $CC_LOG"
 
-  # Stream CC output to stderr (Railway logs).
-  # script provides the PTY so CC runs in interactive mode.
-  #
-  # Auto-approve: CC's TUI expects \r (carriage return) for Enter, not \n.
-  # Send \r repeatedly starting early to catch the trust prompt whenever
-  # it appears. Once trust is persisted (~/.claude/ on volume), subsequent
-  # restarts won't need this.
-  {
-    # Send Enter (\r) every 2s for the first 30s to catch any prompts
-    for i in $(seq 1 15); do
-      sleep 2
-      printf '\r'
-    done
-    # Keep stdin open so PTY doesn't close
-    while true; do sleep 3600; done
-  } | script -qfc "claude \
-    --dangerously-skip-permissions \
-    --dangerously-load-development-channels server:slack-channel \
-    --mcp-config '$PROJECT_DIR/.cc-native-mcp.json' \
-    --append-system-prompt-file '$PROJECT_DIR/config/prompts/cc-native-system.md' \
-    --max-turns $MAX_TURNS \
-    --model claude-opus-4-6" /dev/stdout 2>&1 | tee "$CC_LOG" >&2 \
-    || true  # Don't exit the loop on CC crash
+  # Use `expect` to run CC with a proper PTY and auto-approve prompts.
+  # expect creates a real PTY (not a pipe hack), watches for specific text,
+  # and sends the right input. Once trust is persisted on the Railway volume,
+  # subsequent restarts skip the prompt automatically.
+  CC_LOG="/tmp/cc-session-${SESSION_COUNTER}.log"
+
+  expect << EXPECT_SCRIPT 2>&1 | tee "$CC_LOG" >&2
+    set timeout 120
+    log_user 1
+
+    spawn claude \
+      --dangerously-skip-permissions \
+      --dangerously-load-development-channels server:slack-channel \
+      --mcp-config "$PROJECT_DIR/.cc-native-mcp.json" \
+      --append-system-prompt-file "$PROJECT_DIR/config/prompts/cc-native-system.md" \
+      --max-turns $MAX_TURNS \
+      --model claude-opus-4-6
+
+    # Auto-approve any interactive prompts
+    expect {
+      "trust this folder" {
+        send "\r"
+        exp_continue
+      }
+      "Enter to confirm" {
+        send "\r"
+        exp_continue
+      }
+      "Y/n" {
+        send "Y\r"
+        exp_continue
+      }
+      timeout {
+        # CC is running, no more prompts — wait for it to exit
+      }
+    }
+
+    # CC is now past prompts and running with channels.
+    # Wait indefinitely for it to exit.
+    set timeout -1
+    expect eof
+EXPECT_SCRIPT
+
+  true  # Don't exit the loop on CC crash
 
   EXIT_CODE=$?
   echo "[supervisor] CC session #$SESSION_COUNTER exited (code: $EXIT_CODE)"
