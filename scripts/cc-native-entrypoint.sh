@@ -65,7 +65,7 @@ cat > "$MCP_CONFIG" <<MCPJSON
 {
   "mcpServers": {
     "clawvato-memory": {
-      "type": "url",
+      "type": "http",
       "url": "http://clawvato-memory.railway.internal:8080/mcp",
       "headers": {
         "Authorization": "Bearer ${MCP_AUTH_TOKEN}"
