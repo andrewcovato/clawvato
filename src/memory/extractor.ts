@@ -80,8 +80,15 @@ export async function extractFacts(
       .map(b => b.text)
       .join('');
 
-    // Parse JSON — handle potential markdown wrapping
-    const jsonStr = text.replace(/^```json?\s*/i, '').replace(/\s*```$/, '').trim();
+    // Parse JSON — handle markdown wrapping, leading text, etc.
+    // Extract the JSON object from anywhere in the response
+    let jsonStr = text;
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      jsonStr = jsonMatch[0];
+    } else {
+      jsonStr = text.replace(/^```json?\s*/i, '').replace(/\s*```$/, '').trim();
+    }
     const parsed = JSON.parse(jsonStr);
 
     // Content cap: 0 = unlimited, otherwise truncate

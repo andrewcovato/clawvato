@@ -53,7 +53,7 @@
     "archiveThreshold": 1,
     "mergeSimilarityThreshold": 0.85,
     "reflectionThreshold": 50,
-    "extractionMaxTokens": 8000,
+    "extractionMaxTokens": 16000,
     "reflectionMaxTokens": 1000,
     "extractionContentMaxChars": 2000,
     "categoryFuzzyThreshold": 0.8,
