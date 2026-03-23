@@ -1,173 +1,177 @@
 # Session Handoff
 
-> Last updated: 2026-03-23 | Session 20 | Sprint S9
+> Last updated: 2026-03-23 | Session 21 | Sprint S9
 
 ## Quick Resume
 
 ```
 Sprint: S9 — CC-Native Engine + Shared Memory Brain
-Status: MEMORY PLUGIN VALIDATED (10/10 tests), IN-TREE SERVER UPDATED
+Status: HTTP MEMORY PLUGIN DEPLOYED — all instances wired
 Branch: cc-native-engine (GitHub auto-deploy to Railway)
 Engine: ENGINE=cc-native env var activates CC-native mode
-Database: Railway managed Postgres — 130 memories, 693 entity tags
+Database: Railway managed Postgres — 125+ memories, 693 entity tags
 Task Channel: #clawvato-tasks (C0AN5J0LCP3)
 Build: Clean (tsc --noEmit passes)
-Deploy: Live on Railway via GitHub auto-deploy
-Memory Plugin: github.com/andrewcovato/clawvato-memory (local: /Users/andrewcovato/dev/clawvato-memory) — 7 bugs fixed, all 6 tools validated
-CC-Native System Prompt: config/prompts/cc-native-system.md (needs SKILL.md injection for teaching)
-Railway Plugin Service: Does NOT exist yet — needs to be created for Option 3
-NEXT: Commit + push both repos, inject SKILL.md into system prompt, deploy to Railway, then Option 3 (HTTP MCP server)
+Deploy: Live on Railway via GitHub auto-deploy (both clawvato + clawvato-memory services)
+Memory Plugin: github.com/andrewcovato/clawvato-memory — deployed as HTTP MCP server on Railway
+  Public URL: https://clawvato-memory-production.up.railway.app/mcp
+  Internal URL: http://clawvato-memory.railway.internal:8080/mcp
+  Auth: Bearer token (MCP_AUTH_TOKEN env var on both services)
+Local CC: wired to public URL via .mcp.json (type: "http")
+Railway CC: wired to internal URL via runtime-generated MCP config
+NEXT: Remove in-tree MCP server, memory scoping, stabilize
 ```
 
-## What Happened This Session (Session 20)
+## What Happened This Session (Session 21)
 
-### Memory Plugin Validation (10/10 tests pass)
+### Native Plugin Audit — What to Keep vs Replace
 
-Ran full CRUD test cycle against the standalone plugin connecting to Railway Postgres:
+Full comparison of Anthropic's native MCP plugins (Gmail, Calendar, Slack, Fireflies, Figma) vs Clawvato's custom integrations:
 
-| Test | Tool | Result |
+| Integration | Decision | Rationale |
 |---|---|---|
-| Browse (no query) | search_memory | PASS |
-| Keyword search | search_memory | PASS |
-| Filtered search | search_memory | PASS |
-| Token-budgeted retrieval | retrieve_context | PASS |
-| Store test fact | store_fact | PASS |
-| Verify write via search | search_memory | PASS |
-| Set working context | update_working_context | PASS |
-| List all working contexts | list_working_contexts | PASS — saw Railway instance's state! |
-| Clear working context | update_working_context (clear) | PASS |
-| Retire test fact | retire_memory | PASS — verified it drops from search |
+| Calendar | Keep custom `gws` CLI | Feature parity, less overhead than MCP |
+| Gmail | Keep custom `gws` CLI | Native can't send email — only creates drafts |
+| Drive | Keep custom | No native Drive plugin exists |
+| Slack | Keep custom Channel MCP | Native can't do reactions — breaks the entire UX |
+| Fireflies | **Split**: native for interactive, custom for sweeps | Native has better search grammar; custom needed for sweep ingestion pipeline |
+| Memory/Tasks/Sweeps | Keep custom | No native equivalent — this IS the product |
 
-### 7 Bugs Found and Fixed in Plugin
+Key insight: Native plugins are designed for interactive, stateless, session-scoped use. Clawvato is an autonomous operating system with persistent memory, background ingestion, and cross-instance coordination. They solve different problems.
 
-1. `search_vector` → `content_tsv` (column name mismatch with Railway schema)
-2. Removed `updated_at` from memories INSERT (column doesn't exist)
-3. Added `id` generation via `crypto.randomUUID()` (schema requires explicit TEXT PK)
-4. Removed `created_at` from `memory_entities` INSERT (column doesn't exist)
-5. Added `valid_until IS NULL` to all query paths (was returning retired/superseded facts)
-6. `delete_memory` → `retire_memory` (soft-delete via `valid_until = NOW()`, preserves audit trail)
-7. Added `normalizeCategory()` (lowercase + strip trailing 's' to prevent category drift)
+### Fireflies + Slack Prompt Updates
 
-### In-Tree MCP Server Updated
+Updated all 3 prompts (cc-native-system.md, system.md, deep-path.md):
+- Fireflies: switched from bash CLI (`npx tsx tools/fireflies.ts`) to native `fireflies_*` MCP tools for interactive queries. Custom FirefliesClient retained only for sweep collector.
+- Slack: added native `slack_search_public_and_private` and `slack_search_users` to cc-native prompt for cross-channel search alongside custom Channel MCP.
 
-Ported two new tools to `src/mcp/memory/server.ts` to match plugin functionality:
-- `list_working_contexts` — cross-instance awareness (groups by session, handles both `wctx:label` and `wctx:SESSION_ID:label` formats)
-- `retire_memory` — soft-delete with audit trail (matches plugin's behavior)
+### HTTP Memory Plugin — Full Implementation (Option 3)
 
-Build passes clean.
+Built, deployed, and wired the HTTP transport for `clawvato-memory`:
 
-### Design Spec Written: Remote Memory Plugin (Option 3)
+1. **Dual transport in plugin** (`server/index.ts`):
+   - `MCP_TRANSPORT=http` → HTTP server with StreamableHTTPServerTransport
+   - Default (no env var) → stdio transport (unchanged, for local dev)
+   - Stateless mode: new Server+Transport per request (MCP SDK requires 1:1 binding for concurrent clients)
+   - Bearer token auth middleware on all MCP endpoints
+   - Health endpoint: `GET /health` with Postgres connectivity check
+   - CORS support for cross-origin clients
+   - Connection pool: 10 for HTTP (vs 3 for stdio)
 
-`docs/DESIGN_REMOTE_MEMORY_PLUGIN.md` — comprehensive spec for converting the memory plugin from stdio to HTTP MCP server on Railway:
-- StreamableHTTPServerTransport (dual transport: stdio for local dev, HTTP for production)
-- Separate Railway service with GitHub auto-deploy
-- Bearer token auth
-- Internal network for Railway CC, public URL for local/Cowork
-- SKILL.md as MCP resource for teaching CC instances about capabilities
-- Migration path: dual transport → remove in-tree server → SKILL.md as resource
-- Latency analysis: ~100-200ms added, negligible vs LLM inference
+2. **Railway service created**:
+   - Service: `clawvato-memory` in the `clawvato` project
+   - Public URL: `https://clawvato-memory-production.up.railway.app`
+   - Internal URL: `clawvato-memory.railway.internal:8080`
+   - Env vars: `MCP_TRANSPORT=http`, `DATABASE_URL=${{Postgres.DATABASE_URL}}`, `MCP_AUTH_TOKEN`
+   - Health check configured at `/health`
+   - GitHub repo connected for auto-deploy
 
-### Key Architectural Decision: Correction via Retire, Not Delete
+3. **Local CC wired** (`.mcp.json`):
+   - Changed from stdio (local process + direct Postgres URL) to HTTP (Railway public URL + bearer token)
+   - Format: `"type": "http"` (not `"url"` — CC schema validation requires `"http"`)
+   - Verified working: search_memory returns live data from Railway Postgres
 
-Deep crawl of the memory architecture revealed:
-- Every in-tree surface (sweeps, consolidation, fast-path, Drive/Fireflies sync) uses `supersedeMemory()` — soft-delete with `valid_until = NOW()`
-- Plugin was the only surface doing hard DELETE — inconsistent and destructive
-- **Decision**: All correction flows use soft-delete (retire). CC corrects facts via: `store_fact` (new) → `retire_memory` (old). Future hard-purge of old superseded rows can be added to consolidation when needed.
+4. **Railway CC wired** (`cc-native-entrypoint.sh`):
+   - Entrypoint now generates MCP config at runtime (heredoc → `/tmp/cc-native-mcp.json`)
+   - Injects `MCP_AUTH_TOKEN` from env var via `$env(MCP_CONFIG)` in expect script
+   - Uses internal Railway URL for zero-latency service-to-service communication
+   - `MCP_AUTH_TOKEN` set on both Railway services (memory + agent)
 
-### The "Teaching Problem" Identified
+### Eyes Bug Fixed
 
-Railway CC instance doesn't know about `list_working_contexts` because:
-1. Its MCP server (in-tree) didn't expose it (FIXED)
-2. Its system prompt doesn't mention multi-instance awareness
-3. SKILL.md from the plugin isn't loaded on Railway
+The 👀 reaction was added on message receipt but never removed. Now removed immediately after the channel event is pushed to CC:
+- 👀 added → message received (code-enforced, instant feedback)
+- 👀 removed → channel event pushed to CC (code-enforced)
+- 🧠 added → CC starts processing (prompt-driven)
+- 🧠 removed → CC posts response (prompt-driven)
 
-**Solution path** (in design doc): Inject condensed SKILL.md into `config/prompts/cc-native-system.md`, long-term serve SKILL.md as MCP resource.
+### Search Limit Cap Removed
 
-## What's Working (deployed + local)
+Owner directive: no artificial caps on query results. `search_memory` default is 20, but no hard maximum. If a query needs 2000 results, return 2000 results. Postgres and CC can handle it.
 
-### CC-Native Engine (Track O — deployed on Railway)
+## Bugs Found and Fixed
+
+1. **MCP config type**: `"type": "url"` fails CC schema validation → must be `"type": "http"`
+2. **Expect/Tcl variable**: `$MCP_CONFIG` in single-quoted expect heredoc was read as Tcl variable → fix: `export MCP_CONFIG` + `$env(MCP_CONFIG)`
+3. **Eyes reaction stuck**: 👀 added but never removed → added removal after channel event push
+4. **Search limit too tight**: Hard cap at 50 results → removed cap entirely
+
+## Files Modified This Session
+
+### clawvato repo:
+- `config/prompts/cc-native-system.md` — Fireflies native MCP tools + Slack native search
+- `config/prompts/system.md` — Fireflies native MCP tools (hybrid fallback)
+- `config/prompts/deep-path.md` — Fireflies native MCP tools (deep path)
+- `scripts/cc-native-entrypoint.sh` — Runtime MCP config generation, internal URL, expect fix
+- `src/cc-native/slack-channel.ts` — Eyes reaction removal after CC pickup
+
+### clawvato-memory repo:
+- `server/index.ts` — HTTP transport, dual transport, stateless Server per request, auth middleware, health endpoint, search limit uncapped
+- `package.json` — v0.2.0, `start:http` script, dev deps (typescript, @types/node)
+
+## Architecture After This Session
+
 ```
-Railway container:
-  Supervisor (expect + restart loop)
-    └── claude (interactive, Max plan = $0)
-          ├── Slack Channel MCP server (Socket Mode → channel events)
-          ├── Memory MCP server (in-tree, NOW with list_working_contexts + retire_memory)
-          └── Google/Fireflies via Bash
-
-  Task Scheduler (standalone sidecar)
+Railway Project: clawvato
+├── clawvato (agent) — CC-native engine
+│     ├── Slack Channel MCP (stdio, in-process)
+│     ├── clawvato-memory MCP (HTTP, internal network)
+│     ├── Google/Fireflies via Bash (gws CLI)
+│     └── Native MCP tools (Fireflies, Slack search)
+│
+├── clawvato-memory (HTTP MCP server) — NEW THIS SESSION
+│     ├── 6 tools: search, store, retrieve, working ctx, list ctx, retire
+│     ├── StreamableHTTPServerTransport (stateless)
+│     ├── Bearer token auth
+│     ├── Health check at /health
+│     └── Connects to Postgres via internal network
+│
+├── Postgres (managed DB)
+│     └── memories, agent_state, memory_entities, etc.
+│
+Local CC / Cowork / Teammates
+  └── clawvato-memory MCP (HTTP, public URL + bearer token)
 ```
 
-### Memory Plugin (Track H — validated locally)
-```
-Standalone repo: github.com/andrewcovato/clawvato-memory
-  ├── 6 tools: search_memory, store_fact, retrieve_context,
-  │            update_working_context, list_working_contexts, retire_memory
-  ├── Session-scoped working context (wctx:SESSION_ID:key)
-  ├── SKILL.md teaching CC memory discipline
-  ├── Connects to Railway Postgres via public URL
-  └── Validated: 10/10 CRUD tests pass from local CC
-```
-
-### Cross-Instance Awareness Demonstrated
-- Local CC can see Railway instance's working contexts (Coles RFP, sweep cadence, etc.)
-- Railway can see local sessions (once deployed with updated in-tree server)
-- Shared Postgres is the coordination layer — no message passing needed
-
-## Files Created/Modified This Session
-
-### New:
-- `docs/DESIGN_REMOTE_MEMORY_PLUGIN.md` — Spec for HTTP MCP server (Option 3)
-
-### Modified (clawvato repo):
-- `src/mcp/memory/server.ts` — Added `list_working_contexts` + `retire_memory` tools
-- `.project/sessions/HANDOFF.md` — This file
-- `.project/state.json` — Updated session/sprint state
-
-### Modified (clawvato-memory repo):
-- `server/index.ts` — 7 bug fixes (schema alignment, retire_memory, valid_until filter, category normalization)
-- `skills/memory/SKILL.md` — Updated `delete_memory` → `retire_memory`, added correction workflow
-
-### NOT YET COMMITTED
-Both repos have uncommitted changes. Need to commit + push both.
+Push to `clawvato-memory` repo → Railway auto-deploys → all CC instances get updates.
 
 ## Immediate Next Steps
 
-1. **Commit + push both repos** — clawvato (in-tree fixes) + clawvato-memory (plugin fixes)
-2. **Deploy in-tree fixes to Railway** — push triggers auto-deploy, Railway CC gets `list_working_contexts` + `retire_memory`
-3. **Inject memory awareness into CC-native system prompt** — add condensed SKILL.md to `config/prompts/cc-native-system.md`
-4. **Implement Option 3** — HTTP transport for memory plugin:
-   - Add StreamableHTTPServerTransport to plugin
-   - Deploy as separate Railway service
-   - Wire Railway CC to internal URL
-   - Wire local CC to public URL
-5. **Remove in-tree MCP server** — once Railway CC uses the HTTP plugin
+1. **Remove in-tree MCP server** — `src/mcp/memory/server.ts` + `src/mcp/memory/stdio.ts` are dead code now. Also remove the static `.cc-native-mcp.json` file (replaced by runtime generation).
+2. **Memory scoping** — per-session project/domain partitioning. BLOCKING further memory scaling. Owner directive: no dev memories in the shared brain.
+3. **Stabilize cc-native** — monitor Railway deploy for 24h with the new HTTP memory wiring.
+4. **LLM reranking in plugin** — port from in-tree retriever. Essential at 1K+ memories.
 
 ## Backlog
 
 ### High Priority
-1. Option 3: HTTP MCP memory server (design doc ready)
-2. Track G Phase 1: read-only GitHub access
-3. Track G Phase 2: branch + PR (self-development, owner-gated)
-4. Inject SKILL.md into cc-native system prompt
+1. Remove in-tree MCP server (dead code)
+2. Memory scoping config (per-session project/domain filters)
+3. LLM reranking in plugin retrieve_context
+4. Track G Phase 1: read-only GitHub access
 5. Sweep integration with cc-native
 
 ### Medium Priority
-6. SKILL.md as MCP resource (future-proof teaching)
-7. Track G Phase 3: self-deploy with health check + auto-rollback
-8. Artifact short-term memory (FIFO cache)
-9. SessionEnd hook for memory extraction safety net
+6. Tiered token budgets for retrieval
+7. Hierarchical memory summarization (critical at 50K+)
+8. Better embeddings (evaluate at 10K+)
+9. Session topology design (topic bleed at high Slack volume)
+10. SKILL.md as MCP resource
+11. SessionEnd hook for memory extraction safety net
+12. Artifact short-term memory (FIFO cache)
 
 ### Strategic
-10. Merge cc-native to main (after stability proven)
-11. Finance integration
-12. Obsidian .md export
-13. Clawvato self-development (Track G Phase 3)
+13. Merge cc-native to main (after stability proven)
+14. Track G Phase 3: self-deploy with health check + auto-rollback
+15. Finance integration
+16. Obsidian .md export
 
 ## Hard-Won Gotchas (new this session)
 
-- Plugin schema must exactly match Railway DB — `search_vector` vs `content_tsv`, `updated_at` doesn't exist, `created_at` not on `memory_entities`, `id` must be explicitly generated
-- Plugin `store_fact` must populate BOTH `memories.entities` (JSON column) AND `memory_entities` (junction table) — the in-tree code uses both paths for different lookups
-- `delete_memory` (hard DELETE) can dangle `superseded_by` FK references — always use soft-delete (`valid_until = NOW()`)
-- Superseded rows are free for queries (filtered by index), cheap for storage (embedding deleted), and autovacuum handles bloat
-- Railway CC won't know about new MCP tools unless: (a) the MCP server exposes them, (b) the system prompt teaches them, (c) SKILL.md is loaded
-- Global `~/.claude/.mcp.json` may not load for a project — use project-scoped config
+- MCP config schema: CC requires `"type": "http"`, NOT `"type": "url"` — the latter fails schema validation silently
+- Expect heredocs (`<< 'EOF'`) prevent bash variable interpolation — use `export` + `$env(VAR)` for Tcl access
+- MCP SDK's `Server.connect()` is 1:1 with transport — for HTTP with concurrent requests, create new Server+Transport per request
+- `railway add --service` + `source.repo` via CLI doesn't trigger GitHub webhook auto-deploy — must connect repo through Railway dashboard
+- Railway injects `PORT` automatically (default 8080) — don't hardcode port
+- Native Claude MCP plugins (Gmail, Fireflies, etc.) are stateless + session-scoped — they can't replace systems that need persistent memory or background processing
+- Don't impose artificial caps on query results — use sensible defaults but no hard maximums

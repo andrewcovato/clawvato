@@ -183,11 +183,34 @@ Training wheels were removed in Session 16 because they were blocking internal t
 - Don't wait until session end — push at logical breakpoints throughout the session.
 
 ## Session Handoff Protocol
-When ending a session (or when asked to hand off):
-1. **Update all project files**: HANDOFF.md, state.json, memory files, CLAUDE.md if needed. Capture what happened, what was decided, what's next.
-2. **Spawn a blind subagent**: Give it NO conversation context — only the handoff files and memory. Ask it: *"You are resuming this project. Using only the handoff and memory available, demonstrate you can continue. What is the current state? What would you do next? What questions would you ask?"*
-3. **Evaluate the subagent's understanding**: Focus on gaps that would make the next session feel disconnected. Update handoff files to close gaps. Max 3 rounds.
-4. **The test**: If a fresh Claude session reads HANDOFF.md + state.json + memory and can seamlessly pick up where we left off, the handoff is complete.
+
+### Surface-Scoped Working Context
+This project uses surface-scoped working context via the `clawvato-memory` MCP plugin. Your surface is `local` (coding sessions). The cloud Slack surface is `cloud`.
+
+**On startup**: Call `get_handoff(surface: "local")` and `get_briefs()` to resume. If the handoff contains `recent_interactions`, replay them to restore conversational continuity.
+
+**During work**: Periodically update your brief via `update_brief(surface: "local", content: ...)` so other surfaces know what you're working on.
+
+### When ending a session (or when asked to hand off):
+1. **Update all project files**: HANDOFF.md, state.json, memory files, CLAUDE.md if needed.
+2. **Write handoff to memory plugin**: `update_handoff(surface: "local", mode: "replace", content: ...)` with:
+   - Current task and implementation state
+   - Files created/modified
+   - Key decisions made
+   - Last 3-5 interactions (verbatim or near-verbatim for conversational continuity)
+   - Open questions and gotchas
+3. **Update brief**: `update_brief(surface: "local", content: ...)` — concise summary for cross-surface awareness.
+4. **Store durable facts**: `store_fact` for anything that belongs in long-term memory.
+5. **Spawn a blind subagent**: Give it NO conversation context. Ask it to call `get_handoff(surface: "local")` and `get_briefs()`, read HANDOFF.md + state.json, and demonstrate it can continue. Max 3 rounds.
+6. **The test**: The user should never have to type "get up to speed." The next session should continue naturally.
+
+### Context Pressure (Infinite Session Flow)
+When context usage reaches ~70%, proactively initiate a handoff:
+1. Tell the user: "Context is getting heavy — writing handoff now. Back in a few minutes."
+2. Run the full handoff protocol above.
+3. After context clears, re-read the handoff and recent interactions to resume seamlessly.
+
+A `PreCompact` hook and `SessionEnd` hook also fire as safety nets — they write a minimal brief to the memory plugin via HTTP. But the primary handoff should happen before these trigger.
 
 ## Coding Conventions
 

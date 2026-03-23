@@ -2,7 +2,7 @@
   "project": {
     "name": "Clawvato",
     "description": "Business operating system for solo technical founders — memory-powered AI agent across Slack, email, calendar, Drive, meetings, and Claude Code",
-    "version": "0.10.0",
+    "version": "0.11.0",
     "status": "active",
     "phase": "cc-native-engine",
     "startDate": "2026-03-06",
@@ -13,37 +13,38 @@
     "B": { "name": "Slack MCP + Agent Core", "status": "complete", "completedDate": "2026-03-17" },
     "C": { "name": "Google Workspace", "status": "complete", "completedDate": "2026-03-19" },
     "D": { "name": "Memory + Embeddings", "status": "complete", "completedDate": "2026-03-19" },
-    "E": { "name": "Proactive Intelligence", "status": "in_progress", "notes": "Sweep pipeline working end-to-end (130 facts stored). Sonnet extraction fixed. Context planner built but untested." },
+    "E": { "name": "Proactive Intelligence", "status": "in_progress", "notes": "Sweep pipeline working end-to-end (130 facts stored). Sonnet extraction fixed. Context planner superseded by CC-native." },
     "F": { "name": "Security Hardening", "status": "partial", "notes": "Training wheels removed. Pre-tool security checks + output sanitization remain." },
     "G": { "name": "GitHub + Self-Development", "status": "designed", "notes": "Redesigned as self-development system. Three-gate safety model. Design at docs/DESIGN_TRACK_G_SELF_DEV.md." },
-    "H": { "name": "Plugin Adapter + CC Bridge", "status": "in_progress", "notes": "Memory plugin validated (10/10 tests, 7 bugs fixed). In-tree server updated with list_working_contexts + retire_memory. DESIGN_REMOTE_MEMORY_PLUGIN.md written for HTTP transport (Option 3). Next: implement HTTP transport, deploy as separate Railway service." },
+    "H": { "name": "Plugin Adapter + CC Bridge", "status": "complete", "completedDate": "2026-03-23", "notes": "HTTP memory plugin deployed on Railway. All CC instances wired (local via public URL, Railway via internal URL). In-tree MCP server is now dead code — removal pending." },
     "I": { "name": "Fireflies.ai", "status": "complete", "completedDate": "2026-03-18" },
     "J": { "name": "Hybrid Architecture", "status": "superseded", "notes": "Replaced by CC-Native Engine (Track O). Hybrid code preserved on main branch as fallback." },
     "K": { "name": "Postgres Migration", "status": "complete", "completedDate": "2026-03-19" },
     "L": { "name": "Autonomous Task Queue", "status": "complete", "completedDate": "2026-03-20" },
     "M": { "name": "Background Sweeps", "status": "complete", "completedDate": "2026-03-23", "notes": "Pipeline working end-to-end. 130 facts + 693 entities stored from first backfill." },
     "N": { "name": "Context Planner", "status": "superseded", "notes": "Superseded by CC-Native Engine — CC plans its own context natively." },
-    "O": { "name": "CC-Native Engine", "status": "deployed", "notes": "Claude Code as core engine via Channels. Deployed on Railway. In-tree MCP server updated with list_working_contexts + retire_memory." }
+    "O": { "name": "CC-Native Engine", "status": "deployed", "notes": "Claude Code as core engine via Channels. Deployed on Railway. Now uses HTTP memory plugin (separate Railway service) instead of in-tree MCP server. Fireflies switched to native MCP tools for interactive use." }
   },
   "infrastructure": {
-    "local": "macOS, DATABASE_URL=... npx tsx src/cli/index.ts start",
+    "local": "macOS, .mcp.json points to Railway HTTP memory plugin",
     "cloud": "Railway (Growth By Science workspace)",
     "railwayProject": "99ecf42e-5142-442c-a79a-2f6fd0864ecf",
-    "railwayServices": ["clawvato (agent)", "Postgres (managed DB)"],
+    "railwayServices": ["clawvato (agent)", "clawvato-memory (HTTP MCP server)", "Postgres (managed DB)"],
     "database": "Railway managed Postgres (automatic backups, pgvector)",
     "taskChannel": "C0AN5J0LCP3 (#clawvato-tasks)",
     "dataVolume": "/data (Claude CLI auth + gws config + debug workspaces)",
-    "deployMethod": "GitHub auto-deploy from cc-native-engine branch",
+    "deployMethod": "GitHub auto-deploy — clawvato from cc-native-engine branch, clawvato-memory from main branch",
     "maxPlan": "Claude Max subscription — CC-native engine costs $0",
-    "memoryPlugin": "github.com/andrewcovato/clawvato-memory — standalone MCP server plugin (validated, 7 bugs fixed)"
+    "memoryPlugin": "github.com/andrewcovato/clawvato-memory — deployed as HTTP MCP server on Railway. Public: clawvato-memory-production.up.railway.app/mcp. Internal: clawvato-memory.railway.internal:8080/mcp",
+    "memoryPluginAuth": "Bearer token via MCP_AUTH_TOKEN env var on both Railway services"
   },
   "metrics": {
     "testFiles": 23,
     "taskStoreTests": 26,
     "testsPassing": "requires DATABASE_URL",
-    "memoriesStored": 130,
+    "memoriesStored": "125+",
     "entityTags": 693,
-    "pluginTestsPassing": "10/10 CRUD cycle (search, store, retrieve, working context, retire)"
+    "pluginTestsPassing": "10/10 CRUD cycle + HTTP transport verified (health, initialize, tools/list, search_memory)"
   },
   "currentSprint": {
     "id": "S9",
@@ -53,45 +54,51 @@
       "Slack Channel MCP server ✅",
       "Supervisor entrypoint with expect ✅",
       "Non-root Docker user ✅",
-      "Eyes (👀) reaction on receipt ✅",
+      "Eyes (👀) reaction lifecycle ✅ (add on receipt, remove on CC pickup)",
       "Progress feedback in system prompt ✅",
       "Startup crawl via channel event ✅",
       "Task scheduler standalone sidecar ✅",
       "Idle timeout with verified handoff protocol ✅",
-      "clawvato-memory plugin repo ✅ (validated, 7 bugs fixed, retire_memory, category normalization)",
-      "Local CC MCP config ✅ (wired to Railway Postgres, 10/10 tests)",
+      "clawvato-memory plugin repo ✅ (validated, 7 bugs fixed)",
+      "HTTP transport for memory plugin ✅ (deployed on Railway, all instances wired)",
+      "Local CC wired to HTTP memory ✅",
+      "Railway CC wired to HTTP memory (internal URL) ✅",
+      "Native Fireflies MCP for interactive queries ✅",
+      "Native Slack search in prompts ✅",
       "Track G redesigned as self-development ✅",
-      "In-tree MCP server updated ✅ (list_working_contexts + retire_memory)",
-      "Remote memory plugin design spec ✅ (DESIGN_REMOTE_MEMORY_PLUGIN.md)",
-      "Commit + push both repos ⬜",
-      "Swap Railway to use plugin MCP server ⬜ (Option 3: HTTP transport)",
+      "Remote memory plugin design spec ✅",
+      "Remove in-tree MCP server ⬜ (dead code)",
       "Stabilize cc-native over 24h ⬜"
     ],
-    "progress": "~90% complete. Plugin validated, in-tree server updated, design spec written. Need to commit/push and implement HTTP transport."
+    "progress": "~95% complete. HTTP memory plugin deployed and wired. In-tree cleanup and stability monitoring remaining."
   },
   "lastSession": {
-    "number": 20,
+    "number": 21,
     "date": "2026-03-23",
-    "type": "Memory plugin validation + in-tree server update + remote plugin design spec",
+    "type": "Native plugin audit + HTTP memory deployment + integration wiring + bug fixes",
     "keyDecisions": [
-      "All correction flows use soft-delete (retire_memory), never hard DELETE — preserves audit trail and superseded_by chains",
-      "Plugin schema must exactly match Railway DB — 7 bugs found from mismatches",
-      "Option 3 (HTTP MCP server) is the long-term play for plugin propagation — push to repo, all instances get updates",
-      "In-tree MCP server gets list_working_contexts + retire_memory to match plugin while we migrate to Option 3",
-      "Teaching problem: CC instances need SKILL.md injected into system prompt to know about multi-instance features"
+      "Keep custom Gmail (native can't send), Calendar (less overhead), Slack (native can't react), Drive (no native exists)",
+      "Split Fireflies: native MCP for interactive queries, custom client for sweep ingestion",
+      "HTTP memory plugin deployed as separate Railway service — single source of truth for memory tools",
+      "MCP config type must be 'http' not 'url' — CC schema validation",
+      "No artificial caps on search results — sensible defaults but no hard maximums",
+      "Eyes reaction lifecycle: add on receipt, remove on CC pickup (code-enforced both ways)"
     ]
   },
   "immediateBacklog": [
-    { "id": "COMMIT-PUSH", "title": "Commit + push both repos (clawvato in-tree fixes + clawvato-memory plugin fixes)" },
-    { "id": "SYSTEM-PROMPT-MEMORY", "title": "Inject condensed SKILL.md into config/prompts/cc-native-system.md so Railway CC knows about list_working_contexts and retire_memory" },
-    { "id": "HTTP-TRANSPORT", "title": "Implement Option 3: add StreamableHTTPServerTransport to plugin, deploy as separate Railway service, wire all CC instances" },
-    { "id": "CC-NATIVE-STABILIZE", "title": "Run cc-native engine for 24h, monitor for crashes, verify session restart + handoff" }
+    { "id": "REMOVE-INTREE-MCP", "title": "Remove in-tree MCP server — dead code now that all instances use HTTP plugin. Delete src/mcp/memory/server.ts, src/mcp/memory/stdio.ts, .cc-native-mcp.json." },
+    { "id": "MEMORY-SCOPING-IMPL", "title": "Implement per-session memory scoping — BLOCKING further memory usage scaling. Owner directive: no dev memories until this is built." },
+    { "id": "CC-NATIVE-STABILIZE", "title": "Monitor cc-native engine for 24h with HTTP memory wiring. Verify session restart + handoff works with remote MCP." },
+    { "id": "MEMORY-RERANK", "title": "Add LLM reranking to plugin retrieve_context — tsvector-only retrieval will degrade at 1K+ memories." }
   ],
   "backlog": [
-    { "id": "REMOVE-INTREE-MCP", "priority": "high", "title": "Remove in-tree MCP server once Railway CC uses HTTP plugin" },
     { "id": "GITHUB-PHASE1", "priority": "high", "title": "Track G Phase 1: read-only GitHub access" },
     { "id": "GITHUB-PHASE2", "priority": "high", "title": "Track G Phase 2: branch + PR creation (self-development, owner-gated)" },
     { "id": "SWEEP-CCNATIVE", "priority": "high", "title": "Wire sweep system to cc-native" },
+    { "id": "MEMORY-TIERED-BUDGET", "priority": "medium", "title": "Tiered token budgets for retrieval — high-importance facts should get more budget" },
+    { "id": "MEMORY-SUMMARIZATION", "priority": "medium", "title": "Hierarchical memory summarization — critical at 50K+ memories" },
+    { "id": "MEMORY-BETTER-EMBEDDINGS", "priority": "medium", "title": "Upgrade embedding model from all-MiniLM-L6-v2 (384-dim) — evaluate when memory count exceeds 10K" },
+    { "id": "SESSION-TOPOLOGY", "priority": "medium", "title": "Session topology for cloud instance — design when Slack volume exceeds ~50 msgs/day across 5+ topics" },
     { "id": "SKILL-MCP-RESOURCE", "priority": "medium", "title": "Serve SKILL.md as MCP resource from plugin server" },
     { "id": "MEMORY-SESSIONEND", "priority": "medium", "title": "SessionEnd hook for memory extraction safety net" },
     { "id": "ARTIFACT-CACHE", "priority": "medium", "title": "Artifact short-term memory (FIFO cache)" },
@@ -115,8 +122,15 @@
     "Hard DELETE can dangle superseded_by FK references",
     "CC instances won't know about MCP tools unless system prompt teaches them",
     "Global ~/.claude/.mcp.json may not load for a specific project — use project-scoped config",
+    "Don't store clawvato dev memories to the shared brain until project scoping is implemented",
+    "Memory retrieval quality degrades at scale — scoping is the #1 lever, then reranking, then summarization",
     "Haiku max output 8192 tokens — use Sonnet for extraction",
-    "Zod schema defaults override config/default.json — must update BOTH"
+    "Zod schema defaults override config/default.json — must update BOTH",
+    "MCP config type must be 'http' not 'url' — CC schema validation rejects 'url'",
+    "Expect heredocs (<< 'EOF') prevent bash interpolation — use export + $env(VAR) for Tcl",
+    "MCP SDK Server.connect() is 1:1 — for HTTP concurrency, create new Server+Transport per request",
+    "Railway CLI source.repo doesn't trigger GitHub webhook — connect repo through dashboard",
+    "Don't impose artificial caps on query results — sensible defaults, no hard maximums"
   ],
   "lastUpdated": "2026-03-23"
 }
