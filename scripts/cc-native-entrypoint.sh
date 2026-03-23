@@ -99,34 +99,36 @@ while true; do
   # subsequent restarts skip the prompt automatically.
   CC_LOG="/tmp/cc-session-${SESSION_COUNTER}.log"
 
-  expect << EXPECT_SCRIPT 2>&1 | tee "$CC_LOG" >&2
+  expect << 'EXPECT_SCRIPT' 2>&1 | tee "$CC_LOG" >&2
     set timeout 120
     log_user 1
 
-    spawn claude \
+    spawn env HOME=/home/clawvato claude \
       --dangerously-skip-permissions \
       --dangerously-load-development-channels server:slack-channel \
-      --mcp-config "$PROJECT_DIR/.cc-native-mcp.json" \
-      --append-system-prompt-file "$PROJECT_DIR/config/prompts/cc-native-system.md" \
-      --max-turns $MAX_TURNS \
+      --mcp-config /app/.cc-native-mcp.json \
+      --append-system-prompt-file /app/config/prompts/cc-native-system.md \
+      --max-turns 200 \
       --model claude-opus-4-6
 
-    # Auto-approve any interactive prompts
+    # CC's TUI (ink) inserts ANSI cursor-movement codes between characters.
+    # Raw output looks like: [1Ctrust[1Cthis[1Cfolder
+    # Use -re (regex) to match through the ANSI noise.
+    # Match on "folder" alone — unique enough and less likely to be split.
     expect {
-      "trust this folder" {
+      -re "folder" {
+        # Option 1 "Yes, I trust this folder" is pre-selected (❯).
+        # Just send Enter to confirm.
+        sleep 1
         send "\r"
         exp_continue
       }
-      "Enter to confirm" {
-        send "\r"
-        exp_continue
-      }
-      "Y/n" {
+      -re "Y/n" {
         send "Y\r"
         exp_continue
       }
       timeout {
-        # CC is running, no more prompts — wait for it to exit
+        # No more prompts after 120s — CC should be running with channels
       }
     }
 
