@@ -92,12 +92,23 @@ while true; do
   # Run Claude Code with channels in interactive mode.
   # `script` provides a pseudo-TTY so CC runs interactively on headless Railway.
   # Without it, CC falls back to --print mode (one-shot, no channel support).
+  #
+  # The stdin wrapper sends an Enter after 8s to auto-approve the workspace trust
+  # prompt ("Yes, I trust this folder"). Trust persists in ~/.claude/ (on the
+  # Railway volume), so subsequent restarts skip the prompt.
+  #
   # --dangerously-load-development-channels: required for custom channels (research preview)
   # --mcp-config: memory + slack-channel servers
   # --append-system-prompt-file: our system prompt
   # --max-turns: prevent runaway sessions
   # --allowedTools: pre-approve tools so CC doesn't hang waiting for permission
-  script -qfc "claude \
+  {
+    sleep 8
+    printf '\n'
+    # Keep stdin open — channels push events via MCP, not stdin,
+    # but closing stdin may cause the PTY to terminate
+    while true; do sleep 3600; done
+  } | script -qfc "claude \
     --dangerously-load-development-channels server:slack-channel \
     --mcp-config '$PROJECT_DIR/.cc-native-mcp.json' \
     --append-system-prompt-file '$PROJECT_DIR/config/prompts/cc-native-system.md' \
