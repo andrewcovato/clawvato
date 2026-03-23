@@ -96,21 +96,17 @@ export async function executeSweep(
   // Write sweep content for debug inspection
   writeFileSync(join(contextDir, 'sweep-content.md'), allChunks.join('\n\n---\n\n'));
 
-  // Persist workspace to debug dir if configured
-  if (process.env.DEBUG_WORKSPACE) {
-    try {
-      const { cpSync: cp } = await import('node:fs');
-      const debugDir = join(process.env.DEBUG_WORKSPACE, `sweep-${new Date().toISOString().replace(/[:.]/g, '-')}`);
-      mkdirSync(debugDir, { recursive: true });
-      cp(workspaceDir, debugDir, { recursive: true });
-      logger.info({ debugDir }, 'Sweep workspace persisted for debugging');
-    } catch (err) {
-      logger.debug({ error: err }, 'Failed to persist debug workspace');
-    }
-  }
-
-  // Collect-only mode: stop here
+  // Collect-only mode: persist and stop
   if (deps.collectOnly) {
+    if (process.env.DEBUG_WORKSPACE) {
+      try {
+        const { cpSync: cp } = await import('node:fs');
+        const debugDir = join(process.env.DEBUG_WORKSPACE, `sweep-${new Date().toISOString().replace(/[:.]/g, '-')}`);
+        mkdirSync(debugDir, { recursive: true });
+        cp(workspaceDir, debugDir, { recursive: true });
+        logger.info({ debugDir }, 'Sweep workspace persisted for debugging');
+      } catch { /* */ }
+    }
     const sweepContent = readFileSync(join(contextDir, 'sweep-content.md'), 'utf-8');
     logger.info({
       chunks: allChunks.length,
@@ -176,6 +172,19 @@ export async function executeSweep(
 
   const durationMs = Date.now() - startTime;
   logger.info({ sourcesSwept, itemsCollected, durationMs, synthesisDurationMs: result.durationMs }, 'Sweep: synthesis complete');
+
+  // Persist workspace AFTER synthesis so findings/ is captured
+  if (process.env.DEBUG_WORKSPACE) {
+    try {
+      const { cpSync: cp } = await import('node:fs');
+      const debugDir = join(process.env.DEBUG_WORKSPACE, `sweep-${new Date().toISOString().replace(/[:.]/g, '-')}`);
+      mkdirSync(debugDir, { recursive: true });
+      cp(workspaceDir, debugDir, { recursive: true });
+      logger.info({ debugDir }, 'Sweep workspace persisted for debugging (with findings)');
+    } catch (err) {
+      logger.debug({ error: err }, 'Failed to persist debug workspace');
+    }
+  }
 
   return {
     sourcesSwept,
