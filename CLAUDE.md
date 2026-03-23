@@ -271,9 +271,12 @@ Supports `LOG_DESTINATION=stderr` for MCP server mode.
 | `memory.extractionMaxTokens` | 8,000 | Haiku extraction response limit |
 | `memory.reflectionMaxTokens` | 1,000 | Haiku reflection response limit |
 | `slack.interruptConfidenceThreshold` | 0.7 | Below this, ask user to clarify |
-| `trainingWheels.graduationThreshold` | 10 | Approvals needed for graduation |
-| `trainingWheels.maxRejectionRate` | 0.05 | Max rejection rate for graduation |
-| `trainingWheels.recentWindow` | 5 | Recent window for rejection check |
+| `trainingWheels.graduationThreshold` | 10 | Approvals needed for graduation (DISABLED) |
+| `sweeps.cron` | every 6 hours | Background sweep schedule |
+| `sweeps.slack.maxMessagesPerChannel` | 500 | Max msgs per channel per sweep |
+| `sweeps.gmail.maxThreads` | 2,000 | Max email threads per sweep |
+| `sweeps.drive.maxFiles` | 500 | Max Drive files per sweep |
+| `sweeps.fireflies.maxMeetings` | 100 | Max meetings per sweep |
 
 ### Three Memory Tiers
 - **Working context** = Scratch pad in `agent_state` (1000 tokens, auto-archives after 14 days)
