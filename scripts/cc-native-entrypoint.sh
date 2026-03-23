@@ -25,31 +25,20 @@ RESTART_DELAY="${CC_RESTART_DELAY:-5}"
 MAX_TURNS="${CC_MAX_TURNS:-200}"
 SESSION_COUNTER=0
 
+# Force HOME to the clawvato user's home (su -p preserves root's HOME)
+export HOME="/home/clawvato"
+
 echo "[supervisor] CC-Native Engine starting"
 echo "[supervisor] Project dir: $PROJECT_DIR"
+echo "[supervisor] HOME: $HOME"
+echo "[supervisor] User: $(whoami)"
 echo "[supervisor] Idle timeout: ${CC_IDLE_TIMEOUT_MS:-1800000}ms"
 echo "[supervisor] Restart delay: ${RESTART_DELAY}s"
 
-# ── Ensure Claude CLI auth is set up ──
-if [ -n "${DATA_DIR:-}" ] && [ -d "$DATA_DIR" ]; then
-  # Symlink .claude to persistent volume (same as docker-entrypoint.sh)
-  if [ -d "$DATA_DIR/claude-config" ]; then
-    ln -sfn "$DATA_DIR/claude-config" "$HOME/.claude"
-  fi
-fi
-
-# Ensure onboarding is complete
-mkdir -p "$HOME/.claude"
-if [ ! -f "$HOME/.claude/.claude.json" ]; then
-  echo '{"hasCompletedOnboarding":true}' > "$HOME/.claude/.claude.json"
-fi
-
-# ── Unpack GWS config if provided ──
-if [ -n "${GWS_CONFIG_B64:-}" ]; then
-  mkdir -p "$HOME/.config/gws"
-  echo "$GWS_CONFIG_B64" | base64 -d | tar xzf - -C "$HOME/.config/gws/"
-  echo "[supervisor] GWS config unpacked"
-fi
+# Auth setup is handled by docker-entrypoint.sh before this script runs.
+# Just verify it's in place.
+echo "[supervisor] Claude config: $(ls -la $HOME/.claude 2>&1 || echo 'not found')"
+echo "[supervisor] OAuth token: ${CLAUDE_CODE_OAUTH_TOKEN:+set}${CLAUDE_CODE_OAUTH_TOKEN:-not set}"
 
 # ── Build environment for CC ──
 # Allowlist: CC and its channel server need these
