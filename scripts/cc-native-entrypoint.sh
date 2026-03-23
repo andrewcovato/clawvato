@@ -89,28 +89,30 @@ while true; do
   SESSION_COUNTER=$((SESSION_COUNTER + 1))
   echo "[supervisor] Starting CC session #$SESSION_COUNTER"
 
-  # Run Claude Code with channels
+  # Run Claude Code with channels in interactive mode.
+  # `script` provides a pseudo-TTY so CC runs interactively on headless Railway.
+  # Without it, CC falls back to --print mode (one-shot, no channel support).
   # --dangerously-load-development-channels: required for custom channels (research preview)
   # --mcp-config: memory + slack-channel servers
   # --append-system-prompt-file: our system prompt
   # --max-turns: prevent runaway sessions
-  # --allowedTools: pre-approve tools so CC doesn't hang on headless server
-  claude \
+  # --allowedTools: pre-approve tools so CC doesn't hang waiting for permission
+  script -qfc "claude \
     --dangerously-load-development-channels server:slack-channel \
-    --mcp-config "$PROJECT_DIR/.cc-native-mcp.json" \
-    --append-system-prompt-file "$PROJECT_DIR/config/prompts/cc-native-system.md" \
-    --max-turns "$MAX_TURNS" \
+    --mcp-config '$PROJECT_DIR/.cc-native-mcp.json' \
+    --append-system-prompt-file '$PROJECT_DIR/config/prompts/cc-native-system.md' \
+    --max-turns $MAX_TURNS \
     --model claude-opus-4-6 \
     --allowedTools \
       'Bash(gws:*)' 'Bash(npx:*)' 'Bash(cat:*)' 'Bash(ls:*)' 'Bash(echo:*)' 'Bash(mkdir:*)' \
-      'Read' 'Write' 'Glob' 'Grep' 'Agent' \
-      'WebSearch' 'WebFetch' \
-      'mcp__memory__search_memory' 'mcp__memory__store_fact' \
-      'mcp__memory__retrieve_context' 'mcp__memory__update_working_context' \
-      'mcp__memory__list_tasks' 'mcp__memory__create_task' \
-      'mcp__memory__update_task' 'mcp__memory__delete_task' \
-      'mcp__slack-channel__slack_reply' 'mcp__slack-channel__slack_react' \
-      'mcp__slack-channel__slack_get_history' \
+      Read Write Glob Grep Agent \
+      WebSearch WebFetch \
+      mcp__memory__search_memory mcp__memory__store_fact \
+      mcp__memory__retrieve_context mcp__memory__update_working_context \
+      mcp__memory__list_tasks mcp__memory__create_task \
+      mcp__memory__update_task mcp__memory__delete_task \
+      mcp__slack-channel__slack_reply mcp__slack-channel__slack_react \
+      mcp__slack-channel__slack_get_history" /dev/null \
     || true  # Don't exit the loop on CC crash
 
   EXIT_CODE=$?

@@ -1,7 +1,8 @@
 FROM node:22-slim
 
 # CA certificates — node:22-slim strips them, causing TLS UnknownIssuer errors
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+# bsdutils provides `script` for pseudo-TTY (needed for CC interactive mode on headless)
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates bsdutils && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
