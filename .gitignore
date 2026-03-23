@@ -12,3 +12,4 @@ coverage/
 .project/
 .workspaces/
 .claude/
+.mcp.json

@@ -113,6 +113,34 @@ const TOOLS = [
     },
   },
   {
+    name: 'list_working_contexts',
+    description:
+      'See what other CC sessions are working on. Shows working context from all active sessions. ' +
+      'Useful for coordination and multi-instance awareness.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        session_filter: { type: 'string', description: 'Filter by session ID prefix (optional)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'retire_memory',
+    description:
+      'Retire a memory that is incorrect or outdated. Sets valid_until = NOW() so it drops out of ' +
+      'active search but stays in the DB for audit trail. To correct a fact: store_fact (new version) ' +
+      'then retire_memory (old version).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'Memory ID to retire' },
+        reason: { type: 'string', description: 'Why this memory is being retired (e.g., "incorrect", "outdated", "superseded by ...")' },
+      },
+      required: ['id'],
+    },
+  },
+  {
     name: 'list_tasks',
     description: 'List scheduled tasks. Shows active and pending tasks by default.',
     inputSchema: {
@@ -246,6 +274,60 @@ async function handleUpdateWorkingContext(sql: Sql, args: Record<string, unknown
     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, status = 'active', updated_at = NOW()
   `;
   return `Working context updated: ${args.key} = ${value}`;
+}
+
+// ── List Working Contexts ──
+
+async function handleListWorkingContexts(sql: Sql, args: Record<string, unknown>): Promise<string> {
+  const filter = args.session_filter as string | undefined;
+
+  const rows = await sql`
+    SELECT key, value, updated_at FROM agent_state
+    WHERE key LIKE 'wctx:%' AND status = 'active'
+    ${filter ? sql`AND key LIKE ${'wctx:' + filter + '%'}` : sql``}
+    ORDER BY updated_at DESC
+    LIMIT 50
+  ` as unknown as Array<{ key: string; value: string; updated_at: Date }>;
+
+  if (rows.length === 0) return 'No active working contexts.';
+
+  // Group by session (handles both wctx:label and wctx:SESSION_ID:label formats)
+  const sessions = new Map<string, Array<{ label: string; value: string }>>();
+  for (const r of rows) {
+    const parts = r.key.split(':');
+    // wctx:SESSION_ID:label or wctx:label
+    const sessionId = parts.length >= 3 ? parts[1] : 'default';
+    const label = parts.length >= 3 ? parts.slice(2).join(':') : parts[1] || 'unknown';
+    const group = sessions.get(sessionId) ?? [];
+    group.push({ label, value: r.value });
+    sessions.set(sessionId, group);
+  }
+
+  const lines: string[] = [];
+  for (const [sid, entries] of sessions) {
+    lines.push(`\n### Session: ${sid}`);
+    for (const e of entries) {
+      lines.push(`- **${e.label}**: ${e.value}`);
+    }
+  }
+
+  return `Active working contexts across ${sessions.size} session(s):${lines.join('\n')}`;
+}
+
+// ── Retire Memory (soft-delete) ──
+
+async function handleRetireMemory(sql: Sql, args: Record<string, unknown>): Promise<string> {
+  const id = args.id as string;
+  const reason = (args.reason as string) ?? 'retired via MCP';
+
+  const result = await sql`
+    UPDATE memories SET valid_until = NOW()
+    WHERE id = ${id} AND valid_until IS NULL
+  `;
+  if (Number(result.count ?? 0) === 0) return `Memory ${id} not found (or already retired).`;
+
+  logger.info({ memoryId: id, reason }, 'Memory retired via MCP');
+  return `Memory ${id} retired (${reason}). Preserved in DB for audit — will no longer appear in searches.`;
 }
 
 // ── Task Handlers ──
@@ -393,6 +475,12 @@ async function handleRequest(sql: Sql, request: JsonRpcRequest): Promise<unknown
           break;
         case 'update_working_context':
           content = await handleUpdateWorkingContext(sql, toolArgs);
+          break;
+        case 'list_working_contexts':
+          content = await handleListWorkingContexts(sql, toolArgs);
+          break;
+        case 'retire_memory':
+          content = await handleRetireMemory(sql, toolArgs);
           break;
         case 'list_tasks':
           content = await handleListTasks(sql, toolArgs);
