@@ -1,138 +1,161 @@
 # Session Handoff
 
-> Last updated: 2026-03-22 | Session 17 (extended) | Sprint S8
+> Last updated: 2026-03-23 | Session 18 | Sprint S9
 
 ## Quick Resume
 
 ```
-Sprint: S8 — Proactive Memory & Intelligent Context Assembly (~90% complete)
-Status: Background sweep pipeline working. Haiku extraction from findings is the last blocker.
-Database: Railway managed Postgres (memory wiped 2026-03-22, people table dropped)
+Sprint: S9 — CC-Native Engine + Shared Memory Brain
+Status: CC-NATIVE ENGINE DEPLOYED AND WORKING ON RAILWAY
+Branch: cc-native-engine (GitHub auto-deploy to Railway)
+Engine: ENGINE=cc-native env var activates CC-native mode
+Database: Railway managed Postgres — 130 memories, 693 entity tags
 Task Channel: #clawvato-tasks (C0AN5J0LCP3)
 Build: Clean (tsc --noEmit passes)
-Deploy: Live on Railway with all sweep infrastructure
-BLOCKER: Haiku extraction fails on chunked findings — error serialization shows {} instead of actual error
-DESIGN DOC: docs/DESIGN_PROACTIVE_MEMORY.md
+Deploy: Live on Railway via GitHub auto-deploy
+Memory Plugin: github.com/andrewcovato/clawvato-memory (built, local config wired, untested)
+NEXT: Test memory plugin locally, stabilize cc-native 24h, wire sweeps
 ```
 
-## Current State of the Sweep Pipeline
+## What's Working (deployed 2026-03-23)
 
-The end-to-end pipeline is:
+### CC-Native Engine (Track O)
+Claude Code runs as the core engine on Railway. Slack messages flow in via a Channel MCP server. CC handles tool orchestration, context management, and reasoning natively. Replaces ~2,250 lines of custom orchestration (router, fast path, deep path, context planner).
 
 ```
-Scheduler (60s poll) → Collector (parallel, ~2 min) → Workspace .md → Opus CLI synthesis (~6 min)
-→ findings.md (27KB) → Haiku chunked extraction → Postgres memory ← THIS STEP FAILS
+Railway container:
+  Supervisor (expect + restart loop)
+    └── claude (interactive, Max plan = $0)
+          ├── Slack Channel MCP server (Socket Mode → channel events)
+          │     ├── 👀 reaction on receipt (code-enforced)
+          │     ├── slack_reply, slack_react, slack_get_history tools
+          │     ├── Debounce (4s), owner-only gate
+          │     └── Startup crawl event on session start
+          ├── Memory MCP server (old in-tree version)
+          │     └── search, store, working ctx, tasks
+          └── Google/Fireflies via Bash (gws CLI, tools/fireflies.ts)
+
+  Task Scheduler (standalone sidecar)
+    └── Polls scheduled_tasks → posts to Slack → CC handles as channel event
 ```
 
-### What Works
-- **4 collectors** running in parallel: Slack (cadence-filtered, 18 active channels, 3K msgs), Gmail (noise-filtered, 1.8K threads), Drive (500 files with content snippets), Fireflies (58 meetings)
-- **Opus synthesis** via `--append-system-prompt-file` produces a 27KB findings.md with real business data (clients, people, decisions, etc.)
-- **Write tool** for synthesis output (Bash heredoc breaks on apostrophes/quotes)
-- **Fail-fast**: sweep aborts if any collector errors or returns 0 items
-- **Debug workspace** persisted to `/data/debug-workspaces/` AFTER synthesis (includes findings)
+### Key Infrastructure Details
+- **expect** provides PTY + auto-approves trust prompt (regex match on "folder" through ANSI noise)
+- **Non-root user** (clawvato) required for `--dangerously-skip-permissions`
+- **docker-entrypoint.sh** runs as root to fix volume perms, then `su -p` to clawvato user
+- **HOME explicitly set** to `/home/clawvato` (su -p preserves root's HOME)
+- **Trust pre-creation** in `.claude.json` does NOT work — must use expect
+- **GitHub auto-deploy** from `cc-native-engine` branch (railway up CLI was timing out due to .claude/ 379MB)
 
-### What's Broken
-- **Haiku extraction** from the findings file fails with empty error `{}`. Likely cause: input too large for Haiku even after chunking at 15K chars, OR `extractionMaxTokens` (now 8000) is still insufficient, OR the Anthropic API error object doesn't serialize to pino's `{ error }` pattern. The error logging was fixed to show `.message` and `.status` — next run will reveal the actual error.
+### Background Sweeps (Track M — complete)
+```
+Scheduler tick → Parallel collectors (Slack, Gmail, Drive, Fireflies) ~2 min
+→ Workspace .md file (1.8MB sweep content)
+→ Opus CLI synthesis (~6 min)
+→ findings.md → Sonnet extraction → 130 facts + 693 entity tags ✅
+```
 
-### What's Built But Not Tested
-- **Context planner** (`src/agent/context-planner.ts`) — replaces preflight, Opus searches memory + converses with user before deep path. Needs populated memory to test properly.
-- **Analysis mode** — deep path with reduced tools when context planner says memory is sufficient. Needs planner to work first.
+### Memory Plugin (Track H — built, untested)
+Standalone repo: `github.com/andrewcovato/clawvato-memory`
+- Self-contained MCP server (postgres.js + MCP SDK, no clawvato deps)
+- Session-scoped working context: `wctx:SESSION_ID:key` pattern
+- `list_working_contexts` tool for cross-instance awareness
+- SKILL.md teaching CC memory discipline (store what+why, not how)
+- Configured locally at `~/.claude/.mcp.json` pointing to Railway Postgres (public URL: autorack.proxy.rlwy.net:59024)
+- NOT yet tested — need to restart CC session to pick up MCP config
 
-## What Was Built This Session
+## Architecture: Two Engines
 
-### Sprint S7: Memory Unification (complete)
-- Removed `people` table — all knowledge as facts with entity tags
-- Removed 5 bespoke tools (`list_people`, `list_commitments`, `slack_get_thread`, `slack_get_user_info`, `fireflies_sync_meetings`)
-- Workspace .md pipeline replaces findings JSON
-- `read_file` + `list_files` tools added to fast path
-- DB wiped for fresh start
+### CC-Native Engine (active on Railway, `cc-native-engine` branch)
+```
+Slack → Channel MCP → Claude Code (interactive, Opus, $0 on Max plan)
+     → CC uses tools natively: Memory MCP, gws CLI, Fireflies CLI
+     → CC replies via slack_reply tool
+     → 👀 on receipt (code), 🧠 while processing (prompt-driven)
+```
 
-### Sprint S8: Proactive Memory (in progress)
-- **Collectors**: Generic `Collector` interface + 4 implementations (Slack, Gmail, Drive, Fireflies)
-  - Slack: cadence filter (skip channels with >21 day gaps), user token for broad access, bot DM exclusion
-  - Gmail: noise filter (skip promotions, social, forums, calendar invites), 2000 thread limit
-  - Drive: full folder paths via `buildFolderPathMap`, content snippets, staleness filter (6mo modified OR viewed), code/media MIME exclusion, git/hidden file post-filter
-  - Fireflies: paginated at 50/page, summary extraction
-- **Sweep executor**: parallel collection, fail-fast, file-based system prompt, synthesis mode (Write only), debug persistence
-- **Context planner**: replaces Sonnet preflight with Opus, searches memory, converses with user, assesses sufficiency for analysis mode
-- **Router update**: all paths have same tools, file reads route to FAST/MEDIUM not DEEP
-- **Config**: `sweeps` section with per-source config (enabled, limits, cron, exclude lists)
+### Hybrid Engine (fallback on `main` branch)
+```
+Slack → Socket Mode → EventQueue → Haiku router
+     → FAST (Sonnet API) / MEDIUM (Opus API) / DEEP (Opus CLI)
+     → Custom tool loop, context assembly, stream-json parsing
+```
 
-## Key Architecture Decisions (This Session)
+Switch: set `ENGINE=cc-native` or `ENGINE=hybrid` in Railway env vars.
 
-1. **One memory paradigm** — no special tables, no bespoke tools. Trust search_memory.
-2. **Generic Collector interface** — pluggable for future sources (GitHub, QuickBooks, etc.)
-3. **Single sweep cadence** — collect all sources together, synthesize together for cross-referencing
-4. **Context planner replaces preflight** — Opus gathers context AND converses (not two separate steps)
-5. **Three routing modes only** — FAST/MEDIUM/DEEP. Planner decides analysis mode, not router.
-6. **Synthesis via CLI with file-based prompt** — `--append-system-prompt-file` for large content, `Write` tool only
-7. **Plan before coding** — owner requires plan review before implementation
+## Session 18 Key Decisions
 
-## Files Changed This Session
+1. **CC-native engine**: CC as core, not custom orchestration. On Max plan, Opus is $0.
+2. **Channels**: Anthropic's MCP primitive for pushing events into CC. Research preview but works.
+3. **expect for headless**: Only reliable way to handle PTY + trust prompt on Railway.
+4. **Memory as plugin**: Separate repo, any CC instance shares the same Postgres brain.
+5. **Session-scoped working context**: Multi-instance safe (wctx:SESSION_ID:key).
+6. **Fact extraction via CC judgment**: Trust Opus (SKILL.md teaches discipline). No Slack-specific hooks.
+7. **Store what+why, never how**: The noise filter for memory.
+8. **Track G redesigned**: Self-development with three-gate safety (docs/DESIGN_TRACK_G_SELF_DEV.md).
+9. **Verified handoff protocol**: Subagent tests handoff before session exit (max 3 rounds).
+10. **Build for the future**: Adopt Anthropic tech as it ships.
 
-### New files (src/sweeps/):
-- `types.ts` — Collector interface, CollectorResult, high-water mark helpers
-- `slack-collector.ts` — Slack channel sweep with cadence filter
-- `gmail-collector.ts` — Gmail thread sweep with noise filter
-- `drive-collector.ts` — Drive file sweep with path resolution + content snippets
-- `fireflies-collector.ts` — Fireflies meeting sweep with pagination
-- `executor.ts` — Sweep orchestrator (parallel collect → synthesis → extraction)
+## Files Created/Modified This Session
 
-### New files (other):
-- `src/agent/context-planner.ts` — Opus context planning + user conversation
-- `config/prompts/sweep-synthesis.md` — Opus synthesis prompt
-- `config/prompts/context-planner.md` — Context planner system prompt
+### New (cc-native engine):
+- `src/cc-native/slack-channel.ts` — Slack Channel MCP server
+- `src/cc-native/start.ts` — Launcher for supervisor
+- `src/cc-native/task-scheduler-standalone.ts` — Sidecar task scheduler
+- `config/prompts/cc-native-system.md` — System prompt with handoff protocol
+- `scripts/cc-native-entrypoint.sh` — Supervisor (expect + restart loop)
+- `.cc-native-mcp.json` — MCP config for CC
 
-### Modified files:
-- `src/agent/deep-path.ts` — synthesisMode, systemPromptFile, analysisMode, info-level tool logging
-- `src/agent/hybrid.ts` — context planner replaces preflight, analysis mode wiring
-- `src/agent/fast-path.ts` — read_file, list_files tools
-- `src/agent/router.ts` — same 3 decisions (removed DEEP_ANALYSIS)
-- `src/tasks/executor.ts` — sweep task dispatch, findings extraction with chunking
-- `src/tasks/scheduler.ts` — sweep tasks bypass timeout
-- `src/cli/start.ts` — collector registration, sweep deps
-- `src/config.ts` + `config/default.json` — sweeps config section
-- `src/prompts.ts` — sweepSynthesis, contextPlanner prompts
-- `config/prompts/router.md` — all paths have same tools
-- `src/memory/extractor.ts` — better error logging
-- `src/google/drive-sync.ts` — exported buildFolderPathMap
+### New (design docs):
+- `docs/DESIGN_CC_NATIVE.md` — CC-native engine architecture
+- `docs/DESIGN_TRACK_G_SELF_DEV.md` — Self-development with safety rails
+
+### New (memory plugin — separate repo):
+- `github.com/andrewcovato/clawvato-memory` — Standalone MCP server + SKILL.md
+
+### Modified:
+- `Dockerfile` — non-root user, expect, copy all scripts
+- `scripts/docker-entrypoint.sh` — trust pre-creation, user switching, ENGINE routing
+- `src/cli/index.ts` — --engine flag
+- `CLAUDE.md` — "build for the future" directive + handoff protocol
+- `.gitignore` / `.dockerignore` — added .claude/, .workspaces/
 
 ## Immediate Next Steps
 
-1. **Fix Haiku extraction** — run sweep, check actual error message (logging is now fixed). Likely need to handle the Anthropic error type properly or reduce chunk size.
-2. **Verify end-to-end** — once extraction works: collect → synthesize → extract → verify facts in Postgres
-3. **Test context planner** — with populated memory, ask analytical questions and verify planner finds relevant facts
-4. **Drive MIME filtering** — .ts files still getting through as text/texmacs. Consider folder-based exclusion.
+1. Test memory plugin locally — restart CC, verify search/store
+2. Swap Railway to plugin MCP server (session-scoped working context)
+3. Stabilize cc-native 24h — monitor crashes, verify restart + handoff
+4. Test verified handoff — trigger idle timeout, check subagent verification
+5. Wire sweeps to cc-native — task scheduler sidecar
 
 ## Backlog
 
-### Immediate
-1. Fix Haiku extraction from sweep findings
-2. Context planner Slack progress feedback
-3. Drive code file filtering improvement
+### High Priority
+1. Track G Phase 1: read-only GitHub access
+2. Track G Phase 2: branch + PR (self-development, owner-gated)
+3. SessionEnd hook for memory extraction safety net
+4. Sweep integration with cc-native
 
-### Near-term
-1. Unified tool access across all paths
-2. Artifact short-term memory (FIFO cache for follow-ups)
-3. Sweep status in Slack
-4. Ad hoc backfill CLI
-5. --session support for deep path
+### Medium Priority
+5. Track G Phase 3: self-deploy with health check + auto-rollback
+6. Artifact short-term memory (FIFO cache)
+7. Finance integration
 
 ### Strategic
-1. Plugin adapter + CC memory bridge (shared brain via MCP)
-2. Finance integration
-3. GitHub integration
-4. Obsidian .md export
+8. Merge cc-native to main (after stability proven)
+9. Obsidian .md export
+10. Clawvato self-development (Track G Phase 3)
 
 ## Hard-Won Gotchas (new this session)
-- CLI `--append-system-prompt` has OS arg size limit (~128KB) — use `--append-system-prompt-file` for large prompts (E2BIG error)
-- Bash heredoc (`cat << 'EOF'`) breaks on apostrophes, quotes, dollar signs in business data — use `Write` tool
-- Google Drive classifies `.ts` TypeScript files as `text/texmacs` — MIME type alone can't filter code
-- Synced git repos in Drive flood `files.list` with .git objects (application/octet-stream)
-- Drive API `files.list` does NOT support `name starts with` — only `name contains` and `mimeType !=`
-- Parallel `Promise.allSettled` for collectors — still fail-fast by checking each result
-- Haiku extraction needs chunked input — findings files can be 27KB+
-- `extractionMaxTokens` was too low (2000) for extracting from large chunks — bumped to 8000
-- Debug workspace must be copied AFTER synthesis, not before (otherwise findings/ is empty)
-- Context planner runs `executeFastPath` internally — no Slack reaction lifecycle (goes silent)
-- Router didn't know about read_file/list_files — was sending file reads to DEEP instead of MEDIUM
+
+- CC trust prompt: `hasTrustDialogAccepted` in `.claude.json` does NOT prevent it — must use `expect` with regex
+- ANSI codes (`[1C`) between words in CC TUI — literal `expect` matching breaks, use `-re` regex
+- `--dangerously-skip-permissions` does NOT skip trust prompt — separate security layer
+- `--dangerously-skip-permissions` cannot run as root — need non-root Docker user
+- `su -p` preserves `HOME=/root` — must explicitly `export HOME=/home/clawvato`
+- `railway up` uses `.gitignore` for filtering — `.claude/` (379MB) must be in `.gitignore`
+- GitHub auto-deploy more reliable than `railway up` CLI
+- `expect` with `exp_continue` keeps matching — "folder" in normal output triggers spurious Enter
+- `script` piped stdin doesn't reach CC's ink TUI — `expect` is the only reliable approach
+- Settings.json `mcpServers` is not valid — MCP servers go in `.mcp.json` files
+- Memory plugin needs public Postgres URL (autorack.proxy.rlwy.net), not internal

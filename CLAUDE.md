@@ -1,7 +1,7 @@
 # CLAUDE.md — Clawvato Project Guide
 
 ## Project Overview
-Clawvato is an always-on personal AI agent deployed on Railway. It acts as a "chief of staff" — managing Slack, email, calendar, Drive, and meetings on behalf of its owner. Uses a **hybrid architecture**: Haiku routes each message to either a fast path (direct API, ~2s) or a deep path (Claude Code SDK subprocess with Opus, ~1-5 min, free on Max plan).
+Clawvato is an always-on personal AI agent deployed on Railway. It acts as a "chief of staff" — managing Slack, email, calendar, Drive, and meetings on behalf of its owner. Uses a **CC-native architecture**: Claude Code runs as the core engine via Channels, with Slack messages pushed in via a Channel MCP server. CC handles all tool orchestration, context management, and reasoning natively (Opus, $0 on Max plan). A legacy hybrid architecture (Haiku router → fast/medium/deep paths) exists on the `main` branch as a fallback.
 
 ## Quick Reference
 
@@ -17,40 +17,48 @@ npx tsx src/cli/index.ts status        # Check system status
 
 ## Architecture
 
-### Three-Tier Hybrid Agent
+### CC-Native Engine (active, `cc-native-engine` branch)
 
 ```
 Slack message arrives
-  → EventQueue accumulates (4s debounce)
-  → createHybridAgent.processBatch()
-    → assembleContext() — memory + working ctx + conversation history
-    → routeMessage() — Haiku classifier: FAST, MEDIUM, or DEEP
-    ├── FAST: executeFastPath(Sonnet) — direct Anthropic API
-    │   Model: Sonnet | 10 turns | 60s timeout | ~$0.01/call
-    │   All tools available (memory, calendar, gmail, slack, drive, fireflies, read_file, tasks)
-    │
-    ├── MEDIUM: executeFastPath(Opus) — direct Anthropic API
-    │   Model: Opus | 10 turns | 60s timeout | ~$0.05-0.10/call
-    │   Same tools as FAST — better reasoning for multi-step + memory interpretation
-    │
-    └── DEEP: contextPlanner → executeDeepPath() — claude --print subprocess
-        Pre-step: Context planner (Opus API) gathers context + converses with user
-        Model: Opus CLI | 200 turns | 20min timeout | $0 on Max plan
-        Workspace: context/ (pre-seeded .md files) + findings/ (model writes here)
-        MCP: Memory server (stdio)
-        Output: stream-json with real-time progress to Slack
-        Interrupt: owner can cancel mid-execution
+  → Slack Channel MCP server (Socket Mode, debounce 4s)
+  → 👀 reaction (code-enforced)
+  → Channel event pushed into Claude Code session
+  → CC processes natively (Opus, $0 on Max plan)
+    ├── Memory MCP: search, store, working context, tasks
+    ├── Google: gws CLI via Bash (gmail, calendar, drive)
+    ├── Fireflies: tools/fireflies.ts CLI via Bash
+    └── Native CC tools: Read, Write, Bash, Glob, Grep, Agent, WebSearch
+  → Response via slack_reply tool
+  → 🧠 reaction lifecycle (prompt-driven)
 
-Background: Sweep system (every 6h)
-  → 4 parallel collectors (Slack, Gmail, Drive, Fireflies)
-  → Opus CLI synthesis → findings.md
-  → Haiku extraction → atomic facts → Postgres memory
+Supervisor: expect + restart loop (handles PTY + trust prompt)
+Task scheduler: standalone sidecar (posts due tasks to Slack)
+Sweeps: 4 parallel collectors → Opus synthesis → Sonnet extraction → memory
+
+Session lifecycle:
+  Active → idle timeout → verified handoff (subagent test) → exit
+  → Supervisor restarts → startup crawl → seamless resume
+```
+
+Switch engines: `ENGINE=cc-native` (active) or `ENGINE=hybrid` (fallback on `main`).
+
+### Legacy Hybrid Agent (fallback, `main` branch)
+
+```
+Slack → EventQueue → Haiku router → FAST/MEDIUM/DEEP paths
+  FAST: Sonnet API, 10 turns, 60s | MEDIUM: Opus API | DEEP: Opus CLI subprocess
+  Custom tool loop, context assembly, stream-json parsing (~2,250 lines)
 ```
 
 ### Directory Structure
 ```
 src/
-  agent/           # Hybrid agent orchestration
+  cc-native/       # CC-Native Engine (active architecture)
+    slack-channel.ts   # Slack Channel MCP server (channel events + reply/react tools)
+    start.ts           # Launcher for supervisor entrypoint
+    task-scheduler-standalone.ts  # Sidecar: polls tasks, posts to Slack
+  agent/           # Legacy hybrid agent orchestration (fallback on main branch)
     hybrid.ts      # Main orchestrator — routes to fast/medium/deep path
     router.ts      # Haiku complexity classifier (FAST/MEDIUM/DEEP)
     fast-path.ts   # Direct API loop, all tools, 60s timeout
@@ -59,7 +67,7 @@ src/
     context-planner.ts  # Opus pre-step for deep path (replaces preflight)
     index.ts       # OLD monolithic agent (preserved as fallback, not used)
   cli/             # Commander.js CLI
-    start.ts       # Startup — creates hybrid agent, wires Slack handler
+    start.ts       # Startup — creates hybrid or cc-native agent
     setup.ts       # Interactive setup wizard
     status.ts      # Status reporting
   db/              # Postgres via postgres.js (async Sql type)
@@ -173,6 +181,13 @@ Training wheels were removed in Session 16 because they were blocking internal t
 - **Proactively suggest pushing** when you've reached a natural milestone: a feature is complete, a bug fix is verified, a sprint wraps up, or you've accumulated 5+ unpushed commits.
 - Ask: "We have N unpushed commits — good time to push?"
 - Don't wait until session end — push at logical breakpoints throughout the session.
+
+## Session Handoff Protocol
+When ending a session (or when asked to hand off):
+1. **Update all project files**: HANDOFF.md, state.json, memory files, CLAUDE.md if needed. Capture what happened, what was decided, what's next.
+2. **Spawn a blind subagent**: Give it NO conversation context — only the handoff files and memory. Ask it: *"You are resuming this project. Using only the handoff and memory available, demonstrate you can continue. What is the current state? What would you do next? What questions would you ask?"*
+3. **Evaluate the subagent's understanding**: Focus on gaps that would make the next session feel disconnected. Update handoff files to close gaps. Max 3 rounds.
+4. **The test**: If a fresh Claude session reads HANDOFF.md + state.json + memory and can seamlessly pick up where we left off, the handoff is complete.
 
 ## Coding Conventions
 
