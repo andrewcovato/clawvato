@@ -50,11 +50,17 @@ const config = getConfig();
 await initDb();
 const sql = getDb();
 
-// Use the API key for extraction (Sonnet, fast, cheap)
-const apiKey = process.env.ANTHROPIC_API_KEY;
+// CC runs without ANTHROPIC_API_KEY (Max plan OAuth). The entrypoint saves
+// the key to a file for extraction hooks to use.
+import { readFileSync } from 'node:fs';
+let apiKey = process.env.ANTHROPIC_API_KEY;
 if (!apiKey) {
-  console.error('[extract-hook] No ANTHROPIC_API_KEY — skipping extraction');
-  process.exit(0);
+  try {
+    apiKey = readFileSync('/tmp/.extraction-api-key', 'utf8').trim();
+  } catch {
+    console.error('[extract-hook] No API key available — skipping extraction');
+    process.exit(0);
+  }
 }
 
 const client = new Anthropic({ apiKey });

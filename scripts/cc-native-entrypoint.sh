@@ -54,6 +54,14 @@ export GWS_CONFIG_B64="${GWS_CONFIG_B64:-}"
 export DATA_DIR="${DATA_DIR:-/data}"
 export TZ="${TZ:-America/New_York}"
 
+# Save API key for extraction hooks before unsetting for CC.
+# CC itself uses Max plan OAuth (free), but the async extraction hook
+# needs the API key for Sonnet calls (~$0.001/extraction).
+if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+  echo "$ANTHROPIC_API_KEY" > /tmp/.extraction-api-key
+  chmod 600 /tmp/.extraction-api-key
+fi
+
 # Do NOT export ANTHROPIC_API_KEY — force CC to use Max plan OAuth
 unset ANTHROPIC_API_KEY 2>/dev/null || true
 
