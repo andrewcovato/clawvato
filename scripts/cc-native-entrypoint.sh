@@ -90,41 +90,31 @@ while true; do
   echo "[supervisor] Starting CC session #$SESSION_COUNTER"
 
   # Run Claude Code with channels in interactive mode.
+  #
   # `script` provides a pseudo-TTY so CC runs interactively on headless Railway.
   # Without it, CC falls back to --print mode (one-shot, no channel support).
   #
-  # The stdin wrapper sends an Enter after 8s to auto-approve the workspace trust
-  # prompt ("Yes, I trust this folder"). Trust persists in ~/.claude/ (on the
-  # Railway volume), so subsequent restarts skip the prompt.
+  # `--dangerously-skip-permissions` is the official flag for unattended use.
+  # It skips the workspace trust prompt AND all tool permission prompts.
+  # From the docs: "For unattended use, --dangerously-skip-permissions bypasses
+  # prompts entirely, but only use it in environments you trust."
   #
-  # --dangerously-load-development-channels: required for custom channels (research preview)
-  # --mcp-config: memory + slack-channel servers
-  # --append-system-prompt-file: our system prompt
-  # --max-turns: prevent runaway sessions
-  # --allowedTools: pre-approve tools so CC doesn't hang waiting for permission
-  {
-    sleep 8
-    printf '\n'
-    # Keep stdin open — channels push events via MCP, not stdin,
-    # but closing stdin may cause the PTY to terminate
-    while true; do sleep 3600; done
-  } | script -qfc "claude \
+  # Output is logged to /tmp/cc-session.log for debugging.
+  #
+  CC_LOG="/tmp/cc-session-${SESSION_COUNTER}.log"
+  echo "[supervisor] Logging CC output to $CC_LOG"
+
+  script -qfc "claude \
+    --dangerously-skip-permissions \
     --dangerously-load-development-channels server:slack-channel \
     --mcp-config '$PROJECT_DIR/.cc-native-mcp.json' \
     --append-system-prompt-file '$PROJECT_DIR/config/prompts/cc-native-system.md' \
     --max-turns $MAX_TURNS \
-    --model claude-opus-4-6 \
-    --allowedTools \
-      'Bash(gws:*)' 'Bash(npx:*)' 'Bash(cat:*)' 'Bash(ls:*)' 'Bash(echo:*)' 'Bash(mkdir:*)' \
-      Read Write Glob Grep Agent \
-      WebSearch WebFetch \
-      mcp__memory__search_memory mcp__memory__store_fact \
-      mcp__memory__retrieve_context mcp__memory__update_working_context \
-      mcp__memory__list_tasks mcp__memory__create_task \
-      mcp__memory__update_task mcp__memory__delete_task \
-      mcp__slack-channel__slack_reply mcp__slack-channel__slack_react \
-      mcp__slack-channel__slack_get_history" /dev/null \
+    --model claude-opus-4-6" "$CC_LOG" \
     || true  # Don't exit the loop on CC crash
+
+  echo "[supervisor] === Last 30 lines of CC output ==="
+  tail -30 "$CC_LOG" 2>/dev/null || true
 
   EXIT_CODE=$?
   echo "[supervisor] CC session #$SESSION_COUNTER exited (code: $EXIT_CODE)"
