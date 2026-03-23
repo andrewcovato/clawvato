@@ -17,35 +17,46 @@ npx tsx src/cli/index.ts status        # Check system status
 
 ## Architecture
 
-### Hybrid Agent — Two-Path Design
+### Three-Tier Hybrid Agent
 
 ```
 Slack message arrives
   → EventQueue accumulates (4s debounce)
   → createHybridAgent.processBatch()
     → assembleContext() — memory + working ctx + conversation history
-    → routeMessage() — Haiku classifier: FAST or HEAVY?
-    ├── FAST: executeFastPath() — direct Anthropic API
+    → routeMessage() — Haiku classifier: FAST, MEDIUM, or DEEP
+    ├── FAST: executeFastPath(Sonnet) — direct Anthropic API
     │   Model: Sonnet | 10 turns | 60s timeout | ~$0.01/call
-    │   Tools: search_memory, update_working_context,
-    │          calendar list/get, gmail_search, slack history/search
-    └── HEAVY: executeDeepPath() — claude --print subprocess
-        Model: Opus | 200 turns | 20min timeout | $0 on Max plan
+    │   All tools available (memory, calendar, gmail, slack, drive, fireflies, read_file, tasks)
+    │
+    ├── MEDIUM: executeFastPath(Opus) — direct Anthropic API
+    │   Model: Opus | 10 turns | 60s timeout | ~$0.05-0.10/call
+    │   Same tools as FAST — better reasoning for multi-step + memory interpretation
+    │
+    └── DEEP: contextPlanner → executeDeepPath() — claude --print subprocess
+        Pre-step: Context planner (Opus API) gathers context + converses with user
+        Model: Opus CLI | 200 turns | 20min timeout | $0 on Max plan
+        Workspace: context/ (pre-seeded .md files) + findings/ (model writes here)
         MCP: Memory server (stdio)
-        CLI: gws (Google), tools/fireflies.ts (meetings)
         Output: stream-json with real-time progress to Slack
         Interrupt: owner can cancel mid-execution
+
+Background: Sweep system (every 6h)
+  → 4 parallel collectors (Slack, Gmail, Drive, Fireflies)
+  → Opus CLI synthesis → findings.md
+  → Haiku extraction → atomic facts → Postgres memory
 ```
 
 ### Directory Structure
 ```
 src/
   agent/           # Hybrid agent orchestration
-    hybrid.ts      # Main orchestrator — routes to fast/deep path
-    router.ts      # Haiku complexity classifier (FAST vs HEAVY)
-    fast-path.ts   # Direct API loop, limited tools, 60s timeout
-    deep-path.ts  # Claude Code SDK subprocess, stream-json parsing
+    hybrid.ts      # Main orchestrator — routes to fast/medium/deep path
+    router.ts      # Haiku complexity classifier (FAST/MEDIUM/DEEP)
+    fast-path.ts   # Direct API loop, all tools, 60s timeout
+    deep-path.ts   # Claude Code SDK subprocess, stream-json parsing
     context.ts     # Shared context assembly (memory + history + working ctx)
+    context-planner.ts  # Opus pre-step for deep path (replaces preflight)
     index.ts       # OLD monolithic agent (preserved as fallback, not used)
   cli/             # Commander.js CLI
     start.ts       # Startup — creates hybrid agent, wires Slack handler
@@ -56,11 +67,11 @@ src/
     schema.pg.sql  # Postgres schema (tsvector, pgvector, GIN/HNSW indexes)
   mcp/             # MCP servers
     memory/        # Memory MCP server for SDK deep path
-      server.ts    # 6 tools: search, retrieve, store, working ctx, people, commitments
+      server.ts    # Tools: search, retrieve, store, working ctx, tasks
       stdio.ts     # stdio entrypoint (LOG_DESTINATION=stderr for clean protocol)
-    slack/server.ts  # Slack tools (5 tools)
+    slack/server.ts  # Slack tools (search, post, history)
   memory/          # Memory system (crown jewel)
-    store.ts       # CRUD for memories + people tables
+    store.ts       # CRUD for memories table (unified — no people table)
     retriever.ts   # Token-budgeted context retrieval (tsvector + pgvector hybrid)
     extractor.ts   # Haiku fact extraction from conversations
     embeddings.ts  # all-MiniLM-L6-v2 vector embeddings
@@ -90,6 +101,13 @@ src/
     api.ts         # GraphQL client
     tools.ts       # 4 tool definitions
     sync.ts        # Meeting sync + extraction
+  sweeps/          # Background data sweep system
+    types.ts       # Collector interface, CollectorResult, high-water mark helpers
+    slack-collector.ts   # Slack channels (cadence-filtered, user token)
+    gmail-collector.ts   # Gmail threads (noise-filtered)
+    drive-collector.ts   # Drive files (full paths, content snippets)
+    fireflies-collector.ts  # Fireflies meetings (paginated)
+    executor.ts    # Orchestrates: parallel collect → synthesis → extraction
   hooks/           # PreToolUse / PostToolUse hooks
   config.ts        # Zod-validated config
   credentials.ts   # macOS Keychain via keytar, env fallback
@@ -112,9 +130,9 @@ config/
 
 ### Four-Model Architecture
 - **Haiku** (`claude-haiku-4-5-20251001`): Router + classifier + fact extraction + pin summaries (~$0.0002/call)
-- **Sonnet** (`claude-sonnet-4-6`): Fast path — simple lookups, commands (~$0.01/call)
-- **Opus** (`claude-opus-4-6`): Medium path via API — memory reasoning, task management, corrections (~$0.05-0.10/call)
-- **Opus** (`claude-opus-4-6`): Deep path via CLI — cross-source research ($0 on Max plan)
+- **Sonnet** (`claude-sonnet-4-6`): Fast path — simple lookups, commands, file reads (~$0.01/call)
+- **Opus** (`claude-opus-4-6`): Medium path via API — memory reasoning, task management, context planning (~$0.05-0.10/call)
+- **Opus** (`claude-opus-4-6`): Deep path via CLI — pure reasoning with pre-loaded context + sweep synthesis ($0 on Max plan)
 
 ### Database (Postgres via postgres.js)
 Uses `postgres` (porsager/postgres) — tagged template SQL client. Connection via `DATABASE_URL` env var.
@@ -281,10 +299,12 @@ After each interaction:
 - **Track J** ✅: SDK Pivot — Hybrid architecture (fast + deep path, router, MCP server)
 - **Track K** ✅: Postgres Migration — SQLite → Postgres, tsvector, pgvector, async ops
 - **Track L** ✅: Autonomous Task Queue — scheduler, executor, dedicated task channel, three-tier routing
+- **Track M** 🔶: Background Sweeps — 4 collectors, Opus synthesis working, Haiku extraction blocker
+- **Track N** 🔶: Context Planner — built, needs populated memory to test
 - **Track E** ⬜: Workflow Engine + Scheduling
 - **Track F** 🔶: Security + Training Wheels (undo system remaining)
 - **Track G** ⬜: GitHub + Filesystem + Web Research
-- **Track H** ⬜: Proactive Intelligence
+- **Track H** 🔶: Plugin Adapter + CC Bridge (designed, not built)
 
 ## Common Tasks
 

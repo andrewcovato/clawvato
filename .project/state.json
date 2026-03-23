@@ -2,9 +2,9 @@
   "project": {
     "name": "Clawvato",
     "description": "Business operating system for solo technical founders — memory-powered AI agent across Slack, email, calendar, Drive, meetings, and Claude Code",
-    "version": "0.8.0",
+    "version": "0.9.0",
     "status": "active",
-    "phase": "task-queue-shipped",
+    "phase": "proactive-memory-in-progress",
     "startDate": "2026-03-06",
     "adoptedDate": "2026-03-07"
   },
@@ -13,14 +13,16 @@
     "B": { "name": "Slack MCP + Agent Core", "status": "complete", "completedDate": "2026-03-17" },
     "C": { "name": "Google Workspace", "status": "complete", "completedDate": "2026-03-19" },
     "D": { "name": "Memory + Embeddings", "status": "complete", "completedDate": "2026-03-19" },
-    "E": { "name": "Proactive Intelligence", "status": "not_started" },
-    "F": { "name": "Security Hardening", "status": "partial", "notes": "Training wheels removed (was blocking tools). Pre-tool security checks + output sanitization remain." },
+    "E": { "name": "Proactive Intelligence", "status": "in_progress", "notes": "Background sweep system built. Collection + Opus synthesis working. Haiku extraction from findings failing — needs debugging." },
+    "F": { "name": "Security Hardening", "status": "partial", "notes": "Training wheels removed. Pre-tool security checks + output sanitization remain." },
     "G": { "name": "GitHub + Web Research", "status": "not_started" },
     "H": { "name": "Plugin Adapter + CC Bridge", "status": "designed", "notes": "Design at docs/DESIGN_PLUGIN_ADAPTER.md" },
     "I": { "name": "Fireflies.ai", "status": "complete", "completedDate": "2026-03-18" },
     "J": { "name": "Hybrid Architecture", "status": "complete", "completedDate": "2026-03-19" },
     "K": { "name": "Postgres Migration", "status": "complete", "completedDate": "2026-03-19" },
-    "L": { "name": "Autonomous Task Queue", "status": "complete", "completedDate": "2026-03-20", "notes": "Scheduler, executor, dedicated task channel with pinned messages, cross-channel management, three-tier routing (Sonnet/Opus API/Opus CLI), MCP integration, 26 tests." }
+    "L": { "name": "Autonomous Task Queue", "status": "complete", "completedDate": "2026-03-20" },
+    "M": { "name": "Background Sweeps", "status": "in_progress", "notes": "4 collectors (Slack, Gmail, Drive, Fireflies) built and tested. Parallel collection ~2 min. Opus CLI synthesis produces 27KB findings. Haiku extraction step failing — last blocker." },
+    "N": { "name": "Context Planner", "status": "built_not_tested", "notes": "Replaces preflight with Opus context planning. Built but not tested with real data (needs populated memory first). Has UX bug: no Slack progress feedback during planning." }
   },
   "infrastructure": {
     "local": "macOS, DATABASE_URL=... npx tsx src/cli/index.ts start",
@@ -29,85 +31,103 @@
     "railwayServices": ["clawvato (agent)", "Postgres (managed DB)"],
     "database": "Railway managed Postgres (automatic backups, pgvector)",
     "taskChannel": "C0AN5J0LCP3 (#clawvato-tasks)",
-    "dataVolume": "/data (Claude CLI auth + gws config only)",
+    "dataVolume": "/data (Claude CLI auth + gws config + debug workspaces)",
     "deployMethod": "railway up --detach",
-    "maxPlan": "Claude Max subscription — deep path costs $0"
+    "maxPlan": "Claude Max subscription — deep path + sweep synthesis costs $0"
   },
   "metrics": {
     "testFiles": 23,
     "taskStoreTests": 26,
     "testsPassing": "requires DATABASE_URL"
   },
-  "immediateBacklog": [
-    { "id": "MEMORY-DEBUG", "title": "Further memory debugging — agent sometimes claims no data when data exists" },
-    { "id": "TASK-UX", "title": "Slack task UX tweaks — thumbs up approval, detail thread edits, pin summary regeneration" },
-    { "id": "SESSION-001", "title": "--session support for deep path thread continuity across Slack messages" }
-  ],
-  "backlog": [
-    { "id": "PLUGIN-001", "priority": "high", "title": "Plugin adapter + unified memory bridge" },
-    { "id": "FINANCE-001", "priority": "high", "title": "Finance integration — invoicing, bookkeeping, A/P" },
-    { "id": "GITHUB-001", "priority": "medium", "title": "GitHub integration" },
-    { "id": "MITIGATION-P2", "priority": "medium", "title": "Security Priority 2-3 mitigations" },
-    { "id": "OBSIDIAN-001", "priority": "low", "title": "Obsidian integration for memory visibility" },
-    { "id": "TRACK-E", "priority": "low", "title": "Complex long-term task management — multi-step workflows with checkpointing" }
-  ],
   "currentSprint": {
-    "id": "S6",
-    "name": "Autonomous Task Queue + Three-Tier Routing",
+    "id": "S8",
+    "name": "Proactive Memory & Intelligent Context Assembly",
     "goals": [
-      "Task queue schema, store, CRUD tools ✅",
-      "Scheduler loop (polls every 60s) ✅",
-      "Task executor (synthetic message → agent pipeline) ✅",
-      "Dedicated task channel with pinned messages ✅",
-      "Cross-channel task management ✅",
-      "Haiku-generated pin summaries ✅",
-      "Detail thread under each task pin ✅",
-      "Approval flow (thumbs-up reaction) ✅",
-      "Pin sync (startup + periodic + on-demand) ✅",
-      "Three-tier routing: FAST (Sonnet) / MEDIUM (Opus API) / DEEP (Opus CLI) ✅",
-      "MCP integration (deep path task tools) ✅",
-      "Task store tests (26/26 passing) ✅",
-      "Training wheels removed ✅",
-      "Memory delete tool ✅",
-      "tsvector OR search fix ✅",
-      "Preflight prompt fix ✅",
-      "Message chunking for Slack ✅",
-      "Undelivered response fallback to memory ✅"
+      "Generic Collector interface + high-water marks ✅",
+      "Slack collector (cadence-filtered, user token, bot-excluded) ✅",
+      "Gmail collector (noise-filtered, 2000 threads) ✅",
+      "Drive collector (full paths, content snippets, staleness filter, code exclusion) ✅",
+      "Fireflies collector (paginated, 100 meetings) ✅",
+      "Parallel collection (~2 min for all 4 sources) ✅",
+      "Sweep executor + task registration ✅",
+      "Fail-fast on collector errors ✅",
+      "Opus CLI synthesis via --append-system-prompt-file ✅",
+      "Synthesis mode (Write tool only, no MCP/Read overhead) ✅",
+      "27KB findings file generated successfully ✅",
+      "Debug workspace persistence (with findings) ✅",
+      "Live tool call logging (info level) ✅",
+      "Context planner (replaces preflight) ✅ (built, not fully tested)",
+      "Analysis mode (reduced tools when context is sufficient) ✅ (built, not tested)",
+      "Haiku extraction from findings ❌ (failing — empty error, needs debugging)",
+      "read_file + list_files tools on fast path ✅",
+      "Router updated — all paths have same tools ✅"
     ],
-    "progress": "Sprint complete."
+    "progress": "~90% complete. Collection + synthesis pipeline working end-to-end. Last blocker: Haiku extraction from synthesis findings fails silently."
   },
   "lastSession": {
-    "number": 16,
-    "date": "2026-03-20",
-    "type": "Postgres migration + Task queue + Three-tier routing + Bug fixes",
+    "number": 17,
+    "date": "2026-03-22",
+    "type": "Proactive Memory — sweep system, context planner, analysis mode, debugging",
     "keyDecisions": [
-      "SQLite → Postgres (33 files, triggered by data loss)",
-      "Three-tier routing: FAST/MEDIUM/DEEP (reduces hallucinations on memory-heavy queries)",
-      "Autonomous task queue with dedicated Slack channel",
-      "Pinned messages = live dashboard, channel messages = notifications, threads = modifications",
-      "Training wheels removed (was blocking internal tools like delete_memory)",
-      "tsvector search switched from AND to OR logic",
-      "Preflight prompt: never imply starting without [PROCEED]",
-      "Message chunking prevents msg_too_long",
-      "Task results posted to task channel, not owner DM"
+      "Unified memory paradigm — removed people table, all knowledge as facts with entity tags",
+      "Workspace .md pipeline replaces findings JSON — model writes naturally, Haiku extracts",
+      "Removed 5 bespoke tools (list_people, list_commitments, slack_get_thread, etc.)",
+      "Background sweeps: single cadence for all sources, not per-source",
+      "Generic Collector interface for future extensibility (GitHub, QuickBooks, etc.)",
+      "Context planner replaces preflight — Opus gathers context + converses with user",
+      "Analysis mode: context planner decides if deep path needs research tools or not",
+      "Three routing modes only: FAST/MEDIUM/DEEP (removed DEEP_ANALYSIS — planner decides)",
+      "Sweep synthesis via --append-system-prompt-file (avoids E2BIG for large prompts)",
+      "Write tool for synthesis output (heredoc breaks on special chars in business data)",
+      "Parallel collector execution",
+      "Slack cadence filter: skip channels with >21 day gaps between messages",
+      "Gmail noise filter: skip promotions, social, forums, calendar invites",
+      "Drive: exclude git repos, hidden files, code MIME types; staleness filter (6mo modified OR viewed)"
     ]
   },
+  "immediateBacklog": [
+    { "id": "SWEEP-EXTRACT", "title": "Fix Haiku extraction from sweep findings — fails with empty error on 27KB chunked input" },
+    { "id": "PLANNER-UX", "title": "Context planner needs Slack progress feedback (goes silent during planning)" },
+    { "id": "DRIVE-CODE-FILTER", "title": "Drive collector still pulling code files (.ts as text/texmacs, .md, .py) — need better MIME exclusion or folder-based filtering" }
+  ],
+  "backlog": [
+    { "id": "UNIFIED-TOOLS", "priority": "high", "title": "Make all tools available to all paths — routing decides usage, not tool restrictions" },
+    { "id": "ARTIFACT-CACHE", "priority": "high", "title": "Artifact short-term memory — FIFO cache for read files/emails so follow-up questions don't re-fetch" },
+    { "id": "SWEEP-STATUS", "priority": "medium", "title": "Sweep status message in Slack ('don't bug me, I'm sweeping')" },
+    { "id": "ADHOC-BACKFILL", "priority": "medium", "title": "Ad hoc backfill CLI command with custom date ranges + higher limits" },
+    { "id": "SESSION-001", "priority": "medium", "title": "--session support for deep path thread continuity across Slack messages" },
+    { "id": "PLUGIN-001", "priority": "medium", "title": "Plugin adapter + CC memory bridge — shared brain via MCP" },
+    { "id": "FINANCE-001", "priority": "medium", "title": "Finance integration — invoicing, bookkeeping, A/P" },
+    { "id": "GITHUB-001", "priority": "medium", "title": "GitHub integration — code repos as a sweep source" },
+    { "id": "MITIGATION-P2", "priority": "low", "title": "Security Priority 2-3 mitigations" },
+    { "id": "OBSIDIAN-001", "priority": "low", "title": "Obsidian integration — .md export of memory for visibility" }
+  ],
   "thingsNotToRedo": [
     "DON'T REBUILD WHAT COMES NATIVELY WITH CLAUDE",
     "Don't hardcode prompts in TypeScript — all prompts in config/prompts/*.md",
     "Don't hardcode tunables in TypeScript — all operational values in config/default.json",
     "Always take the pain now — build for durability, no short-term hacks",
     "Bug reports → investigate + plan + confirm before coding",
+    "Plan before coding — don't jump straight to implementation",
+    "Don't build bespoke tools/tables for specific entity types — unified memory handles it",
+    "Don't build point solutions — trust general-purpose tools (search_memory, etc.)",
+    "Don't hardcode whitelists/blacklists of MIME types or file patterns — use general filters",
     "MCP stdio servers MUST redirect ALL logging to stderr",
     "Deep path subprocess env: ALLOWLIST only, never pass Slack tokens",
-    "Findings file step is NOT optional — web research that isn't written is lost",
+    "CLI sandbox blocks reads/writes outside project dir — workspace in cwd",
+    "CLI --append-system-prompt has arg size limit (~128KB) — use --append-system-prompt-file for large prompts",
+    "Heredoc (cat <<EOF) breaks on special chars in business data — use Write tool instead",
+    "Multiple .md file writes from deep path = multiple slow tool call turns — single file",
     "Pre-flight must never imply starting without [PROCEED] sentinel",
     "Brain reaction goes on user's message, not bot's confirmation",
     "Long Slack messages MUST be chunked — msg_too_long silently drops content",
     "Always notify user in Slack on errors — no silent failures",
     "tsvector plainto_tsquery uses AND — use to_tsquery with | for OR",
     "CREATE TABLE IF NOT EXISTS won't add new columns — ALTER TABLE for live migrations",
-    "NEVER run tests against production DATABASE_URL — use TEST_DATABASE_URL"
+    "NEVER run tests against production DATABASE_URL",
+    "GWS_CONFIG_B64 can silently disappear from Railway env vars — check entrypoint logs",
+    "Google Drive classifies .ts files as text/texmacs — can't rely on MIME type alone for filtering"
   ],
-  "lastUpdated": "2026-03-20"
+  "lastUpdated": "2026-03-22"
 }

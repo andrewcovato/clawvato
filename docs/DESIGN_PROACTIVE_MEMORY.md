@@ -1,6 +1,6 @@
 # Design: Proactive Memory & Intelligent Context Assembly
 
-> Status: Draft | Author: Andrew + Claude | Date: 2026-03-20
+> Status: Implementation in progress | Author: Andrew + Claude | Date: 2026-03-20 | Updated: 2026-03-22
 
 ## Problem Statement
 
@@ -237,24 +237,28 @@ Router → DEEP → medium path context planning → preflight → deep path (pu
 
 This design is additive — it enhances the existing architecture without breaking it.
 
-### Phase 1: Background Sweeps (Track M)
-- Source collectors for Slack, Gmail, Fireflies
-- High-water mark tracking in agent_state
-- Workspace-based synthesis via existing deep path
-- Recurring task via existing scheduler
-- Configuration in default.json
+### Phase 1: Background Sweeps (Track M) — IMPLEMENTED, extraction blocker
+- ✅ Generic Collector interface + 4 implementations (Slack, Gmail, Drive, Fireflies)
+- ✅ High-water mark tracking in agent_state
+- ✅ Parallel collection (~2 min for all 4 sources)
+- ✅ Opus CLI synthesis via --append-system-prompt-file (produces 27KB findings)
+- ✅ Recurring task via existing scheduler
+- ✅ Configuration in default.json (sweeps section)
+- ✅ Fail-fast on collector errors
+- ✅ Debug workspace persistence (with findings)
+- ❌ Haiku extraction from findings failing (last blocker — error logging improved, needs debugging)
 
-### Phase 2: Context Planner (Track N)
-- Medium path pre-fetch logic before deep path handoff
-- Memory query planning (Opus API)
-- Gap detection + targeted mini-sweeps
-- Workspace assembly from memory queries
-- Deep path prompt simplification
+### Phase 2: Context Planner (Track N) — BUILT, not tested
+- ✅ Replaces preflight with Opus context planning + user conversation
+- ✅ Searches memory + uses fast path tools to fill gaps
+- ✅ Assesses sufficientForAnalysis flag
+- ❌ Not tested with real data (needs populated memory from Phase 1)
+- ❌ No Slack progress feedback during planning (UX bug)
 
-### Phase 3: Deep Path Pure Mode (Track N continued)
-- Reduce allowedTools for analysis-only tasks
-- Context planner decides research vs. analysis mode
-- Router hints (DEEP_RESEARCH vs DEEP_ANALYSIS)
+### Phase 3: Deep Path Pure Mode (Track N continued) — BUILT, not tested
+- ✅ analysisMode with reduced tools (Write, Read, Glob, Grep, MCP search)
+- ✅ Context planner decides analysis vs research mode (not router)
+- ❌ Not tested (needs populated memory + working planner)
 
 ### 5. Relationship-Aware Extraction
 
