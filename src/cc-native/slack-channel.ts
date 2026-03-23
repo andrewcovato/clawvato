@@ -387,6 +387,53 @@ slackApp.event('app_mention', async ({ event }) => {
 await slackApp.start();
 console.error('Slack Channel connected via Socket Mode — listening for messages');
 
+// ── Startup crawl — notify CC to check for missed messages ──
+// Push a system event so CC knows it just started and should catch up.
+// CC uses slack_get_history + working context to resume seamlessly.
+
+async function sendStartupEvent(): Promise<void> {
+  // Discover channels the bot is in
+  const channels: Array<{ id: string; name: string }> = [];
+  for (const type of ['public_channel', 'private_channel'] as const) {
+    try {
+      const result = await slackApp!.client.conversations.list({
+        types: type,
+        exclude_archived: true,
+        limit: 200,
+      });
+      for (const ch of (result.channels ?? [])) {
+        if (!ch.id || !ch.is_member) continue;
+        channels.push({ id: ch.id, name: ch.name ?? ch.id });
+      }
+    } catch { /* skip */ }
+  }
+
+  const channelList = channels.map(c => `${c.name} (${c.id})`).join(', ');
+
+  await mcp.notification({
+    method: 'notifications/claude/channel',
+    params: {
+      content: `Session started. You are Clawvato resuming after a restart. ` +
+        `Check your working context via Memory MCP for handoff notes. ` +
+        `Then use slack_get_history on relevant channels to catch up on anything you missed. ` +
+        `Channels you're in: ${channelList}. ` +
+        `If everything is handled, do nothing. If there are outstanding requests, respond to them.`,
+      meta: {
+        source_type: 'system',
+        event: 'startup',
+        channel_count: String(channels.length),
+      },
+    },
+  });
+
+  console.error(`Startup event sent — ${channels.length} channels discovered`);
+}
+
+// Send startup event after a brief delay (let MCP connection stabilize)
+setTimeout(() => void sendStartupEvent().catch(err => {
+  console.error('Startup event failed:', err);
+}), 3000);
+
 // Start idle timer
 resetIdleTimer();
 
