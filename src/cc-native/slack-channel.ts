@@ -330,6 +330,15 @@ async function flushBatch(key: string): Promise<void> {
     },
   });
 
+  // Remove 👀 — CC has picked up the message. CC adds 🧠 via prompt.
+  try {
+    await slackApp!.client.reactions.remove({
+      channel: batch.channel,
+      timestamp: lastMessageTs,
+      name: 'eyes',
+    });
+  } catch { /* may fail if already removed — non-critical */ }
+
   resetIdleTimer();
 }
 
