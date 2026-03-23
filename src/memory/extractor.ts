@@ -114,7 +114,9 @@ export async function extractFacts(
 
     return { facts };
   } catch (error) {
-    logger.error({ error, source }, 'Fact extraction failed');
+    const errMsg = error instanceof Error ? error.message : JSON.stringify(error);
+    const errStatus = (error as Record<string, unknown>)?.status;
+    logger.error({ error: errMsg, status: errStatus, source }, 'Fact extraction failed');
     return { facts: [] };
   }
 }
