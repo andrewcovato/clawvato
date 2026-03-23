@@ -43,7 +43,7 @@ node -e "
 "
 chown clawvato:clawvato "$CLAWVATO_HOME/.claude.json" 2>/dev/null || true
 
-# ── CC settings ──
+# ── CC settings + hooks ──
 mkdir -p "$CLAWVATO_HOME/.claude"
 cat > "$CLAWVATO_HOME/.claude/settings.json" << 'SETTINGS_EOF'
 {
@@ -51,7 +51,21 @@ cat > "$CLAWVATO_HOME/.claude/settings.json" << 'SETTINGS_EOF'
     "allow": [],
     "deny": []
   },
-  "skipDangerousModePermissionPrompt": true
+  "skipDangerousModePermissionPrompt": true,
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "mcp__slack-channel__slack_reply",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx tsx /app/scripts/extract-from-reply.ts",
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
 }
 SETTINGS_EOF
 chown -R clawvato:clawvato "$CLAWVATO_HOME/.claude" 2>/dev/null || true

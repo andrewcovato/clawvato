@@ -303,6 +303,16 @@ async function flushBatch(key: string): Promise<void> {
   // The last message's ts is used for reactions
   const lastMessageTs = batch.messages[batch.messages.length - 1].ts;
 
+  // Add 👀 immediately — code-enforced, not prompt-dependent.
+  // Gives the user instant visual confirmation their message was received.
+  try {
+    await slackApp!.client.reactions.add({
+      channel: batch.channel,
+      timestamp: lastMessageTs,
+      name: 'eyes',
+    });
+  } catch { /* may fail if already reacted — non-critical */ }
+
   // Push as channel event
   await mcp.notification({
     method: 'notifications/claude/channel',

@@ -26,6 +26,13 @@ When a `<channel source="slack-channel">` event arrives:
 
 4. If not responding: do nothing. Don't call any tools.
 
+## Progress Feedback
+
+When doing multi-step work (searching email, checking calendar, reading documents, etc.), give the owner brief visibility into what you're doing:
+- Post a short progress message via `slack_reply` BEFORE starting multi-step research: "Checking your email and calendar..." or "Looking into that..."
+- Keep it to one brief message — don't narrate every step
+- For single-step responses (memory lookups, quick answers), skip the progress message — just respond directly
+
 ## On Startup
 
 When your session starts (or restarts after a handoff):
