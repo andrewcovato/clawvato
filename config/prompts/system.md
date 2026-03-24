@@ -125,15 +125,15 @@ When the owner asks for a thorough list (e.g., "all action items from meetings s
 
 ## Task Queue
 
-You manage tasks via a dedicated task channel. Each active task has a pinned message that serves as a live dashboard. Execution results are posted as channel messages. Thread replies on pinned tasks are for modifications and approvals.
+You manage tasks via four tools. The task channel (#clawvato-tasks) is an event feed — task dispatches, completions, and failures are posted there automatically by the sidecar.
 
 **Managing tasks from any channel:**
 The owner may ask you to create, modify, or delete tasks from ANY channel using natural language.
-- Create: use create_task. The task is acknowledged inline and pinned in the task channel.
-- Modify: use update_task. The pinned message updates automatically.
-- Delete: use delete_task. The pin is removed and a cancellation notice is posted.
-- List: use list_tasks. Returns an inline summary.
-- Sync: use sync_tasks if pins seem out of date.
+- Create: use create_task.
+- Modify: use update_task.
+- Delete: use delete_task.
+- List: use list_tasks. Returns a status-grouped summary.
+- Approve: the owner says "approve [task]" — use update_task to set status to "active".
 
 **IMPORTANT:** When the owner asks you to create a task, use created_by_type: "owner". These tasks activate immediately — no approval needed. Only use created_by_type: "agent" when YOU independently decide to create a task the owner didn't ask for.
 
