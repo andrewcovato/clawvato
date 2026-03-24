@@ -35,10 +35,9 @@ import { routeMessage, type RouterResult } from './router.js';
 import { executeFastPath, createFastPathMemoryTools } from './fast-path.js';
 import { executeDeepPath, seedWorkspace } from './deep-path.js';
 import { planContext } from './context-planner.js';
-import { extractFacts, storeExtractionResult, type ExtractedFact } from '../memory/extractor.js';
+import { extractFacts, storeExtractionResult, contentSimilarity, type ExtractedFact } from '../memory/extractor.js';
 import { maybeReflect } from '../memory/reflection.js';
 import { findOrCreateCategory, insertMemory, findDuplicates, supersedeMemory, deleteEmbedding, insertEmbedding } from '../memory/store.js';
-import { contentSimilarity } from '../memory/extractor.js';
 import { embedBatch } from '../memory/embeddings.js';
 import { classifyInterrupt, generateClarificationMessage } from '../slack/interrupt-classifier.js';
 import { createTaskTools, type TaskToolContext } from '../tasks/tools.js';
@@ -129,7 +128,7 @@ async function processWorkspaceFiles(
           const fileSource = `${source}:file:${fileName}`;
           const result = await extractFacts(anthropicClient, classifierModel, content, fileSource, db);
           if (result.facts.length > 0) {
-            const storeResult = await storeExtractionResult(db, result, fileSource, { surface_id: opts?.surface_id });
+            const storeResult = await storeExtractionResult(db, result, fileSource, { surface_id: opts?.surface_id, client: anthropicClient });
             stored += storeResult.memoriesStored;
             skipped += storeResult.duplicatesSkipped;
           }
@@ -634,7 +633,7 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
           extractFacts(anthropicClient, config.models.classifier, message, extractionSource, db)
             .then(async result => {
               if (result.facts.length > 0) {
-                await storeExtractionResult(db, result, extractionSource, { surface_id: extractionSurfaceId });
+                await storeExtractionResult(db, result, extractionSource, { surface_id: extractionSurfaceId, client: anthropicClient });
                 await maybeReflect(db, anthropicClient, config.models.classifier);
               }
             })

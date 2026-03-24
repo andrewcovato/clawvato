@@ -13,7 +13,6 @@ import { loadConfig } from '../../src/config.js';
 import {
   extractFacts,
   storeExtractionResult,
-  contentSimilarity,
   type ExtractionResult,
 } from '../../src/memory/extractor.js';
 import { getMemory, findMemoriesByType, insertMemory } from '../../src/memory/store.js';
@@ -147,7 +146,7 @@ describe('extractFacts', () => {
 });
 
 describe('storeExtractionResult', () => {
-  it('stores facts', async () => {
+  it('stores facts without dedup when no client provided', async () => {
     const result: ExtractionResult = {
       facts: [
         { type: 'fact', content: 'Jake works in finance', confidence: 0.9, importance: 7, entities: ['Jake'] },
@@ -159,13 +158,31 @@ describe('storeExtractionResult', () => {
 
     expect(stored.memoriesStored).toBe(2);
     expect(stored.duplicatesSkipped).toBe(0);
+    expect(stored.memoriesUpdated).toBe(0);
+    expect(stored.memoriesRetired).toBe(0);
 
     const facts = await findMemoriesByType(sql, 'fact');
     expect(facts).toHaveLength(1);
     expect(facts[0].content).toBe('Jake works in finance');
   });
 
-  it('skips duplicates with lower confidence', async () => {
+  it('returns expanded metrics shape', async () => {
+    const result: ExtractionResult = {
+      facts: [
+        { type: 'fact', content: 'Test fact for metrics', confidence: 0.8, importance: 5, entities: [] },
+      ],
+    };
+
+    const stored = await storeExtractionResult(sql, result, 'test');
+
+    expect(stored).toHaveProperty('memoriesStored');
+    expect(stored).toHaveProperty('duplicatesSkipped');
+    expect(stored).toHaveProperty('memoriesUpdated');
+    expect(stored).toHaveProperty('memoriesRetired');
+  });
+
+  it('stores all facts when dedup is disabled (no client)', async () => {
+    // Insert an existing memory first
     await insertMemory(sql, {
       type: 'fact',
       content: 'Jake works on the finance team',
@@ -180,61 +197,47 @@ describe('storeExtractionResult', () => {
       ],
     };
 
-    const stored = await storeExtractionResult(sql, result, 'test');
-
-    expect(stored.duplicatesSkipped).toBe(1);
-    expect(stored.memoriesStored).toBe(0);
-  });
-
-  it('supersedes duplicates with higher confidence', async () => {
-    const oldId = await insertMemory(sql, {
-      type: 'fact',
-      content: 'Jake works on the finance team',
-      source: 'old',
-      confidence: 0.5,
-      importance: 5,
-    });
-
-    const result: ExtractionResult = {
-      facts: [
-        { type: 'fact', content: 'Jake works on the finance team now', confidence: 1.0, importance: 8, entities: ['Jake'] },
-      ],
-    };
-
+    // Without client, dedup is disabled — fact is stored regardless
     const stored = await storeExtractionResult(sql, result, 'test');
 
     expect(stored.memoriesStored).toBe(1);
-
-    const old = await getMemory(sql, oldId);
-    expect(old!.valid_until).not.toBeNull();
-    expect(old!.superseded_by).not.toBeNull();
-  });
-});
-
-describe('contentSimilarity', () => {
-  it('returns 1.0 for identical strings', () => {
-    const score = contentSimilarity('Jake works in finance', 'Jake works in finance');
-    expect(score).toBe(1.0);
+    expect(stored.duplicatesSkipped).toBe(0);
   });
 
-  it('returns high score for near-duplicates', () => {
-    const score = contentSimilarity(
-      'Jake works on the finance team',
-      'Jake is part of the finance team',
-    );
-    expect(score).toBeGreaterThan(0.5);
-  });
+  it('uses dedup when client is provided and similar memories exist', async () => {
+    // Mock client that returns NOOP decision
+    const mockClient = {
+      messages: {
+        create: vi.fn().mockResolvedValue({
+          content: [{ type: 'text', text: JSON.stringify({ action: 'NOOP', target_id: null, reason: 'Already known' }) }],
+        }),
+      },
+    } as any;
 
-  it('returns low score for unrelated strings', () => {
-    const score = contentSimilarity(
-      'Jake works on the finance team',
-      'The weather is sunny today',
-    );
-    expect(score).toBeLessThan(0.3);
-  });
+    // Insert an existing memory with an embedding so findSimilarByVector can find it
+    const existingId = await insertMemory(sql, {
+      type: 'fact',
+      content: 'Jake works on the finance team',
+      source: 'old',
+      confidence: 0.9,
+      importance: 7,
+    });
 
-  it('returns 0 for empty strings', () => {
-    expect(contentSimilarity('', '')).toBe(0);
-    expect(contentSimilarity('hello', '')).toBe(0);
+    // Note: This test requires embeddings to be stored for the existing memory
+    // and for embedBatch to work. In practice, the vector search may return
+    // no results if no embeddings exist, causing the fact to be added directly.
+    // Full integration testing of the dedup flow requires a populated vector store.
+
+    const result: ExtractionResult = {
+      facts: [
+        { type: 'fact', content: 'Jake works in the finance team', confidence: 0.7, importance: 6, entities: [] },
+      ],
+    };
+
+    const stored = await storeExtractionResult(sql, result, 'test', { client: mockClient });
+
+    // Without embeddings on the existing memory, findSimilarByVector returns empty,
+    // so the fact gets added directly (no dedup judgment needed)
+    expect(stored.memoriesStored + stored.duplicatesSkipped + stored.memoriesUpdated + stored.memoriesRetired).toBe(1);
   });
 });

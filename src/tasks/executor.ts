@@ -208,7 +208,7 @@ async function executeSweepTask(
             try {
               const extracted = await extractFacts(deps.anthropicClient, config.models.executor, chunk, fileSource, deps.sql);
               if (extracted.facts.length > 0) {
-                const stored = await storeExtractionResult(deps.sql, extracted, fileSource);
+                const stored = await storeExtractionResult(deps.sql, extracted, fileSource, { client: deps.anthropicClient });
                 factsStored += stored.memoriesStored;
                 logger.info({ chunk: i + 1, totalChunks: chunks.length, facts: extracted.facts.length, stored: stored.memoriesStored }, 'Sweep: chunk extracted');
               }

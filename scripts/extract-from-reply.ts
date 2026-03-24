@@ -79,7 +79,7 @@ try {
   );
 
   if (result.facts.length > 0) {
-    const stored = await storeExtractionResult(sql, result, source);
+    const stored = await storeExtractionResult(sql, result, source, { client });
     console.error(`[extract-hook] Extracted ${result.facts.length} facts, stored ${stored.memoriesStored}, skipped ${stored.duplicatesSkipped} duplicates`);
   }
 } catch (err) {

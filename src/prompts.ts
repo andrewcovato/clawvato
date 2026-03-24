@@ -49,7 +49,7 @@ function getPromptsDir(): string {
 // ── Template resolution ──
 
 /** Placeholders that are resolved at call time, not at load time */
-const RUNTIME_VARIABLES = new Set(['SOURCE_TYPE', 'CATEGORIES', 'WORKSPACE_DIR']);
+const RUNTIME_VARIABLES = new Set(['SOURCE_TYPE', 'CATEGORIES', 'WORKSPACE_DIR', 'FACT_TYPE', 'NEW_FACT', 'EXISTING_MEMORIES']);
 
 /**
  * Replace all {{VARIABLE}} placeholders with their values.
@@ -97,6 +97,7 @@ interface LoadedPrompts {
   contextPlanner: string;
   ccNativeSystem: string;
   memoryInstructions: string;
+  memoryDedup: string;
 }
 
 let cachedPrompts: LoadedPrompts | null = null;
@@ -128,6 +129,7 @@ export function loadPrompts(): LoadedPrompts {
     contextPlanner: 'context-planner.md',
     ccNativeSystem: 'cc-native-system.md',
     memoryInstructions: 'memory-instructions.md',
+    memoryDedup: 'memory-dedup.md',
   };
 
   const loaded: Partial<LoadedPrompts> = {};
