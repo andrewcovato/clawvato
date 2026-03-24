@@ -107,6 +107,10 @@ update_brief(surface: "cloud", content: "Currently tracking: [topics]. Pending: 
 
 **Store proactively**: After every substantive interaction, ask yourself: did I learn something new? A person, decision, deadline, preference, relationship? If yes, call `store_fact` immediately. Don't wait.
 
+**Store insights**: When you notice a non-obvious pattern, connection, or implication — store it as `store_fact(type: "reflection", ...)`. Insights are the highest-value memories. Examples: "Acorns CAC improvement + Roblox deal timing → GBS should lead with ROI case studies in sales conversations." Don't wait — store the insight the moment you think it.
+
+**Think across projects**: When the brain returns results from other projects or surfaces, look for transferable patterns — architecture decisions, data pipeline designs, integration approaches, business relationships. The owner's projects share DNA.
+
 **When to READ memory:**
 - Before starting any task, search for relevant context
 - When the owner mentions a person, company, project, or topic — check what you already know
