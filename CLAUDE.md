@@ -225,6 +225,13 @@ Only the owner (identified by `OWNER_SLACK_USER_ID`) can issue instructions. Eve
 ### Training Wheels (Trust Levels 0-3) — CURRENTLY DISABLED
 Training wheels were removed in Session 16 because they were blocking internal tools. Pre-tool security checks and output sanitization remain active. The graduation system is implemented but not enforced.
 
+## Insights → Memory
+- **Every insight, reflection, or non-obvious observation MUST be written to the insights scratch pad.** The journal hook will pick it up on the next flush and send it to the plugin for extraction/embedding/dedup — no explicit `store_fact` call needed.
+- **How**: After writing an insight to the user, immediately run: `echo "YOUR INSIGHT TEXT" >> /tmp/clawvato-insights.md`
+- This applies to `★ Insight` blocks, cross-project patterns, architectural observations, and any "aha moment."
+- The journal hook only captures tool calls, NOT conversational text. The scratch pad is how insights survive.
+- **Do NOT use `store_fact` for routine insights** — the scratch pad + journal pipeline handles it silently in the background. Reserve `store_fact` for high-importance facts that need guaranteed immediate storage (e.g., key decisions, commitments).
+
 ## Engineering Philosophy
 - **Always take the pain now — build for durability.** No short-term hacks or workarounds. If something needs doing, do it right the first time.
 - Don't create band-aids that will need to be replaced later. If a feature is missing, build it properly in the right layer.

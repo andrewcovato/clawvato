@@ -8,6 +8,7 @@
 # Runs async (doesn't block CC). Lightweight — just appends text + occasional HTTP call.
 
 JOURNAL_FILE="/tmp/clawvato-journal.md"
+INSIGHTS_FILE="/tmp/clawvato-insights.md"
 COUNTER_FILE="/tmp/clawvato-journal-counter"
 JOURNAL_INTERVAL="${CLAWVATO_JOURNAL_INTERVAL:-20}"
 
@@ -86,7 +87,14 @@ if [ "$COUNT" -lt "$JOURNAL_INTERVAL" ]; then
   exit 0
 fi
 
-# Time to flush — send journal to plugin for extraction
+# Time to flush — merge insights scratch pad into journal, then send
+if [ -s "$INSIGHTS_FILE" ]; then
+  echo "---" >> "$JOURNAL_FILE"
+  echo "[$(date -u +%H:%M)] INSIGHTS:" >> "$JOURNAL_FILE"
+  cat "$INSIGHTS_FILE" >> "$JOURNAL_FILE"
+  > "$INSIGHTS_FILE"
+fi
+
 JOURNAL_CONTENT=$(cat "$JOURNAL_FILE" 2>/dev/null)
 JOURNAL_SIZE=${#JOURNAL_CONTENT}
 
