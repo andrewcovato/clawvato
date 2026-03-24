@@ -40,9 +40,6 @@ RUN useradd -m -s /bin/bash clawvato && \
 COPY --chown=clawvato:clawvato scripts/ /app/scripts/
 RUN chmod +x /app/scripts/*.sh
 
-# Copy cc-native MCP config
-COPY --chown=clawvato:clawvato .cc-native-mcp.json /app/.cc-native-mcp.json
-
 # NOTE: Don't set USER here — entrypoint needs root to fix /data permissions
 # on Railway's volume mount, then drops to clawvato user for CC
 

@@ -1,177 +1,135 @@
 # Session Handoff
 
-> Last updated: 2026-03-23 | Session 21 | Sprint S9
+> Last updated: 2026-03-23 | Session 23 | Sprint S9→S10
 
 ## Quick Resume
 
 ```
-Sprint: S9 — CC-Native Engine + Shared Memory Brain
-Status: HTTP MEMORY PLUGIN DEPLOYED — all instances wired
+Sprint: S10 — Memory Durability (Phase 2: Build the Brain)
+Status: PHASE 2 SCOPED — design doc written, roadmap restructured
 Branch: cc-native-engine (GitHub auto-deploy to Railway)
-Engine: ENGINE=cc-native env var activates CC-native mode
+Engine: ENGINE=cc-native
 Database: Railway managed Postgres — 125+ memories, 693 entity tags
 Task Channel: #clawvato-tasks (C0AN5J0LCP3)
 Build: Clean (tsc --noEmit passes)
-Deploy: Live on Railway via GitHub auto-deploy (both clawvato + clawvato-memory services)
-Memory Plugin: github.com/andrewcovato/clawvato-memory — deployed as HTTP MCP server on Railway
-  Public URL: https://clawvato-memory-production.up.railway.app/mcp
-  Internal URL: http://clawvato-memory.railway.internal:8080/mcp
-  Auth: Bearer token (MCP_AUTH_TOKEN env var on both services)
-Local CC: wired to public URL via .mcp.json (type: "http")
-Railway CC: wired to internal URL via runtime-generated MCP config
-NEXT: Remove in-tree MCP server, memory scoping, stabilize
+Deploy: Live on Railway via GitHub auto-deploy
+Memory Plugin: clawvato-memory-production.up.railway.app/mcp (auth: Bearer token)
+Design Doc: docs/DESIGN_PHASE2_PROACTIVE_INTELLIGENCE.md
+NEXT: Start S10 — memory scoping, LLM reranking, merge to main
 ```
 
-## What Happened This Session (Session 21)
+## What Happened This Session (Session 23)
 
-### Native Plugin Audit — What to Keep vs Replace
+### Dead Code Cleanup
+Removed the in-tree MCP memory server (replaced by HTTP plugin in Session 21):
+- Deleted: `src/mcp/memory/server.ts`, `src/mcp/memory/stdio.ts`, `.cc-native-mcp.json`
+- Updated: `deep-path.ts` (HTTP plugin instead of stdio), `Dockerfile` (removed dead COPY), `policy-engine.ts` (added `clawvato-memory` tool pattern), `CLAUDE.md` (removed in-tree references)
+- Build clean, zero dangling references.
 
-Full comparison of Anthropic's native MCP plugins (Gmail, Calendar, Slack, Fireflies, Figma) vs Clawvato's custom integrations:
+### Phase 2 Strategic Scoping
+Major architectural discussion. Key decisions:
 
-| Integration | Decision | Rationale |
-|---|---|---|
-| Calendar | Keep custom `gws` CLI | Feature parity, less overhead than MCP |
-| Gmail | Keep custom `gws` CLI | Native can't send email — only creates drafts |
-| Drive | Keep custom | No native Drive plugin exists |
-| Slack | Keep custom Channel MCP | Native can't do reactions — breaks the entire UX |
-| Fireflies | **Split**: native for interactive, custom for sweeps | Native has better search grammar; custom needed for sweep ingestion pipeline |
-| Memory/Tasks/Sweeps | Keep custom | No native equivalent — this IS the product |
+1. **Double down on CC-native** — don't abstract for model-agnosticism. The plugin is already model-agnostic (HTTP MCP). The agent layer should stay CC-native because that's where all the leverage is.
 
-Key insight: Native plugins are designed for interactive, stateless, session-scoped use. Clawvato is an autonomous operating system with persistent memory, background ingestion, and cross-instance coordination. They solve different problems.
+2. **Plugin as kernel** — the memory plugin evolves from just a memory store to the kernel of the business OS: facts, tasks, scheduler tools, ingest endpoints, working context.
 
-### Fireflies + Slack Prompt Updates
+3. **Own the scheduler** — CC's built-in scheduling (/loop, CronCreate) is session-scoped and dies on restart. Cloud tasks have 1h minimum. The always-on sidecar is the right tool. Rebuild it properly against the HTTP plugin (no direct DB access).
 
-Updated all 3 prompts (cc-native-system.md, system.md, deep-path.md):
-- Fireflies: switched from bash CLI (`npx tsx tools/fireflies.ts`) to native `fireflies_*` MCP tools for interactive queries. Custom FirefliesClient retained only for sweep collector.
-- Slack: added native `slack_search_public_and_private` and `slack_search_users` to cc-native prompt for cross-channel search alongside custom Channel MCP.
+4. **Sidecar pattern** — sidecar polls plugin for due tasks, posts to Slack when things are due. CC picks up from Slack naturally and executes. Sidecar also receives webhooks (Gmail, Calendar) and forwards to plugin for extraction.
 
-### HTTP Memory Plugin — Full Implementation (Option 3)
+5. **Tasks are data, not code** — new task types, cadences, and workflows shouldn't require a deploy. Owner creates them via natural language in Slack.
 
-Built, deployed, and wired the HTTP transport for `clawvato-memory`:
+### Files Modified
+- `src/mcp/memory/server.ts` — DELETED
+- `src/mcp/memory/stdio.ts` — DELETED
+- `.cc-native-mcp.json` — DELETED
+- `src/agent/deep-path.ts` — HTTP plugin instead of stdio, tool names updated
+- `Dockerfile` — removed dead COPY
+- `src/training-wheels/policy-engine.ts` — added clawvato-memory pattern
+- `CLAUDE.md` — removed in-tree refs, added Phase 2 architecture, updated build tracks
+- `.project/state.json` — restructured with phases, new sprint plan S10-S13
+- `docs/DESIGN_PHASE2_PROACTIVE_INTELLIGENCE.md` — NEW, full Phase 2 design doc
 
-1. **Dual transport in plugin** (`server/index.ts`):
-   - `MCP_TRANSPORT=http` → HTTP server with StreamableHTTPServerTransport
-   - Default (no env var) → stdio transport (unchanged, for local dev)
-   - Stateless mode: new Server+Transport per request (MCP SDK requires 1:1 binding for concurrent clients)
-   - Bearer token auth middleware on all MCP endpoints
-   - Health endpoint: `GET /health` with Postgres connectivity check
-   - CORS support for cross-origin clients
-   - Connection pool: 10 for HTTP (vs 3 for stdio)
+## Sprint Plan
 
-2. **Railway service created**:
-   - Service: `clawvato-memory` in the `clawvato` project
-   - Public URL: `https://clawvato-memory-production.up.railway.app`
-   - Internal URL: `clawvato-memory.railway.internal:8080`
-   - Env vars: `MCP_TRANSPORT=http`, `DATABASE_URL=${{Postgres.DATABASE_URL}}`, `MCP_AUTH_TOKEN`
-   - Health check configured at `/health`
-   - GitHub repo connected for auto-deploy
+### S10: Memory Durability (CURRENT — Phase 2)
+- Memory scoping — per-project/surface domain filters (BLOCKING)
+- LLM reranking — Haiku reranker in plugin
+- Merge cc-native-engine → main
 
-3. **Local CC wired** (`.mcp.json`):
-   - Changed from stdio (local process + direct Postgres URL) to HTTP (Railway public URL + bearer token)
-   - Format: `"type": "http"` (not `"url"` — CC schema validation requires `"http"`)
-   - Verified working: search_memory returns live data from Railway Postgres
+### S11: Scheduler Rebuild (Phase 3)
+- S11a: Plugin scheduler tools (get_due_tasks, mark_running/completed/failed)
+- S11b: Sidecar rebuild against HTTP plugin, no direct DB
+- S11c: End-to-end validation with ad-hoc task
 
-4. **Railway CC wired** (`cc-native-entrypoint.sh`):
-   - Entrypoint now generates MCP config at runtime (heredoc → `/tmp/cc-native-mcp.json`)
-   - Injects `MCP_AUTH_TOKEN` from env var via `$env(MCP_CONFIG)` in expect script
-   - Uses internal Railway URL for zero-latency service-to-service communication
-   - `MCP_AUTH_TOKEN` set on both Railway services (memory + agent)
+### S12: Real-Time Ingest (Phase 3)
+- Gmail webhook (Google Pub/Sub → sidecar → plugin)
+- Calendar push notifications
+- Sweep consolidation (sweeps become a recurring task)
 
-### Eyes Bug Fixed
+### S13: Autonomous Workflows (Phase 4)
+- Ad-hoc workflows as tasks (CRM, project tracking, briefings)
+- System surfaces things owner didn't ask about
 
-The 👀 reaction was added on message receipt but never removed. Now removed immediately after the channel event is pushed to CC:
-- 👀 added → message received (code-enforced, instant feedback)
-- 👀 removed → channel event pushed to CC (code-enforced)
-- 🧠 added → CC starts processing (prompt-driven)
-- 🧠 removed → CC posts response (prompt-driven)
-
-### Search Limit Cap Removed
-
-Owner directive: no artificial caps on query results. `search_memory` default is 20, but no hard maximum. If a query needs 2000 results, return 2000 results. Postgres and CC can handle it.
-
-## Bugs Found and Fixed
-
-1. **MCP config type**: `"type": "url"` fails CC schema validation → must be `"type": "http"`
-2. **Expect/Tcl variable**: `$MCP_CONFIG` in single-quoted expect heredoc was read as Tcl variable → fix: `export MCP_CONFIG` + `$env(MCP_CONFIG)`
-3. **Eyes reaction stuck**: 👀 added but never removed → added removal after channel event push
-4. **Search limit too tight**: Hard cap at 50 results → removed cap entirely
-
-## Files Modified This Session
-
-### clawvato repo:
-- `config/prompts/cc-native-system.md` — Fireflies native MCP tools + Slack native search
-- `config/prompts/system.md` — Fireflies native MCP tools (hybrid fallback)
-- `config/prompts/deep-path.md` — Fireflies native MCP tools (deep path)
-- `scripts/cc-native-entrypoint.sh` — Runtime MCP config generation, internal URL, expect fix
-- `src/cc-native/slack-channel.ts` — Eyes reaction removal after CC pickup
-
-### clawvato-memory repo:
-- `server/index.ts` — HTTP transport, dual transport, stateless Server per request, auth middleware, health endpoint, search limit uncapped
-- `package.json` — v0.2.0, `start:http` script, dev deps (typescript, @types/node)
-
-## Architecture After This Session
+## Architecture
 
 ```
-Railway Project: clawvato
-├── clawvato (agent) — CC-native engine
-│     ├── Slack Channel MCP (stdio, in-process)
-│     ├── clawvato-memory MCP (HTTP, internal network)
-│     ├── Google/Fireflies via Bash (gws CLI)
-│     └── Native MCP tools (Fireflies, Slack search)
-│
-├── clawvato-memory (HTTP MCP server) — NEW THIS SESSION
-│     ├── 6 tools: search, store, retrieve, working ctx, list ctx, retire
-│     ├── StreamableHTTPServerTransport (stateless)
-│     ├── Bearer token auth
-│     ├── Health check at /health
-│     └── Connects to Postgres via internal network
-│
-├── Postgres (managed DB)
-│     └── memories, agent_state, memory_entities, etc.
-│
-Local CC / Cowork / Teammates
-  └── clawvato-memory MCP (HTTP, public URL + bearer token)
+Plugin service (always-on, Railway):
+  Memory store      → facts, entities, search, retrieval
+  Task store        → definitions, due dates, recurrence, status
+  Scheduler tools   → get_due_tasks, mark_running/completed/failed
+  Ingest endpoints  → Gmail/Calendar webhooks → extraction → storage
+  Working context   → handoffs, briefs, scratchpad
+
+Scheduler sidecar (always-on, lightweight):
+  Polls plugin for due tasks → posts to Slack
+  Receives webhooks (Gmail, Calendar) → forwards to plugin
+  No reasoning, no DB access, no LLM calls
+
+CC session (on-demand, wakes from Slack):
+  Executes tasks → reasoning, tool use, multi-step workflows
+  Responds to user → Slack conversations
+  Writes to plugin → store facts, update tasks, update context
 ```
 
-Push to `clawvato-memory` repo → Railway auto-deploys → all CC instances get updates.
+## Recent Interactions (verbatim)
 
-## Immediate Next Steps
+**User**: yo...guess it didn't work again
 
-1. **Remove in-tree MCP server** — `src/mcp/memory/server.ts` + `src/mcp/memory/stdio.ts` are dead code now. Also remove the static `.cc-native-mcp.json` file (replaced by runtime generation).
-2. **Memory scoping** — per-session project/domain partitioning. BLOCKING further memory scaling. Owner directive: no dev memories in the shared brain.
-3. **Stabilize cc-native** — monitor Railway deploy for 24h with the new HTTP memory wiring.
-4. **LLM reranking in plugin** — port from in-tree retriever. Essential at 1K+ memories.
+**Assistant**: It actually did work this time! I have full context from Session 22. [proved it by citing specific details]
 
-## Backlog
+**User**: niiiiiiiiice!
 
-### High Priority
-1. Remove in-tree MCP server (dead code)
-2. Memory scoping config (per-session project/domain filters)
-3. LLM reranking in plugin retrieve_context
-4. Track G Phase 1: read-only GitHub access
-5. Sweep integration with cc-native
+**User**: dead code cleanup and then let's do a full backlog assessment and a gut check on the next phases of this project.
 
-### Medium Priority
-6. Tiered token budgets for retrieval
-7. Hierarchical memory summarization (critical at 50K+)
-8. Better embeddings (evaluate at 10K+)
-9. Session topology design (topic bleed at high Slack volume)
-10. SKILL.md as MCP resource
-11. SessionEnd hook for memory extraction safety net
-12. Artifact short-term memory (FIFO cache)
+**Assistant**: [completed dead code cleanup, then full backlog assessment]
 
-### Strategic
-13. Merge cc-native to main (after stability proven)
-14. Track G Phase 3: self-deploy with health check + auto-rollback
-15. Finance integration
-16. Obsidian .md export
+**User**: you're bang on on all of this. The memory system needs to be incredible. I would argue that what we're building now has evolved to a robust memory system for claude code. Where I see this is two directions: 1) double down on that, or 2) make it flexible enough to be model agnostic.
 
-## Hard-Won Gotchas (new this session)
+**Assistant**: Go with #1 — double down on CC. Plugin is already model-agnostic (HTTP MCP). Agent layer should stay CC-native.
 
-- MCP config schema: CC requires `"type": "http"`, NOT `"type": "url"` — the latter fails schema validation silently
-- Expect heredocs (`<< 'EOF'`) prevent bash variable interpolation — use `export` + `$env(VAR)` for Tcl access
-- MCP SDK's `Server.connect()` is 1:1 with transport — for HTTP with concurrent requests, create new Server+Transport per request
-- `railway add --service` + `source.repo` via CLI doesn't trigger GitHub webhook auto-deploy — must connect repo through Railway dashboard
-- Railway injects `PORT` automatically (default 8080) — don't hardcode port
-- Native Claude MCP plugins (Gmail, Fireflies, etc.) are stateless + session-scoped — they can't replace systems that need persistent memory or background processing
-- Don't impose artificial caps on query results — use sensible defaults but no hard maximums
+**User**: this all resonates except that my worry isn't CC CLI breaks, it's that we've built kind of a hacky way to interact with it as the core engine.
+
+**Assistant**: The hack is contained — PTY/expect/supervisor are isolated in a few files. Everything else is clean. When Anthropic ships a proper API, the swap is surgical.
+
+**User**: CC now has loops and scheduled tasks. Is it worth using them for the always-on componentry?
+
+**Assistant**: [researched CC scheduling] Session-scoped (/loop) dies on restart. Cloud tasks have 1h minimum. Own the scheduler.
+
+**User**: This feels weird. Feels like there will be some weird offsets because the session will die at random times.
+
+**Assistant**: You're right. Plugin service is already always-on — put the scheduler there. [proposed plugin-posts-to-Slack model]
+
+**User**: weird UX. and we have to wire the plugin to now message slack?
+
+**Assistant**: You're right on both. [reconsidered: keep sidecar, don't cross plugin/Slack boundary]
+
+**User**: the session will die. We have the auto-clearing process. TL/DR: i think we need to keep our own async scheduler.
+
+**Assistant**: You're right. The sidecar is actually the right tool. Rebuilt scope around proper sidecar.
+
+**User**: yes feels good--but i want to be clear: the tasks outlined (daily briefing etc) are EXAMPLES. we need to be able to build those ad hoc.
+
+**Assistant**: Exactly — the scheduler is infrastructure, not features. Task types are data, not code.
+
+**User**: Yes--pls write it up.

@@ -2,28 +2,34 @@
   "project": {
     "name": "Clawvato",
     "description": "Business operating system for solo technical founders — memory-powered AI agent across Slack, email, calendar, Drive, meetings, and Claude Code",
-    "version": "0.11.0",
+    "version": "0.12.0",
     "status": "active",
-    "phase": "cc-native-engine",
+    "phase": "proactive-intelligence",
     "startDate": "2026-03-06",
     "adoptedDate": "2026-03-07"
+  },
+  "phases": {
+    "1": { "name": "Build the Agent", "status": "complete", "description": "Reactive agent that responds when asked. Slack, memory, Google, Fireflies, sweeps, tasks." },
+    "2": { "name": "Build the Brain", "status": "in_progress", "description": "Memory durability — scoping, reranking, retrieval quality. Foundation for everything." },
+    "3": { "name": "Build the Nervous System", "status": "planned", "description": "Scheduler rebuild, webhook ingest, real-time memory. The agent acts on its own." },
+    "4": { "name": "Build the Judgment", "status": "planned", "description": "Autonomous workflows — CRM, project tracking, proactive surfacing. Good autonomous decisions." }
   },
   "tracks": {
     "A": { "name": "Core Foundation", "status": "complete", "completedDate": "2026-03-06" },
     "B": { "name": "Slack MCP + Agent Core", "status": "complete", "completedDate": "2026-03-17" },
     "C": { "name": "Google Workspace", "status": "complete", "completedDate": "2026-03-19" },
     "D": { "name": "Memory + Embeddings", "status": "complete", "completedDate": "2026-03-19" },
-    "E": { "name": "Proactive Intelligence", "status": "in_progress", "notes": "Sweep pipeline working end-to-end (130 facts stored). Sonnet extraction fixed. Context planner superseded by CC-native." },
+    "E": { "name": "Proactive Intelligence", "status": "in_progress", "notes": "Sweep pipeline working. Now evolving into Phase 2 (scheduler + ingest + autonomous workflows)." },
     "F": { "name": "Security Hardening", "status": "partial", "notes": "Training wheels removed. Pre-tool security checks + output sanitization remain." },
-    "G": { "name": "GitHub + Self-Development", "status": "designed", "notes": "Redesigned as self-development system. Three-gate safety model. Design at docs/DESIGN_TRACK_G_SELF_DEV.md." },
-    "H": { "name": "Plugin Adapter + CC Bridge", "status": "complete", "completedDate": "2026-03-23", "notes": "HTTP memory plugin deployed on Railway. All CC instances wired (local via public URL, Railway via internal URL). In-tree MCP server is now dead code — removal pending." },
+    "G": { "name": "GitHub + Self-Development", "status": "deferred", "notes": "Designed (three-gate safety model). Deferred until Phase 3/4 stable. Design at docs/DESIGN_TRACK_G_SELF_DEV.md." },
+    "H": { "name": "Plugin Adapter + CC Bridge", "status": "complete", "completedDate": "2026-03-23", "notes": "HTTP memory plugin deployed on Railway. In-tree MCP server removed (Session 23)." },
     "I": { "name": "Fireflies.ai", "status": "complete", "completedDate": "2026-03-18" },
-    "J": { "name": "Hybrid Architecture", "status": "superseded", "notes": "Replaced by CC-Native Engine (Track O). Hybrid code preserved on main branch as fallback." },
+    "J": { "name": "Hybrid Architecture", "status": "superseded", "notes": "Replaced by CC-Native Engine. Hybrid code preserved on main branch as fallback." },
     "K": { "name": "Postgres Migration", "status": "complete", "completedDate": "2026-03-19" },
-    "L": { "name": "Autonomous Task Queue", "status": "complete", "completedDate": "2026-03-20" },
-    "M": { "name": "Background Sweeps", "status": "complete", "completedDate": "2026-03-23", "notes": "Pipeline working end-to-end. 130 facts + 693 entities stored from first backfill." },
-    "N": { "name": "Context Planner", "status": "superseded", "notes": "Superseded by CC-Native Engine — CC plans its own context natively." },
-    "O": { "name": "CC-Native Engine", "status": "deployed", "notes": "Claude Code as core engine via Channels. Deployed on Railway. Now uses HTTP memory plugin (separate Railway service) instead of in-tree MCP server. Fireflies switched to native MCP tools for interactive use." }
+    "L": { "name": "Autonomous Task Queue", "status": "complete", "completedDate": "2026-03-20", "notes": "Task CRUD + channel manager complete. Standalone scheduler broken — rebuild in S11." },
+    "M": { "name": "Background Sweeps", "status": "complete", "completedDate": "2026-03-23", "notes": "Pipeline working. Will become a recurring task in S12 (sweep consolidation)." },
+    "N": { "name": "Context Planner", "status": "superseded", "notes": "Superseded by CC-Native Engine." },
+    "O": { "name": "CC-Native Engine", "status": "deployed", "notes": "Claude Code as core engine via Channels. Strategic decision (Session 23): double down on CC-native, don't abstract for model-agnosticism." }
   },
   "infrastructure": {
     "local": "macOS, .mcp.json points to Railway HTTP memory plugin",
@@ -44,66 +50,78 @@
     "testsPassing": "requires DATABASE_URL",
     "memoriesStored": "125+",
     "entityTags": 693,
-    "pluginTestsPassing": "10/10 CRUD cycle + HTTP transport verified (health, initialize, tools/list, search_memory)"
+    "pluginTestsPassing": "10/10 CRUD cycle + HTTP transport verified"
   },
   "currentSprint": {
-    "id": "S9",
-    "name": "CC-Native Engine + Shared Memory Brain",
+    "id": "S10",
+    "name": "Memory Durability",
     "goals": [
-      "CC-Native Engine via Channels ✅ (deployed on Railway, working)",
-      "Slack Channel MCP server ✅",
-      "Supervisor entrypoint with expect ✅",
-      "Non-root Docker user ✅",
-      "Eyes (👀) reaction lifecycle ✅ (add on receipt, remove on CC pickup)",
-      "Progress feedback in system prompt ✅",
-      "Startup crawl via channel event ✅",
-      "Task scheduler standalone sidecar ✅",
-      "Idle timeout with verified handoff protocol ✅",
-      "clawvato-memory plugin repo ✅ (validated, 7 bugs fixed)",
-      "HTTP transport for memory plugin ✅ (deployed on Railway, all instances wired)",
-      "Local CC wired to HTTP memory ✅",
-      "Railway CC wired to HTTP memory (internal URL) ✅",
-      "Native Fireflies MCP for interactive queries ✅",
-      "Native Slack search in prompts ✅",
-      "Track G redesigned as self-development ✅",
-      "Remote memory plugin design spec ✅",
-      "Remove in-tree MCP server ⬜ (dead code)",
-      "Stabilize cc-native over 24h ⬜"
+      "Memory scoping — per-project/surface domain filters ⬜ (BLOCKING)",
+      "LLM reranking — Haiku reranker in plugin retrieve_context ⬜",
+      "Merge cc-native-engine → main ⬜"
     ],
-    "progress": "~95% complete. HTTP memory plugin deployed and wired. In-tree cleanup and stability monitoring remaining."
+    "progress": "0% — sprint defined, ready to start"
+  },
+  "upcomingSprints": {
+    "S11": {
+      "name": "Scheduler Rebuild",
+      "goals": [
+        "S11a: Plugin scheduler tools (get_due_tasks, mark_running/completed/failed)",
+        "S11b: Sidecar rebuild — HTTP plugin + Slack, no direct DB",
+        "S11c: Validation — ad-hoc task creation + execution end-to-end"
+      ],
+      "dependsOn": "S10 (partially — S11a can start in parallel)"
+    },
+    "S12": {
+      "name": "Real-Time Ingest",
+      "goals": [
+        "S12a: Gmail webhook (Google Pub/Sub → sidecar → plugin)",
+        "S12b: Calendar push notifications",
+        "S12c: Sweep consolidation — sweeps become a recurring task"
+      ],
+      "dependsOn": "S11"
+    },
+    "S13": {
+      "name": "Autonomous Workflows",
+      "goals": [
+        "First autonomous workflows created as ad-hoc tasks",
+        "Validation: system surfaces things owner didn't ask about"
+      ],
+      "dependsOn": "S12"
+    }
   },
   "lastSession": {
-    "number": 21,
+    "number": 23,
     "date": "2026-03-23",
-    "type": "Native plugin audit + HTTP memory deployment + integration wiring + bug fixes",
+    "type": "Dead code cleanup + Phase 2 strategic scoping",
     "keyDecisions": [
-      "Keep custom Gmail (native can't send), Calendar (less overhead), Slack (native can't react), Drive (no native exists)",
-      "Split Fireflies: native MCP for interactive queries, custom client for sweep ingestion",
-      "HTTP memory plugin deployed as separate Railway service — single source of truth for memory tools",
-      "MCP config type must be 'http' not 'url' — CC schema validation",
-      "No artificial caps on search results — sensible defaults but no hard maximums",
-      "Eyes reaction lifecycle: add on receipt, remove on CC pickup (code-enforced both ways)"
+      "Double down on CC-native — don't abstract for model-agnosticism",
+      "Plugin is the kernel (state, facts, tasks), CC is the executor (reasoning, tools)",
+      "Own the scheduler — CC's built-in scheduling is session-scoped, doesn't survive restarts",
+      "Sidecar polls plugin for due tasks, posts to Slack, CC picks up and executes",
+      "Webhook ingest via sidecar (Gmail, Calendar) → plugin for extraction + storage",
+      "Tasks/workflows are data, not code — new capabilities shouldn't require a deploy",
+      "In-tree MCP server removed (dead code cleanup complete)"
     ]
   },
   "immediateBacklog": [
-    { "id": "REMOVE-INTREE-MCP", "title": "Remove in-tree MCP server — dead code now that all instances use HTTP plugin. Delete src/mcp/memory/server.ts, src/mcp/memory/stdio.ts, .cc-native-mcp.json." },
-    { "id": "MEMORY-SCOPING-IMPL", "title": "Implement per-session memory scoping — BLOCKING further memory usage scaling. Owner directive: no dev memories until this is built." },
-    { "id": "CC-NATIVE-STABILIZE", "title": "Monitor cc-native engine for 24h with HTTP memory wiring. Verify session restart + handoff works with remote MCP." },
-    { "id": "MEMORY-RERANK", "title": "Add LLM reranking to plugin retrieve_context — tsvector-only retrieval will degrade at 1K+ memories." }
+    { "id": "MEMORY-SCOPING-IMPL", "title": "Implement per-session memory scoping — BLOCKING further memory usage scaling." },
+    { "id": "MEMORY-RERANK", "title": "Add LLM reranking to plugin retrieve_context." },
+    { "id": "MERGE-TO-MAIN", "title": "Merge cc-native-engine → main. Preserve hybrid as git tag." },
+    { "id": "SCHEDULER-PLUGIN-TOOLS", "title": "Add scheduler tools to plugin (get_due_tasks, mark_running/completed/failed)." },
+    { "id": "SIDECAR-REBUILD", "title": "Rebuild task-scheduler-standalone.ts against HTTP plugin. No direct DB." }
   ],
   "backlog": [
-    { "id": "GITHUB-PHASE1", "priority": "high", "title": "Track G Phase 1: read-only GitHub access" },
-    { "id": "GITHUB-PHASE2", "priority": "high", "title": "Track G Phase 2: branch + PR creation (self-development, owner-gated)" },
-    { "id": "SWEEP-CCNATIVE", "priority": "high", "title": "Wire sweep system to cc-native" },
-    { "id": "MEMORY-TIERED-BUDGET", "priority": "medium", "title": "Tiered token budgets for retrieval — high-importance facts should get more budget" },
-    { "id": "MEMORY-SUMMARIZATION", "priority": "medium", "title": "Hierarchical memory summarization — critical at 50K+ memories" },
-    { "id": "MEMORY-BETTER-EMBEDDINGS", "priority": "medium", "title": "Upgrade embedding model from all-MiniLM-L6-v2 (384-dim) — evaluate when memory count exceeds 10K" },
-    { "id": "SESSION-TOPOLOGY", "priority": "medium", "title": "Session topology for cloud instance — design when Slack volume exceeds ~50 msgs/day across 5+ topics" },
-    { "id": "SKILL-MCP-RESOURCE", "priority": "medium", "title": "Serve SKILL.md as MCP resource from plugin server" },
-    { "id": "MEMORY-SESSIONEND", "priority": "medium", "title": "SessionEnd hook for memory extraction safety net" },
-    { "id": "ARTIFACT-CACHE", "priority": "medium", "title": "Artifact short-term memory (FIFO cache)" },
-    { "id": "GITHUB-PHASE3", "priority": "medium", "title": "Track G Phase 3: self-deploy with health check + auto-rollback" },
-    { "id": "FINANCE-001", "priority": "medium", "title": "Finance integration" },
+    { "id": "GMAIL-WEBHOOK", "priority": "high", "title": "Gmail webhook ingest (Google Pub/Sub → sidecar → plugin)" },
+    { "id": "CALENDAR-PUSH", "priority": "high", "title": "Calendar push notification ingest" },
+    { "id": "SWEEP-CONSOLIDATION", "priority": "high", "title": "Sweeps become a recurring task (no standalone pipeline)" },
+    { "id": "GITHUB-PHASE1", "priority": "medium", "title": "Track G Phase 1: read-only GitHub access" },
+    { "id": "GITHUB-PHASE2", "priority": "medium", "title": "Track G Phase 2: branch + PR creation (self-development, owner-gated)" },
+    { "id": "MEMORY-TIERED-BUDGET", "priority": "medium", "title": "Tiered token budgets for retrieval" },
+    { "id": "MEMORY-SUMMARIZATION", "priority": "medium", "title": "Hierarchical memory summarization (critical at 50K+)" },
+    { "id": "MEMORY-BETTER-EMBEDDINGS", "priority": "medium", "title": "Upgrade embedding model (evaluate at 10K+)" },
+    { "id": "SESSION-TOPOLOGY", "priority": "medium", "title": "Session topology (design at 50+ msgs/day, 5+ topics)" },
+    { "id": "FINANCE-001", "priority": "low", "title": "Finance integration" },
     { "id": "OBSIDIAN-001", "priority": "low", "title": "Obsidian integration — .md export" }
   ],
   "thingsNotToRedo": [
@@ -116,21 +134,28 @@
     "Plan before coding — don't jump straight to implementation",
     "Don't build bespoke tools/tables for specific entity types — unified memory handles it",
     "Store what+why, never how — implementation details don't belong in memory",
-    "MCP stdio servers MUST redirect ALL logging to stderr",
     "Plugin schema must exactly match Railway DB — test against real DB, not assumptions",
     "Always use soft-delete (valid_until = NOW()) for memories, never hard DELETE",
     "Hard DELETE can dangle superseded_by FK references",
     "CC instances won't know about MCP tools unless system prompt teaches them",
-    "Global ~/.claude/.mcp.json may not load for a specific project — use project-scoped config",
     "Don't store clawvato dev memories to the shared brain until project scoping is implemented",
     "Memory retrieval quality degrades at scale — scoping is the #1 lever, then reranking, then summarization",
     "Haiku max output 8192 tokens — use Sonnet for extraction",
     "Zod schema defaults override config/default.json — must update BOTH",
     "MCP config type must be 'http' not 'url' — CC schema validation rejects 'url'",
-    "Expect heredocs (<< 'EOF') prevent bash interpolation — use export + $env(VAR) for Tcl",
     "MCP SDK Server.connect() is 1:1 — for HTTP concurrency, create new Server+Transport per request",
     "Railway CLI source.repo doesn't trigger GitHub webhook — connect repo through dashboard",
-    "Don't impose artificial caps on query results — sensible defaults, no hard maximums"
+    "Don't impose artificial caps on query results — sensible defaults, no hard maximums",
+    "CC session-scoped scheduling (/loop, CronCreate) dies on restart — own the scheduler",
+    "Sidecar marks running, CC marks completed — never mark complete before execution",
+    "Tasks and workflows are data, not code — new capabilities shouldn't require a deploy"
+  ],
+  "designDocs": [
+    "docs/DESIGN_CC_NATIVE.md",
+    "docs/DESIGN_REMOTE_MEMORY_PLUGIN.md",
+    "docs/DESIGN_TRACK_G_SELF_DEV.md",
+    "docs/DESIGN_WORKING_CONTEXT_V2.md",
+    "docs/DESIGN_PHASE2_PROACTIVE_INTELLIGENCE.md"
   ],
   "lastUpdated": "2026-03-23"
 }

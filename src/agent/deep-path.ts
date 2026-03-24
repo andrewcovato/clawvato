@@ -51,21 +51,27 @@ export interface DeepPathResult {
 
 /**
  * Build the MCP config file for the SDK subprocess.
+ * Connects to the HTTP memory plugin on Railway (same service used by all CC instances).
  */
-function buildMcpConfig(dataDir: string): { configPath: string; cleanup: () => void } {
+function buildMcpConfig(): { configPath: string; cleanup: () => void } {
   const tmpDir = mkdtempSync(join(tmpdir(), 'clawvato-mcp-'));
   const configPath = join(tmpDir, 'mcp-config.json');
 
-  const config = {
+  const memoryUrl = process.env.CLAWVATO_MEMORY_URL ?? 'http://clawvato-memory.railway.internal:8080/mcp';
+  const authToken = process.env.MCP_AUTH_TOKEN;
+
+  const config: Record<string, unknown> = {
     mcpServers: {
-      memory: {
-        command: 'npx',
-        args: ['tsx', 'src/mcp/memory/stdio.ts', '--data-dir', dataDir],
+      'clawvato-memory': {
+        type: 'http',
+        url: memoryUrl,
+        ...(authToken ? { headers: { Authorization: `Bearer ${authToken}` } } : {}),
       },
     },
   };
 
   writeFileSync(configPath, JSON.stringify(config, null, 2));
+  logger.info({ memoryUrl, hasAuth: !!authToken }, 'Built MCP config for deep path');
 
   return {
     configPath,
@@ -174,7 +180,7 @@ export async function executeDeepPath(
   const startTime = Date.now();
   const config = getConfig();
 
-  const { configPath, cleanup } = buildMcpConfig(opts.dataDir);
+  const { configPath, cleanup } = buildMcpConfig();
 
   try {
     // Use file-based system prompt if provided (for large prompts that exceed CLI arg limits)
@@ -207,15 +213,15 @@ export async function executeDeepPath(
           // Analysis mode: read workspace + search memory only (no external research)
           'Bash(cat:*)', 'Bash(ls:*)',
           'Read', 'Glob', 'Grep',
-          'mcp__memory__search_memory', 'mcp__memory__retrieve_context',
+          'mcp__clawvato-memory__search_memory', 'mcp__clawvato-memory__retrieve_context',
         ]
         : [
           // Research mode: full tool access for data gathering
           'Bash(gws:*)', 'Bash(npx:*)', 'Bash(cat:*)', 'Bash(ls:*)', 'Bash(echo:*)', 'Bash(mkdir:*)',
           'Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch',
-          'mcp__memory__search_memory', 'mcp__memory__retrieve_context',
-          'mcp__memory__list_tasks', 'mcp__memory__create_task',
-          'mcp__memory__update_task', 'mcp__memory__delete_task',
+          'mcp__clawvato-memory__search_memory', 'mcp__clawvato-memory__retrieve_context',
+          'mcp__clawvato-memory__list_tasks', 'mcp__clawvato-memory__create_task',
+          'mcp__clawvato-memory__update_task', 'mcp__clawvato-memory__delete_task',
         ]),
     ];
 

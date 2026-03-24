@@ -74,9 +74,6 @@ src/
     index.ts       # DB init (async), connection pool, schema loading
     schema.pg.sql  # Postgres schema (tsvector, pgvector, GIN/HNSW indexes)
   mcp/             # MCP servers
-    memory/        # Memory MCP server for SDK deep path
-      server.ts    # Tools: search, retrieve, store, working ctx, tasks
-      stdio.ts     # stdio entrypoint (LOG_DESTINATION=stderr for clean protocol)
     slack/server.ts  # Slack tools (search, post, history)
   memory/          # Memory system (crown jewel)
     store.ts       # CRUD for memories table (unified — no people table)
@@ -269,8 +266,8 @@ The deep path spawns `claude --print --verbose --output-format stream-json` and 
 - `{"type":"result","result":"..."}` → final response
 - Tool names mapped to descriptions: "Searching Gmail...", "Reading meeting transcript..."
 
-### MCP Server stdio Protocol
-The Memory MCP server MUST NOT write to stdout (JSON-RPC channel). Set `LOG_DESTINATION=stderr` before any imports in `stdio.ts`. The logger checks this env var and redirects pino to fd 2.
+### Memory MCP Plugin
+Memory is served by the `clawvato-memory` HTTP MCP plugin deployed on Railway. All CC instances (local, cloud, deep-path subprocess) connect via URL + bearer token. Config is generated at runtime by the entrypoint script or via `.claude/settings.local.json`.
 
 ### Context Assembly (`context.ts`)
 Both paths share the same assembled context:
@@ -333,21 +330,36 @@ After each interaction:
 - Deep path response → Haiku extraction → store synthesized facts
 - SDK can also call `store_fact` via MCP during execution
 
+## Project Phases
+- **Phase 1** ✅: Build the Agent — reactive, responds when asked (Tracks A-D, I-O)
+- **Phase 2** 🔶: Build the Brain — memory durability (scoping, reranking, retrieval quality)
+- **Phase 3** ⬜: Build the Nervous System — scheduler rebuild, webhook ingest, real-time memory
+- **Phase 4** ⬜: Build the Judgment — autonomous workflows, proactive surfacing
+
+### Architecture: Plugin as Kernel
+```
+Plugin (always-on Railway service):  state, facts, tasks, scheduler tools, ingest endpoints
+Sidecar (always-on, lightweight):    polls plugin for due tasks, posts to Slack, receives webhooks
+CC session (on-demand, from Slack):  executes tasks, responds to user, writes to plugin
+```
+Plugin is the kernel. CC is the process. Slack is the IPC. Design: `docs/DESIGN_PHASE2_PROACTIVE_INTELLIGENCE.md`
+
 ## Build Tracks
 - **Track A** ✅: Foundation — DB, config, security, CLI, hooks, tests
 - **Track B** ✅: Slack MCP + Agent Core — Socket Mode, event-queue, handler
 - **Track C** ✅: Google Workspace — 20 tools, OAuth, Drive sync, email extraction
 - **Track D** ✅: Memory + Embeddings — extraction, storage, retrieval, vector search
+- **Track E** 🔶: Proactive Intelligence — sweeps working, evolving into Phase 3 (scheduler + ingest)
+- **Track F** 🔶: Security — pre-tool checks + output sanitization active, training wheels removed
+- **Track G** ⏸️: GitHub + Self-Development — designed, deferred until Phase 3/4 stable
+- **Track H** ✅: Plugin Adapter — HTTP memory plugin deployed, in-tree MCP server removed
 - **Track I** ✅: Fireflies.ai — GraphQL client, sync, CLI wrapper
-- **Track J** ✅: SDK Pivot — Hybrid architecture (fast + deep path, router, MCP server)
-- **Track K** ✅: Postgres Migration — SQLite → Postgres, tsvector, pgvector, async ops
-- **Track L** ✅: Autonomous Task Queue — scheduler, executor, dedicated task channel, three-tier routing
-- **Track M** 🔶: Background Sweeps — 4 collectors, Opus synthesis working, Haiku extraction blocker
-- **Track N** 🔶: Context Planner — built, needs populated memory to test
-- **Track E** ⬜: Workflow Engine + Scheduling
-- **Track F** 🔶: Security + Training Wheels (undo system remaining)
-- **Track G** ⬜: GitHub + Filesystem + Web Research
-- **Track H** 🔶: Plugin Adapter + CC Bridge (designed, not built)
+- **Track J** ⏸️: Hybrid Architecture — superseded by CC-native, preserved on main as fallback
+- **Track K** ✅: Postgres Migration — tsvector, pgvector, async ops
+- **Track L** ✅: Autonomous Task Queue — CRUD + channel manager complete, scheduler broken (rebuild in S11)
+- **Track M** ✅: Background Sweeps — 4 collectors, Opus synthesis, will become recurring task
+- **Track N** ⏸️: Context Planner — superseded by CC-native
+- **Track O** ✅: CC-Native Engine — deployed on Railway, strategic decision to double down
 
 ## Common Tasks
 
@@ -367,9 +379,8 @@ After each interaction:
 3. Add `Bash(your-cli:*)` to `--allowedTools` in `deep-path.ts`
 
 ### Adding a memory MCP tool
-1. Add tool definition to `TOOLS` array in `src/mcp/memory/server.ts`
-2. Add handler function
-3. Add to `--allowedTools` in `deep-path.ts` as `mcp__memory__tool_name`
+1. Add the tool to the `clawvato-memory` plugin (separate repo/service on Railway)
+2. Add to `--allowedTools` in `deep-path.ts` as `mcp__clawvato-memory__tool_name`
 
 ## Slack Interaction Principles
 
@@ -389,7 +400,7 @@ Cancel                       → remove 🧠, ✅ on cancel message
 Stream-json events parsed in real-time → progress updates posted to Slack:
 - `Bash(gws gmail...)` → "Searching Gmail..."
 - `Bash(npx tsx tools/fireflies.ts...)` → "Searching meeting transcripts..."
-- `mcp__memory__store_fact` → "Saving to memory..."
+- `mcp__clawvato-memory__store_fact` → "Saving to memory..."
 
 ### Interrupt During Deep Path
 Owner can cancel by sending "stop", "cancel", "abort", "nvm", etc. Polled every 2s. Kills SDK subprocess immediately.
@@ -433,7 +444,6 @@ railway variables set GWS_CONFIG_B64="$(cd ~/.config/gws && tar czf - --exclude=
 ```
 
 ## Gotchas
-- **MCP stdio server**: ALL logging must go to stderr, not stdout (corrupts JSON-RPC protocol)
 - **Docker `node:22-slim`**: Stripped of CA certificates — must `apt-get install ca-certificates` or gws/external HTTPS calls fail with TLS UnknownIssuer
 - **Deep path strips `ANTHROPIC_API_KEY`** from subprocess env so Claude CLI uses Max plan OAuth instead of API billing
 - **All DB ops are async** — every function touching Postgres returns a Promise. Missing `await` will silently succeed but not persist.
