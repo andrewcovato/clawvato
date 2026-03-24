@@ -9,8 +9,9 @@
 
 JOURNAL_FILE="/tmp/clawvato-journal.md"
 INSIGHTS_FILE="/tmp/clawvato-insights.md"
+BRIEF_FILE="/tmp/clawvato-brief.md"
 COUNTER_FILE="/tmp/clawvato-journal-counter"
-JOURNAL_INTERVAL="${CLAWVATO_JOURNAL_INTERVAL:-20}"
+JOURNAL_INTERVAL="${CLAWVATO_JOURNAL_INTERVAL:-50}"
 
 # Read hook input from stdin
 INPUT=$(cat)
@@ -130,11 +131,51 @@ node -e "
 > "$JOURNAL_FILE"
 echo "0" > "$COUNTER_FILE"
 
-# Send async — curl reads payload file, then cleans up
+# Build brief content — prefer agent-written scratch pad, fall back to auto-generated
+BRIEF_PAYLOAD_FILE="/tmp/clawvato-brief-payload-$$.json"
+if [ -s "$BRIEF_FILE" ]; then
+  # Agent wrote a rich brief — use it
+  BRIEF_CONTENT=$(cat "$BRIEF_FILE")
+  > "$BRIEF_FILE"
+else
+  # Auto-generate from journal — extract unique tool actions as activity summary
+  BRIEF_CONTENT=$(node -e "
+    const fs = require('fs');
+    const journal = fs.readFileSync(process.argv[1], 'utf8');
+    const lines = journal.split('\n');
+    const actions = new Set();
+    for (const line of lines) {
+      const m = line.match(/^\[[\d:]+\]\s*(.+?)(?:\s*[:{\n]|$)/);
+      if (m) actions.add(m[1].trim().slice(0, 60));
+    }
+    const time = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    const actList = [...actions].slice(0, 8).join(', ');
+    process.stdout.write('Active session, ' + time + '. Recent: ' + actList + '.');
+  " "$PAYLOAD_FILE" 2>/dev/null || echo "Active session at $(date '+%b %d %I:%M%p').")
+fi
+
+# Write brief payload
+node -e "
+  const fs = require('fs');
+  const payload = {
+    jsonrpc: '2.0', id: 2, method: 'tools/call',
+    params: { name: 'update_brief', arguments: { surface: process.argv[1], content: process.argv[2] } }
+  };
+  fs.writeFileSync(process.argv[3], JSON.stringify(payload));
+" "$SURFACE" "$BRIEF_CONTENT" "$BRIEF_PAYLOAD_FILE"
+
+# Send both async — journal ingest + brief update
 (curl -s -X POST "${PLUGIN_URL}/ingest" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer ${AUTH_TOKEN}" \
   -d @"$PAYLOAD_FILE" \
   > /dev/null 2>&1; rm -f "$PAYLOAD_FILE") &
+
+(curl -s -X POST "${PLUGIN_URL}/mcp" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer ${AUTH_TOKEN}" \
+  -H "Accept: application/json, text/event-stream" \
+  -d @"$BRIEF_PAYLOAD_FILE" \
+  > /dev/null 2>&1; rm -f "$BRIEF_PAYLOAD_FILE") &
 
 exit 0

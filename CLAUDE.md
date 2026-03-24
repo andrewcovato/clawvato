@@ -255,7 +255,8 @@ This project uses surface-scoped working context via the `clawvato-memory` MCP p
 
 **On startup**: Call `get_handoff(surface: "local")` and `get_briefs()` to resume. If the handoff contains `recent_interactions`, replay them to restore conversational continuity.
 
-**During work**: Periodically update your brief via `update_brief(surface: "local", content: ...)` so other surfaces know what you're working on.
+**During work**: Write a brief summary to `/tmp/clawvato-brief.md` when you hit a milestone or shift focus. The journal hook sends it automatically on the next flush. If you don't write one, the hook auto-generates a brief from recent tool activity — so cross-surface awareness is mechanically guaranteed, but richer if you write it.
+Example: `echo "Debugging journal hook pipeline. Fixed PostToolUse wiring, added insights scratch pad." > /tmp/clawvato-brief.md`
 
 ### When ending a session (or when asked to hand off):
 1. **Update all project files**: HANDOFF.md, state.json, memory files, CLAUDE.md if needed.
@@ -342,7 +343,7 @@ The plugin is the intelligent core — it handles embeddings (nomic-embed-text-v
 
 ### Conversation Journaling
 - PostToolUse hook (`scripts/journal-hook.sh`) accumulates tool call summaries
-- Every 20 tool calls, flushes to plugin POST /ingest endpoint
+- Every 50 tool calls, flushes to plugin POST /ingest endpoint
 - Plugin extracts facts via Haiku, embeds, deduplicates, stores
 - Background, non-blocking, fire-and-forget
 - Replaces the old extract-facts-hook.sh
