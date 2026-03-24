@@ -6,8 +6,9 @@
  *
  * Retrieval order (highest value first):
  * 1. Memories about mentioned entities (entity junction lookup)
- * 2. Semantic + keyword search (hybrid tsvector + pgvector)
- * 3. Wake sleeping working context if relevant
+ * 2. Entity-hop traversal (find connected memories through shared entities)
+ * 3. Semantic + keyword search (hybrid tsvector + pgvector)
+ * 4. Wake sleeping working context if relevant
  */
 
 import type { Sql } from '../db/index.js';
@@ -215,14 +216,53 @@ export async function retrieveContext(
   const allCandidates: Memory[] = [];
   const seenIds = new Set<string>();
 
-  // Entity-based lookup (highest value per token)
+  // ── Stage 1a: Entity-based lookup (highest value per token) ──
+  const directEntityMemories: Memory[] = [];
   for (const name of names) {
     const entityMemories = await findMemoriesByEntity(sql, name, { limit: 3 });
     for (const mem of entityMemories) {
       if (!seenIds.has(mem.id)) {
         seenIds.add(mem.id);
         allCandidates.push(mem);
+        directEntityMemories.push(mem);
       }
+    }
+  }
+
+  // ── Stage 1b: Entity-hop traversal ──
+  // Discover connected memories through shared entities.
+  // If we found memories about "Acorns", extract THEIR entities (e.g., "Sarah Chen"),
+  // then find memories about those entities — surfacing connections the query didn't mention.
+  if (directEntityMemories.length > 0) {
+    const hopEntities = new Set<string>();
+    const queryNamesLower = new Set(names.map(n => n.toLowerCase()));
+
+    for (const mem of directEntityMemories) {
+      try {
+        const entities: string[] = JSON.parse(mem.entities || '[]');
+        for (const entity of entities) {
+          // Only hop to entities NOT already in the query (avoid re-searching what we started with)
+          if (!queryNamesLower.has(entity.toLowerCase())) {
+            hopEntities.add(entity);
+          }
+        }
+      } catch { /* malformed entities JSON, skip */ }
+    }
+
+    // Limit hops to avoid explosion — take the most promising entities
+    const hopTargets = [...hopEntities].slice(0, 5);
+    for (const entity of hopTargets) {
+      const hopMemories = await findMemoriesByEntity(sql, entity, { limit: 2 });
+      for (const mem of hopMemories) {
+        if (!seenIds.has(mem.id)) {
+          seenIds.add(mem.id);
+          allCandidates.push(mem);
+        }
+      }
+    }
+
+    if (hopTargets.length > 0) {
+      logger.debug({ directEntities: names, hopEntities: hopTargets, hopResults: allCandidates.length - directEntityMemories.length }, 'Entity-hop traversal');
     }
   }
 

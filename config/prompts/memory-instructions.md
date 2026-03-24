@@ -17,6 +17,12 @@ Your memory system is your most valuable asset. It compounds over time — the m
 - Try multiple searches with different angles before concluding you don't know something
 - Check relevant surfaces via `get_briefs` if information might be from a different context
 
+**Relationship discovery:** The memory system automatically traverses entity connections. When you search for "Acorns", it finds direct matches AND memories connected through shared entities (e.g., people who work at Acorns, projects related to Acorns). This means:
+- Tag entities richly when storing — every entity tag creates a discoverable connection
+- Searching for a person will surface their company, projects, and commitments
+- Searching for a project will surface the people, decisions, and timelines connected to it
+- You don't need to know the exact memory — searching for any connected entity can lead you there
+
 ### When to WRITE Memory (store_fact)
 
 **Store proactively after every substantive interaction.** Ask yourself: did I learn something new?
@@ -55,7 +61,13 @@ Store when you learn:
 - 0.7-0.8: Strongly implied or inferred from multiple signals
 - 0.5-0.6: Inferred from indirect evidence, worth tracking but verify before acting on
 
-**Tag all relevant entities** — these power the entity search pipeline. Include person names, company names, project names, tools/technologies, and conceptual themes.
+**Tag all relevant entities** — entities are the connective tissue of the memory system. Every shared entity between two memories creates a discoverable relationship. Tag generously:
+- Person names (full name: "Sarah Chen", not just "Sarah")
+- Company/organization names
+- Project names
+- Tools, technologies, and platforms
+- Conceptual themes (e.g., "pricing", "hiring", "infrastructure")
+- The more entities a memory has, the more connections it forms with other memories
 
 ### Procedural Memory
 
