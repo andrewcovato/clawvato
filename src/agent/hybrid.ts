@@ -401,7 +401,6 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
           // Re-retrieve memory with deep-path budget ($0 on Max — no cost reason to limit)
           const deepMemory = await retrieveContext(db, message, {
             tokenBudget: config.context.deepPathLongTermTokenBudget,
-            surfaces: [process.env.CLAWVATO_SURFACE ?? 'cloud', 'global'],
           });
           const deepWorkingContext = await loadWorkingContext(db, config.context.deepPathWorkingContextTokenBudget);
 

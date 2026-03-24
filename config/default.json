@@ -67,6 +67,8 @@
     "consolidationBatchSize": 150,
     "consolidationCheckIntervalHours": 6,
     "embeddingModel": "nomic-ai/nomic-embed-text-v1.5",
+    "domainBoostFactor": 1.3,
+    "surfaceBoostFactor": 1.1,
     "dedupEnabled": true,
     "dedupSimilarityThreshold": 0.7,
     "dedupMaxCandidates": 5

@@ -60,6 +60,18 @@ export async function initDb(): Promise<Sql> {
     logger.info('Migration complete: surface_id column added, existing memories set to cloud');
   }
 
+  // ── Migration: add domain column if missing ──
+  const [hasDomain] = await sql`
+    SELECT column_name FROM information_schema.columns
+    WHERE table_name = 'memories' AND column_name = 'domain'
+  `;
+  if (!hasDomain) {
+    logger.info('Migrating: adding domain column to memories');
+    await sql`ALTER TABLE memories ADD COLUMN domain TEXT NOT NULL DEFAULT 'general'`;
+    await sql`CREATE INDEX IF NOT EXISTS idx_memories_domain ON memories(domain)`;
+    logger.info('Migration complete: domain column added');
+  }
+
   // Seed categories on first run (check count, insert if 0)
   const [{ count }] = await sql`SELECT COUNT(*)::int as count FROM memory_categories`;
   if (count === 0) {

@@ -60,6 +60,7 @@ export interface ExtractedFact {
   confidence: number;
   importance: number;
   entities: string[];
+  domain?: string;
 }
 
 export interface ExtractionResult {
@@ -136,6 +137,7 @@ export async function extractFacts(
         confidence: Math.max(0, Math.min(1, Number(f.confidence) || 0.5)),
         importance: Math.max(1, Math.min(10, Math.round(Number(f.importance) || 5))),
         entities: Array.isArray(f.entities) ? f.entities.map(String) : [],
+        domain: typeof f.domain === 'string' ? f.domain : undefined,
       }));
 
     // Auto-discover new categories via normalize-on-add
@@ -236,7 +238,7 @@ export async function storeExtractionResult(
   sql: Sql,
   result: ExtractionResult,
   source: string,
-  opts?: { surface_id?: string; client?: Anthropic },
+  opts?: { surface_id?: string; domain?: string; client?: Anthropic },
 ): Promise<StoreResult> {
   const config = getConfig();
   let memoriesStored = 0;
@@ -265,6 +267,7 @@ export async function storeExtractionResult(
         confidence: fact.confidence,
         entities: fact.entities,
         surface_id: opts?.surface_id,
+        domain: fact.domain ?? opts?.domain ?? 'general',
       };
       await insertMemory(sql, newMemory);
       memoriesStored++;
@@ -298,6 +301,7 @@ export async function storeExtractionResult(
           confidence: fact.confidence,
           entities: fact.entities,
           surface_id: opts?.surface_id,
+          domain: fact.domain ?? opts?.domain ?? 'general',
         };
         const newId = await insertMemory(sql, newMemory);
         await insertEmbedding(sql, newId, embedding);
@@ -332,6 +336,7 @@ export async function storeExtractionResult(
               confidence: fact.confidence,
               entities: fact.entities,
               surface_id: opts?.surface_id,
+              domain: fact.domain ?? opts?.domain ?? 'general',
             };
             const newId = await insertMemory(sql, newMemory);
             await insertEmbedding(sql, newId, embedding);
@@ -350,6 +355,7 @@ export async function storeExtractionResult(
                 confidence: fact.confidence,
                 entities: fact.entities,
                 surface_id: opts?.surface_id,
+                domain: fact.domain ?? opts?.domain ?? 'general',
               };
               const newId = await insertMemory(sql, newMemory);
               await insertEmbedding(sql, newId, embedding);
@@ -363,6 +369,7 @@ export async function storeExtractionResult(
                 confidence: fact.confidence,
                 entities: fact.entities,
                 surface_id: opts?.surface_id,
+                domain: fact.domain ?? opts?.domain ?? 'general',
               };
               const newId = await insertMemory(sql, newMemory);
               await insertEmbedding(sql, newId, embedding);
@@ -387,6 +394,7 @@ export async function storeExtractionResult(
               confidence: fact.confidence,
               entities: fact.entities,
               surface_id: opts?.surface_id,
+              domain: fact.domain ?? opts?.domain ?? 'general',
             };
             const newId = await insertMemory(sql, newMemory);
             await insertEmbedding(sql, newId, embedding);
@@ -409,6 +417,7 @@ export async function storeExtractionResult(
         confidence: fact.confidence,
         entities: fact.entities,
         surface_id: opts?.surface_id,
+        domain: fact.domain ?? opts?.domain ?? 'general',
       };
       const newId = await insertMemory(sql, newMemory);
       await insertEmbedding(sql, newId, embedding);

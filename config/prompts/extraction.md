@@ -7,10 +7,22 @@ Extract meaningful information from this conversation. Return a JSON object with
 - content: A clear statement capturing the information AND its context/rationale. Include enough detail that this is useful months later without the original conversation.
 - confidence: 0.0-1.0 (1.0 = explicitly stated, 0.7 = strongly implied, 0.5 = inferred)
 - importance: 1-10 (1 = trivial, 5 = useful, 10 = critical for future work)
-- entities: Array of relevant identifiers that would help find this fact later — person names, company names, project names, tools/technologies, conceptual themes (e.g., "infrastructure", "hiring", "pricing", "frontend"), and any other terms useful for retrieval
+- entities: Array of relevant identifiers that would help find this fact later — person names, company names, project names, tools/technologies, conceptual themes (e.g., "infrastructure", "hiring", "pricing", "frontend")
+- domain: A topic area from the domains list below (or suggest a new one following the same hierarchical pattern), and any other terms useful for retrieval
 
 Categories (use one if it fits, or suggest a new lowercase name):
 {{CATEGORIES}}
+
+Domains (assign the most specific match):
+- clients/acorns — Acorns client work, contracts, deliverables
+- clients/draftkings — DraftKings client work
+- business/ops — internal operations, processes
+- business/finance — invoicing, revenue, costs
+- projects/clawvato — Clawvato AI agent development
+- personal — owner preferences, contacts, personal facts
+- general — broadly useful knowledge that doesn't fit a specific domain
+
+Use the hierarchical format (parent/child). If no existing domain fits, suggest a new one. Prefer existing domains over creating new ones.
 
 Rules:
 - People information IS a fact. When someone's role, email, organization, or relationship is mentioned, capture it as a fact with the person's name in entities. Example: {"type": "relationship", "content": "Sarah Chen is VP Marketing at Acorns (sarah@acorns.com), primary client contact", "entities": ["Sarah Chen", "Acorns"]}
@@ -32,11 +44,11 @@ Rules:
 
 Examples of GOOD extractions:
 
-{"type": "relationship", "content": "Sarah Chen (sarah@acorns.com) is VP Marketing at Acorns, primary client contact since Jan 2026. Prefers Monday morning check-ins over email.", "confidence": 1.0, "importance": 8, "entities": ["Sarah Chen", "Acorns", "clients"]}
+{"type": "relationship", "content": "Sarah Chen (sarah@acorns.com) is VP Marketing at Acorns, primary client contact since Jan 2026. Prefers Monday morning check-ins over email.", "confidence": 1.0, "importance": 8, "entities": ["Sarah Chen", "Acorns", "clients"], "domain": "clients/acorns"}
 
-{"type": "decision", "content": "2026-03-20: chose Railway for deployment because it supports persistent volumes, Postgres add-ons, and the team is already familiar with it. Evaluated Fly.io and Render as alternatives.", "confidence": 1.0, "importance": 7, "entities": ["Railway", "deployment", "infrastructure"]}
+{"type": "decision", "content": "2026-03-20: chose Railway for deployment because it supports persistent volumes, Postgres add-ons, and the team is already familiar with it. Evaluated Fly.io and Render as alternatives.", "confidence": 1.0, "importance": 7, "entities": ["Railway", "deployment", "infrastructure"], "domain": "projects/clawvato"}
 
-{"type": "strategy", "content": "When sending externally-visible communications (emails to clients, messages to partners), always draft and present for owner approval before sending — never auto-send.", "confidence": 1.0, "importance": 9, "entities": ["communication", "workflow", "approval"]}
+{"type": "strategy", "content": "When sending externally-visible communications (emails to clients, messages to partners), always draft and present for owner approval before sending — never auto-send.", "confidence": 1.0, "importance": 9, "entities": ["communication", "workflow", "approval"], "domain": "business/ops"}
 
 Examples of BAD extractions (do NOT produce these):
 

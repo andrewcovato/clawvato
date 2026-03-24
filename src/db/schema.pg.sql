@@ -29,6 +29,9 @@ CREATE TABLE IF NOT EXISTS memories (
   -- Surface isolation (local = dev, cloud = Slack agent, global = shared)
   surface_id TEXT NOT NULL DEFAULT 'global',
 
+  -- Domain taxonomy (hierarchical topic area, e.g. 'clients/acorns', 'projects/clawvato')
+  domain TEXT NOT NULL DEFAULT 'general',
+
   -- Consolidation tracking
   superseded_by TEXT REFERENCES memories(id),
   reflection_source INTEGER DEFAULT 0,
@@ -48,6 +51,7 @@ CREATE INDEX IF NOT EXISTS idx_memories_type_valid ON memories(type, valid_until
 
 CREATE INDEX IF NOT EXISTS idx_memories_surface ON memories(surface_id);
 CREATE INDEX IF NOT EXISTS idx_memories_surface_valid ON memories(surface_id, valid_until);
+CREATE INDEX IF NOT EXISTS idx_memories_domain ON memories(domain);
 
 -- GIN index for full-text search
 CREATE INDEX IF NOT EXISTS idx_memories_fts ON memories USING GIN(content_tsv);

@@ -27,6 +27,8 @@ export interface Memory {
   last_accessed_at: string | null;
   access_count: number;
   entities: string; // JSON array
+  surface_id: string;
+  domain: string;
   superseded_by: string | null;
   reflection_source: number;
 }
@@ -39,6 +41,7 @@ export interface NewMemory {
   confidence?: number;
   entities?: string[];
   surface_id?: string;
+  domain?: string;
 }
 
 // ── Memory CRUD ──
@@ -49,10 +52,10 @@ export async function insertMemory(sql: Sql, memory: NewMemory): Promise<string>
   const entities = JSON.stringify(entityList);
 
   await sql`
-    INSERT INTO memories (id, type, content, source, importance, confidence, entities, surface_id)
+    INSERT INTO memories (id, type, content, source, importance, confidence, entities, surface_id, domain)
     VALUES (${id}, ${memory.type}, ${memory.content}, ${memory.source},
             ${memory.importance ?? 5}, ${memory.confidence ?? 0.5}, ${entities},
-            ${memory.surface_id ?? 'global'})
+            ${memory.surface_id ?? 'global'}, ${memory.domain ?? 'general'})
   `;
 
   // Populate entity junction table
@@ -132,7 +135,6 @@ export async function searchMemories(
     type?: MemoryType;
     sourcePrefix?: string;
     minImportance?: number;
-    surfaces?: string[];
   },
 ): Promise<Memory[]> {
   const limit = opts?.limit ?? 20;
@@ -142,7 +144,6 @@ export async function searchMemories(
   if (opts?.type) filters.push(sql`type = ${opts.type}`);
   if (opts?.sourcePrefix) filters.push(sql`source LIKE ${opts.sourcePrefix + ':%'}`);
   if (opts?.minImportance) filters.push(sql`importance >= ${opts.minImportance}`);
-  if (opts?.surfaces?.length) filters.push(sql`surface_id = ANY(${opts.surfaces})`);
 
   const whereClause = filters.reduce((acc, frag) => sql`${acc} AND ${frag}`);
 
@@ -179,18 +180,9 @@ export async function searchMemories(
 export async function findMemoriesByEntity(
   sql: Sql,
   entity: string,
-  opts?: { limit?: number; surfaces?: string[] },
+  opts?: { limit?: number },
 ): Promise<Memory[]> {
   const limit = opts?.limit ?? 10;
-  if (opts?.surfaces?.length) {
-    return await sql`
-      SELECT m.* FROM memories m
-      JOIN memory_entities me ON m.id = me.memory_id
-      WHERE LOWER(me.entity) = LOWER(${entity}) AND m.valid_until IS NULL
-        AND m.surface_id = ANY(${opts.surfaces})
-      ORDER BY m.importance DESC, m.created_at DESC LIMIT ${limit}
-    ` as unknown as Memory[];
-  }
   return await sql`
     SELECT m.* FROM memories m
     JOIN memory_entities me ON m.id = me.memory_id
@@ -307,27 +299,18 @@ export async function deleteEmbedding(sql: Sql, memoryId: string): Promise<void>
 export async function vectorSearch(
   sql: Sql,
   queryEmbedding: Float32Array,
-  opts?: { limit?: number; ftsQuery?: string; surfaces?: string[] },
+  opts?: { limit?: number; ftsQuery?: string },
 ): Promise<Memory[]> {
   const limit = opts?.limit ?? 10;
 
   if (opts?.ftsQuery) {
     // Hybrid search: single CTE query with RRF
-    return hybridSearch(sql, queryEmbedding, opts.ftsQuery, limit, opts?.surfaces);
+    return hybridSearch(sql, queryEmbedding, opts.ftsQuery, limit);
   }
 
   // Pure vector search
   try {
     const vec = pgvector.toSql(Array.from(queryEmbedding));
-    if (opts?.surfaces?.length) {
-      return await sql`
-        SELECT * FROM memories
-        WHERE embedding IS NOT NULL AND valid_until IS NULL
-          AND surface_id = ANY(${opts.surfaces})
-        ORDER BY embedding <=> ${vec}
-        LIMIT ${limit}
-      ` as unknown as Memory[];
-    }
     return await sql`
       SELECT * FROM memories
       WHERE embedding IS NOT NULL AND valid_until IS NULL
@@ -349,52 +332,16 @@ async function hybridSearch(
   queryEmbedding: Float32Array,
   ftsQuery: string,
   limit: number,
-  surfaces?: string[],
 ): Promise<Memory[]> {
   try {
     const vec = pgvector.toSql(Array.from(queryEmbedding));
     const ftsExpr = buildFtsExpression(ftsQuery);
     if (!ftsExpr) {
       // No usable keywords — fall back to pure vector search
-      if (surfaces?.length) {
-        return await sql`
-          SELECT * FROM memories
-          WHERE embedding IS NOT NULL AND valid_until IS NULL
-            AND surface_id = ANY(${surfaces})
-          ORDER BY embedding <=> ${vec}
-          LIMIT ${limit}
-        ` as unknown as Memory[];
-      }
       return await sql`
         SELECT * FROM memories
         WHERE embedding IS NOT NULL AND valid_until IS NULL
         ORDER BY embedding <=> ${vec}
-        LIMIT ${limit}
-      ` as unknown as Memory[];
-    }
-    if (surfaces?.length) {
-      return await sql`
-        WITH fts AS (
-          SELECT id, ROW_NUMBER() OVER (ORDER BY ts_rank(content_tsv, to_tsquery('english', ${ftsExpr})) DESC) as rn
-          FROM memories
-          WHERE content_tsv @@ to_tsquery('english', ${ftsExpr}) AND valid_until IS NULL
-            AND surface_id = ANY(${surfaces})
-          LIMIT 30
-        ),
-        vec AS (
-          SELECT id, ROW_NUMBER() OVER (ORDER BY embedding <=> ${vec}) as rn
-          FROM memories
-          WHERE embedding IS NOT NULL AND valid_until IS NULL
-            AND surface_id = ANY(${surfaces})
-          LIMIT 30
-        )
-        SELECT m.* FROM (
-          SELECT COALESCE(f.id, v.id) as id,
-            COALESCE(1.0/(60+f.rn),0) + COALESCE(1.0/(60+v.rn),0) as score
-          FROM fts f FULL OUTER JOIN vec v USING (id)
-        ) ranked
-        JOIN memories m ON m.id = ranked.id
-        ORDER BY ranked.score DESC
         LIMIT ${limit}
       ` as unknown as Memory[];
     }

@@ -21,7 +21,7 @@ import {
   type Memory,
 } from './store.js';
 import { embed } from './embeddings.js';
-import { getConfig } from '../config.js';
+import { getConfig, type ClawvatoConfig } from '../config.js';
 import { rerankWithCrossEncoder } from './reranker.js';
 
 /** Rough estimate: 1 token ≈ 4 characters */
@@ -157,6 +157,38 @@ async function rerankMemories(
 }
 
 /**
+ * Apply domain/surface boost scoring to reorder memory candidates.
+ * Same-domain and same-surface memories get a relevance boost,
+ * but nothing is excluded — this is a soft signal, not a hard filter.
+ */
+function applyContextBoost(
+  memories: Memory[],
+  currentSurface: string,
+  currentDomain: string,
+  config: ClawvatoConfig,
+): Memory[] {
+  if (memories.length === 0) return memories;
+
+  const domainBoost = config.memory.domainBoostFactor;
+  const surfaceBoost = config.memory.surfaceBoostFactor;
+
+  const scored = memories.map(m => {
+    let boost = 1.0;
+    // Same domain gets a boost
+    if (m.domain === currentDomain) boost *= domainBoost;
+    // Same surface gets a mild boost
+    if (m.surface_id === currentSurface) boost *= surfaceBoost;
+    // High importance gets a boost
+    if (m.importance >= 8) boost *= 1.2;
+    return { memory: m, boost };
+  });
+
+  // Sort by boost descending (stable sort preserves original relevance order for ties)
+  scored.sort((a, b) => b.boost - a.boost);
+  return scored.map(s => s.memory);
+}
+
+/**
  * Retrieve relevant memory context for a given message.
  *
  * Returns formatted context string and metadata about what was retrieved.
@@ -167,49 +199,45 @@ async function rerankMemories(
 export async function retrieveContext(
   sql: Sql,
   message: string,
-  opts?: { tokenBudget?: number; surfaces?: string[] },
+  opts?: { tokenBudget?: number; currentDomain?: string },
 ): Promise<RetrievalResult> {
   const config = getConfig();
   const budget = opts?.tokenBudget ?? config.context.longTermTokenBudget;
-  const surfaces = opts?.surfaces ?? [process.env.CLAWVATO_SURFACE ?? 'cloud', 'global'];
+  const currentSurface = process.env.CLAWVATO_SURFACE ?? 'cloud';
+  const currentDomain = opts?.currentDomain ?? 'general';
   const parts: string[] = [];
   let tokensUsed = 0;
   let memoriesRetrieved = 0;
 
   const { names, keywords } = extractEntities(message);
 
-  // ── 1. Memories about mentioned entities (highest value per token) ──
+  // ── 1. Collect all candidate memories ──
+  const allCandidates: Memory[] = [];
+  const seenIds = new Set<string>();
+
+  // Entity-based lookup (highest value per token)
   for (const name of names) {
-    if (tokensUsed >= budget) break;
-
-    const entityMemories = await findMemoriesByEntity(sql, name, { limit: 3, surfaces });
+    const entityMemories = await findMemoriesByEntity(sql, name, { limit: 3 });
     for (const mem of entityMemories) {
-      if (tokensUsed >= budget) break;
-
-      const line = formatMemory(mem);
-      const tokens = estimateTokens(line);
-      if (tokensUsed + tokens <= budget) {
-        parts.push(line);
-        tokensUsed += tokens;
-        memoriesRetrieved++;
-        await touchMemory(sql, mem.id);
+      if (!seenIds.has(mem.id)) {
+        seenIds.add(mem.id);
+        allCandidates.push(mem);
       }
     }
   }
 
-  // ── 4. Semantic + keyword search for relevant facts/decisions ──
-  // (File summaries are stored as memories — they surface here naturally)
-  if (tokensUsed < budget && keywords.length > 0) {
+  // Semantic + keyword search for relevant facts/decisions
+  if (keywords.length > 0) {
     const ftsQuery = keywords.slice(0, 5).join(' | ');
     let searchResults: Memory[];
 
     // Use hybrid search (vector + tsvector) — pgvector always available
     try {
       const queryEmbedding = await embed(message, 'query');
-      searchResults = await vectorSearch(sql, queryEmbedding, { limit: 20, ftsQuery, surfaces });
+      searchResults = await vectorSearch(sql, queryEmbedding, { limit: 20, ftsQuery });
     } catch {
       // Embedding failed — fall back to tsvector only
-      searchResults = await searchMemories(sql, ftsQuery, { limit: 20, surfaces });
+      searchResults = await searchMemories(sql, ftsQuery, { limit: 20 });
     }
 
     // LLM rerank: Haiku scores candidates for actual relevance to the query
@@ -218,16 +246,27 @@ export async function retrieveContext(
     }
 
     for (const mem of searchResults) {
-      if (tokensUsed >= budget) break;
-
-      const line = formatMemory(mem);
-      const tokens = estimateTokens(line);
-      if (tokensUsed + tokens <= budget) {
-        parts.push(line);
-        tokensUsed += tokens;
-        memoriesRetrieved++;
-        await touchMemory(sql, mem.id);
+      if (!seenIds.has(mem.id)) {
+        seenIds.add(mem.id);
+        allCandidates.push(mem);
       }
+    }
+  }
+
+  // ── 2. Apply domain/surface boost scoring (soft signals, not filters) ──
+  const boostedCandidates = applyContextBoost(allCandidates, currentSurface, currentDomain, config);
+
+  // ── 3. Fill token budget from boosted candidates ──
+  for (const mem of boostedCandidates) {
+    if (tokensUsed >= budget) break;
+
+    const line = formatMemory(mem);
+    const tokens = estimateTokens(line);
+    if (tokensUsed + tokens <= budget) {
+      parts.push(line);
+      tokensUsed += tokens;
+      memoriesRetrieved++;
+      await touchMemory(sql, mem.id);
     }
   }
 
