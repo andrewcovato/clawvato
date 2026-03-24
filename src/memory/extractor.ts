@@ -19,7 +19,6 @@ import {
   supersedeMemory,
   insertEmbedding,
   deleteEmbedding,
-  hasVectorSupport,
   getCategoryList,
   findOrCreateCategory,
   type MemoryType,
@@ -186,7 +185,7 @@ export async function storeExtractionResult(
   }
 
   // Embed new memories for vector search
-  if (newMemoryIds.length > 0 && await hasVectorSupport(sql)) {
+  if (newMemoryIds.length > 0) {
     try {
       const texts = newMemoryIds.map(m => m.content);
       const embeddings = await embedBatch(texts);

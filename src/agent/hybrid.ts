@@ -37,7 +37,7 @@ import { executeDeepPath, seedWorkspace } from './deep-path.js';
 import { planContext } from './context-planner.js';
 import { extractFacts, storeExtractionResult, type ExtractedFact } from '../memory/extractor.js';
 import { maybeReflect } from '../memory/reflection.js';
-import { findOrCreateCategory, insertMemory, findDuplicates, supersedeMemory, deleteEmbedding, hasVectorSupport, insertEmbedding } from '../memory/store.js';
+import { findOrCreateCategory, insertMemory, findDuplicates, supersedeMemory, deleteEmbedding, insertEmbedding } from '../memory/store.js';
 import { contentSimilarity } from '../memory/extractor.js';
 import { embedBatch } from '../memory/embeddings.js';
 import { classifyInterrupt, generateClarificationMessage } from '../slack/interrupt-classifier.js';
@@ -239,7 +239,7 @@ async function processStructuredFindings(
     }
   }
 
-  if (newMemoryIds.length > 0 && await hasVectorSupport(db)) {
+  if (newMemoryIds.length > 0) {
     try {
       const texts = newMemoryIds.map(m => m.content);
       const embeddings = await embedBatch(texts);

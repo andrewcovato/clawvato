@@ -20,7 +20,6 @@ import {
   findDuplicates,
   supersedeMemory,
   deleteEmbedding,
-  hasVectorSupport,
   insertEmbedding,
 } from '../memory/store.js';
 import { contentSimilarity } from '../memory/extractor.js';
@@ -288,7 +287,7 @@ async function extractMeetingSummary(
   }
 
   // Batch embed all new memories
-  if (newMemoryIds.length > 0 && await hasVectorSupport(db)) {
+  if (newMemoryIds.length > 0) {
     try {
       const embeddings = await embedBatch(newMemoryIds.map(m => m.content));
       for (let i = 0; i < newMemoryIds.length; i++) {
@@ -439,7 +438,7 @@ export async function deepReadMeeting(
   }
 
   // Batch embed
-  if (newMemoryIds.length > 0 && await hasVectorSupport(db)) {
+  if (newMemoryIds.length > 0) {
     try {
       const embeddings = await embedBatch(newMemoryIds.map(m => m.content));
       for (let i = 0; i < newMemoryIds.length; i++) {

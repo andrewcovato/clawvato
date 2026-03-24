@@ -34,7 +34,6 @@ import {
   findDuplicates,
   supersedeMemory,
   deleteEmbedding,
-  hasVectorSupport,
   insertEmbedding,
   type MemoryType,
 } from '../memory/store.js';
@@ -443,13 +442,11 @@ async function storeFileSummaryAsMemory(
   }
 
   // Embed the new memory
-  if (await hasVectorSupport(db)) {
-    embedBatch([content]).then(async embeddings => {
-      if (embeddings.length > 0) {
-        await insertEmbedding(db, newId, embeddings[0]);
-      }
-    }).catch(() => { /* non-critical */ });
-  }
+  embedBatch([content]).then(async embeddings => {
+    if (embeddings.length > 0) {
+      await insertEmbedding(db, newId, embeddings[0]);
+    }
+  }).catch(() => { /* non-critical */ });
 }
 
 // ── Sync engine ──
@@ -713,7 +710,7 @@ export async function syncDrive(
     }
 
     // Batch embed all at once (one call instead of N)
-    if (newMemoryIds.length > 0 && await hasVectorSupport(db)) {
+    if (newMemoryIds.length > 0) {
       try {
         const embeddings = await embedBatch(newMemoryIds.map(m => m.content));
         for (let i = 0; i < newMemoryIds.length; i++) {
@@ -895,7 +892,7 @@ export async function deepReadFile(
     }
 
     // Embed new memories
-    if (newMemoryIds.length > 0 && await hasVectorSupport(db)) {
+    if (newMemoryIds.length > 0) {
       try {
         const embeddings = await embedBatch(newMemoryIds.map(m => m.content));
         for (let i = 0; i < newMemoryIds.length; i++) {

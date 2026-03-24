@@ -18,13 +18,19 @@ import {
   findMemoriesByEntity,
   touchMemory,
   vectorSearch,
-  hasVectorSupport,
   type Memory,
 } from './store.js';
 import { embed } from './embeddings.js';
 import { getConfig } from '../config.js';
 import { getPrompts } from '../prompts.js';
 import Anthropic from '@anthropic-ai/sdk';
+
+/** Module-level Anthropic client — reused across rerank calls */
+let _anthropicClient: Anthropic | null = null;
+function getAnthropicClient(): Anthropic {
+  if (!_anthropicClient) _anthropicClient = new Anthropic();
+  return _anthropicClient;
+}
 
 /** Rough estimate: 1 token ≈ 4 characters */
 function estimateTokens(text: string): number {
@@ -129,6 +135,7 @@ async function rerankMemories(
   query: string,
   candidates: Memory[],
   maxCandidates: number,
+  client?: Anthropic,
 ): Promise<Memory[]> {
   if (candidates.length === 0) return candidates;
 
@@ -136,14 +143,14 @@ async function rerankMemories(
   const toRerank = candidates.slice(0, maxCandidates);
 
   try {
-    const client = new Anthropic();
+    const anthropic = client ?? getAnthropicClient();
     const snippets = toRerank.map((m, i) => ({
       id: i,
       type: m.type,
       content: m.content.slice(0, 500),
     }));
 
-    const response = await client.messages.create({
+    const response = await anthropic.messages.create({
       model: config.models.classifier,
       max_tokens: 300,
       system: getPrompts().rerank,
@@ -227,15 +234,11 @@ export async function retrieveContext(
     let searchResults: Memory[];
 
     // Use hybrid search (vector + tsvector) — pgvector always available
-    if (await hasVectorSupport(sql)) {
-      try {
-        const queryEmbedding = await embed(message);
-        searchResults = await vectorSearch(sql, queryEmbedding, { limit: 20, ftsQuery });
-      } catch {
-        // Embedding failed — fall back to tsvector only
-        searchResults = await searchMemories(sql, ftsQuery, { limit: 20 });
-      }
-    } else {
+    try {
+      const queryEmbedding = await embed(message);
+      searchResults = await vectorSearch(sql, queryEmbedding, { limit: 20, ftsQuery });
+    } catch {
+      // Embedding failed — fall back to tsvector only
       searchResults = await searchMemories(sql, ftsQuery, { limit: 20 });
     }
 

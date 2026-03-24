@@ -105,6 +105,19 @@ export async function findMemoriesByType(
 }
 
 /**
+ * Sanitize a raw query string into a tsvector-compatible OR expression.
+ * Returns empty string if no alphanumeric words remain after stripping.
+ */
+function buildFtsExpression(query: string): string {
+  return query
+    .trim()
+    .split(/\s+/)
+    .map(w => w.replace(/[^a-zA-Z0-9]/g, ''))
+    .filter(Boolean)
+    .join(' | ');
+}
+
+/**
  * Search memories. When a query is provided, uses tsvector keyword search ranked by relevance.
  * When no query is provided (or empty), returns memories by importance + recency.
  * Supports optional filtering by type, source prefix, and minimum importance.
@@ -120,147 +133,37 @@ export async function searchMemories(
   },
 ): Promise<Memory[]> {
   const limit = opts?.limit ?? 20;
-  const hasQuery = query && query.trim().length > 0;
 
-  if (hasQuery) {
+  // Build optional WHERE clause fragments
+  const filters = [sql`valid_until IS NULL`];
+  if (opts?.type) filters.push(sql`type = ${opts.type}`);
+  if (opts?.sourcePrefix) filters.push(sql`source LIKE ${opts.sourcePrefix + ':%'}`);
+  if (opts?.minImportance) filters.push(sql`importance >= ${opts.minImportance}`);
+
+  const whereClause = filters.reduce((acc, frag) => sql`${acc} AND ${frag}`);
+
+  // Try tsvector search when a query is provided
+  const ftsExpr = query ? buildFtsExpression(query) : '';
+
+  if (ftsExpr) {
     try {
-      // Build dynamic query with tsvector search
-      // We split multi-word queries into OR terms so any word matches
-      if (opts?.type && opts?.sourcePrefix && opts?.minImportance) {
-        return await sql`
-          SELECT * FROM memories
-          WHERE content_tsv @@ to_tsquery('english', ${query.trim().split(/\s+/).map(w => w.replace(/[^a-zA-Z0-9]/g, '')).filter(Boolean).join(' | ')})
-            AND valid_until IS NULL
-            AND type = ${opts.type}
-            AND source LIKE ${opts.sourcePrefix + ':%'}
-            AND importance >= ${opts.minImportance}
-          ORDER BY ts_rank(content_tsv, to_tsquery('english', ${query.trim().split(/\s+/).map(w => w.replace(/[^a-zA-Z0-9]/g, '')).filter(Boolean).join(' | ')})) DESC
-          LIMIT ${limit}
-        ` as unknown as Memory[];
-      } else if (opts?.type && opts?.sourcePrefix) {
-        return await sql`
-          SELECT * FROM memories
-          WHERE content_tsv @@ to_tsquery('english', ${query.trim().split(/\s+/).map(w => w.replace(/[^a-zA-Z0-9]/g, '')).filter(Boolean).join(' | ')})
-            AND valid_until IS NULL
-            AND type = ${opts.type}
-            AND source LIKE ${opts.sourcePrefix + ':%'}
-          ORDER BY ts_rank(content_tsv, to_tsquery('english', ${query.trim().split(/\s+/).map(w => w.replace(/[^a-zA-Z0-9]/g, '')).filter(Boolean).join(' | ')})) DESC
-          LIMIT ${limit}
-        ` as unknown as Memory[];
-      } else if (opts?.type && opts?.minImportance) {
-        return await sql`
-          SELECT * FROM memories
-          WHERE content_tsv @@ to_tsquery('english', ${query.trim().split(/\s+/).map(w => w.replace(/[^a-zA-Z0-9]/g, '')).filter(Boolean).join(' | ')})
-            AND valid_until IS NULL
-            AND type = ${opts.type}
-            AND importance >= ${opts.minImportance}
-          ORDER BY ts_rank(content_tsv, to_tsquery('english', ${query.trim().split(/\s+/).map(w => w.replace(/[^a-zA-Z0-9]/g, '')).filter(Boolean).join(' | ')})) DESC
-          LIMIT ${limit}
-        ` as unknown as Memory[];
-      } else if (opts?.sourcePrefix && opts?.minImportance) {
-        return await sql`
-          SELECT * FROM memories
-          WHERE content_tsv @@ to_tsquery('english', ${query.trim().split(/\s+/).map(w => w.replace(/[^a-zA-Z0-9]/g, '')).filter(Boolean).join(' | ')})
-            AND valid_until IS NULL
-            AND source LIKE ${opts.sourcePrefix + ':%'}
-            AND importance >= ${opts.minImportance}
-          ORDER BY ts_rank(content_tsv, to_tsquery('english', ${query.trim().split(/\s+/).map(w => w.replace(/[^a-zA-Z0-9]/g, '')).filter(Boolean).join(' | ')})) DESC
-          LIMIT ${limit}
-        ` as unknown as Memory[];
-      } else if (opts?.type) {
-        return await sql`
-          SELECT * FROM memories
-          WHERE content_tsv @@ to_tsquery('english', ${query.trim().split(/\s+/).map(w => w.replace(/[^a-zA-Z0-9]/g, '')).filter(Boolean).join(' | ')})
-            AND valid_until IS NULL
-            AND type = ${opts.type}
-          ORDER BY ts_rank(content_tsv, to_tsquery('english', ${query.trim().split(/\s+/).map(w => w.replace(/[^a-zA-Z0-9]/g, '')).filter(Boolean).join(' | ')})) DESC
-          LIMIT ${limit}
-        ` as unknown as Memory[];
-      } else if (opts?.sourcePrefix) {
-        return await sql`
-          SELECT * FROM memories
-          WHERE content_tsv @@ to_tsquery('english', ${query.trim().split(/\s+/).map(w => w.replace(/[^a-zA-Z0-9]/g, '')).filter(Boolean).join(' | ')})
-            AND valid_until IS NULL
-            AND source LIKE ${opts.sourcePrefix + ':%'}
-          ORDER BY ts_rank(content_tsv, to_tsquery('english', ${query.trim().split(/\s+/).map(w => w.replace(/[^a-zA-Z0-9]/g, '')).filter(Boolean).join(' | ')})) DESC
-          LIMIT ${limit}
-        ` as unknown as Memory[];
-      } else if (opts?.minImportance) {
-        return await sql`
-          SELECT * FROM memories
-          WHERE content_tsv @@ to_tsquery('english', ${query.trim().split(/\s+/).map(w => w.replace(/[^a-zA-Z0-9]/g, '')).filter(Boolean).join(' | ')})
-            AND valid_until IS NULL
-            AND importance >= ${opts.minImportance}
-          ORDER BY ts_rank(content_tsv, to_tsquery('english', ${query.trim().split(/\s+/).map(w => w.replace(/[^a-zA-Z0-9]/g, '')).filter(Boolean).join(' | ')})) DESC
-          LIMIT ${limit}
-        ` as unknown as Memory[];
-      } else {
-        return await sql`
-          SELECT * FROM memories
-          WHERE content_tsv @@ to_tsquery('english', ${query.trim().split(/\s+/).map(w => w.replace(/[^a-zA-Z0-9]/g, '')).filter(Boolean).join(' | ')})
-            AND valid_until IS NULL
-          ORDER BY ts_rank(content_tsv, to_tsquery('english', ${query.trim().split(/\s+/).map(w => w.replace(/[^a-zA-Z0-9]/g, '')).filter(Boolean).join(' | ')})) DESC
-          LIMIT ${limit}
-        ` as unknown as Memory[];
-      }
+      return await sql`
+        SELECT * FROM memories
+        WHERE content_tsv @@ to_tsquery('english', ${ftsExpr})
+          AND ${whereClause}
+        ORDER BY ts_rank(content_tsv, to_tsquery('english', ${ftsExpr})) DESC
+        LIMIT ${limit}
+      ` as unknown as Memory[];
     } catch {
       logger.debug({ query }, 'tsvector search failed — falling back to recency');
       // Fall through to recency-based search below
     }
   }
 
-  // No query or tsvector search failed — return by importance + recency
-  if (opts?.type && opts?.sourcePrefix && opts?.minImportance) {
-    return await sql`
-      SELECT * FROM memories
-      WHERE valid_until IS NULL AND type = ${opts.type}
-        AND source LIKE ${opts.sourcePrefix + ':%'} AND importance >= ${opts.minImportance}
-      ORDER BY importance DESC, created_at DESC LIMIT ${limit}
-    ` as unknown as Memory[];
-  } else if (opts?.type && opts?.sourcePrefix) {
-    return await sql`
-      SELECT * FROM memories
-      WHERE valid_until IS NULL AND type = ${opts.type}
-        AND source LIKE ${opts.sourcePrefix + ':%'}
-      ORDER BY importance DESC, created_at DESC LIMIT ${limit}
-    ` as unknown as Memory[];
-  } else if (opts?.type && opts?.minImportance) {
-    return await sql`
-      SELECT * FROM memories
-      WHERE valid_until IS NULL AND type = ${opts.type}
-        AND importance >= ${opts.minImportance}
-      ORDER BY importance DESC, created_at DESC LIMIT ${limit}
-    ` as unknown as Memory[];
-  } else if (opts?.sourcePrefix && opts?.minImportance) {
-    return await sql`
-      SELECT * FROM memories
-      WHERE valid_until IS NULL
-        AND source LIKE ${opts.sourcePrefix + ':%'} AND importance >= ${opts.minImportance}
-      ORDER BY importance DESC, created_at DESC LIMIT ${limit}
-    ` as unknown as Memory[];
-  } else if (opts?.type) {
-    return await sql`
-      SELECT * FROM memories
-      WHERE valid_until IS NULL AND type = ${opts.type}
-      ORDER BY importance DESC, created_at DESC LIMIT ${limit}
-    ` as unknown as Memory[];
-  } else if (opts?.sourcePrefix) {
-    return await sql`
-      SELECT * FROM memories
-      WHERE valid_until IS NULL AND source LIKE ${opts.sourcePrefix + ':%'}
-      ORDER BY importance DESC, created_at DESC LIMIT ${limit}
-    ` as unknown as Memory[];
-  } else if (opts?.minImportance) {
-    return await sql`
-      SELECT * FROM memories
-      WHERE valid_until IS NULL AND importance >= ${opts.minImportance}
-      ORDER BY importance DESC, created_at DESC LIMIT ${limit}
-    ` as unknown as Memory[];
-  }
-
+  // No query, empty FTS expression, or tsvector search failed — return by importance + recency
   return await sql`
     SELECT * FROM memories
-    WHERE valid_until IS NULL
+    WHERE ${whereClause}
     ORDER BY importance DESC, created_at DESC LIMIT ${limit}
   ` as unknown as Memory[];
 }
@@ -295,12 +198,29 @@ export async function touchMemory(sql: Sql, id: string): Promise<void> {
 
 /**
  * Supersede a memory (mark it as replaced by a newer one).
+ * Also cleans up entity junction rows and decrements the category count.
  */
 export async function supersedeMemory(sql: Sql, oldId: string, newId: string): Promise<void> {
+  // Get the old memory's type before superseding (needed for category count decrement)
+  const [oldMemory] = await sql`SELECT type FROM memories WHERE id = ${oldId}`;
+
   await sql`
     UPDATE memories SET valid_until = NOW(), superseded_by = ${newId}
     WHERE id = ${oldId}
   `;
+
+  // Clean up entity junction rows for the superseded memory
+  await sql`DELETE FROM memory_entities WHERE memory_id = ${oldId}`;
+
+  // Decrement category count for the superseded memory's type
+  if (oldMemory?.type) {
+    try {
+      await sql`
+        UPDATE memory_categories SET count = GREATEST(0, count - 1)
+        WHERE name = ${oldMemory.type as string}
+      `;
+    } catch { /* category may not exist — non-critical */ }
+  }
 }
 
 /**
@@ -343,13 +263,6 @@ export async function getRecentMemories(
 }
 
 // ── Vector operations ──
-
-/**
- * pgvector is always available — extension loaded in schema.
- */
-export async function hasVectorSupport(_sql: Sql): Promise<boolean> {
-  return true;
-}
 
 /**
  * Store an embedding for a memory.
@@ -417,11 +330,21 @@ async function hybridSearch(
 ): Promise<Memory[]> {
   try {
     const vec = pgvector.toSql(Array.from(queryEmbedding));
+    const ftsExpr = buildFtsExpression(ftsQuery);
+    if (!ftsExpr) {
+      // No usable keywords — fall back to pure vector search
+      return await sql`
+        SELECT * FROM memories
+        WHERE embedding IS NOT NULL AND valid_until IS NULL
+        ORDER BY embedding <=> ${vec}
+        LIMIT ${limit}
+      ` as unknown as Memory[];
+    }
     return await sql`
       WITH fts AS (
-        SELECT id, ROW_NUMBER() OVER (ORDER BY ts_rank(content_tsv, to_tsquery('english', ${ftsQuery.trim().split(/\s+/).map(w => w.replace(/[^a-zA-Z0-9]/g, '')).filter(Boolean).join(' | ')})) DESC) as rn
+        SELECT id, ROW_NUMBER() OVER (ORDER BY ts_rank(content_tsv, to_tsquery('english', ${ftsExpr})) DESC) as rn
         FROM memories
-        WHERE content_tsv @@ to_tsquery('english', ${ftsQuery.trim().split(/\s+/).map(w => w.replace(/[^a-zA-Z0-9]/g, '')).filter(Boolean).join(' | ')}) AND valid_until IS NULL
+        WHERE content_tsv @@ to_tsquery('english', ${ftsExpr}) AND valid_until IS NULL
         LIMIT 30
       ),
       vec AS (

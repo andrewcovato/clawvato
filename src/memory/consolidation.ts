@@ -18,7 +18,7 @@ import { logger } from '../logger.js';
 import { getConfig } from '../config.js';
 import { generateId } from '../db/index.js';
 import { contentSimilarity } from './extractor.js';
-import { deleteEmbedding, insertMemory, findDuplicates, type Memory } from './store.js';
+import { insertMemory, findDuplicates } from './store.js';
 
 // Memory consolidation tunables loaded from config (memory.*)
 
@@ -96,46 +96,168 @@ export async function consolidate(sql: Sql): Promise<ConsolidationResult> {
 }
 
 /**
- * Find and merge near-duplicate memories using tsvector-based candidate finding.
- * O(n × 5) instead of O(n²) — for each memory, find top 5 candidates and compare only those.
+ * Find and merge near-duplicate memories using batched pagination.
+ *
+ * Instead of loading ALL memories at once (O(N) memory, N sequential DB calls),
+ * processes in configurable batches using cursor-based pagination (created_at + id).
+ * Within each batch, does intra-batch Jaccard comparisons in-process (no DB calls),
+ * then uses tsvector to find cross-batch candidates. Supersede operations are batched
+ * into a single UPDATE per batch.
+ *
+ * At 5K memories with batch size 150: ~34 batches, ~34 paginated queries + ~34 batch updates
+ * vs. old approach: 1 huge SELECT + 5K sequential findDuplicates calls + 5K individual UPDATEs.
  */
 async function mergeDuplicates(sql: Sql): Promise<number> {
   let merged = 0;
   const superseded = new Set<string>();
   const config = getConfig();
+  const batchSize = config.memory.consolidationBatchSize;
+  const threshold = config.memory.mergeSimilarityThreshold;
 
-  // Get all valid memories ordered by importance (keep highest)
-  const memories = await sql`
-    SELECT id, type, content, importance, confidence FROM memories
-    WHERE valid_until IS NULL ORDER BY importance DESC
-  ` as unknown as Array<{ id: string; type: string; content: string; importance: number; confidence: number }>;
+  // Cursor state for keyset pagination (avoids OFFSET performance degradation)
+  let cursorCreatedAt: string | null = null;
+  let cursorId: string | null = null;
+  let hasMore = true;
 
-  for (const mem of memories) {
-    if (superseded.has(mem.id)) continue;
+  while (hasMore) {
+    // ── Fetch next batch using keyset pagination ──
+    // Order by importance DESC ensures higher-importance memories are processed first
+    // within each batch. We paginate by (created_at, id) for stable cursors.
+    let batch: Array<{ id: string; type: string; content: string; importance: number; confidence: number; created_at: string }>;
 
-    // Use tsvector to find candidate duplicates (already exists, returns top 5)
-    const candidates = await findDuplicates(sql, mem.content, mem.type);
+    if (cursorCreatedAt === null) {
+      batch = await sql`
+        SELECT id, type, content, importance, confidence, created_at FROM memories
+        WHERE valid_until IS NULL
+        ORDER BY created_at ASC, id ASC
+        LIMIT ${batchSize}
+      ` as unknown as typeof batch;
+    } else {
+      batch = await sql`
+        SELECT id, type, content, importance, confidence, created_at FROM memories
+        WHERE valid_until IS NULL
+          AND (created_at, id) > (${cursorCreatedAt}, ${cursorId})
+        ORDER BY created_at ASC, id ASC
+        LIMIT ${batchSize}
+      ` as unknown as typeof batch;
+    }
 
-    for (const candidate of candidates) {
-      if (candidate.id === mem.id || superseded.has(candidate.id)) continue;
+    if (batch.length === 0) break;
+    hasMore = batch.length === batchSize;
 
-      const similarity = contentSimilarity(mem.content, candidate.content);
-      if (similarity >= config.memory.mergeSimilarityThreshold) {
-        // mem has higher importance (ORDER BY DESC), supersede candidate
-        await sql`
-          UPDATE memories SET valid_until = NOW(), superseded_by = ${mem.id}
-          WHERE id = ${candidate.id}
-        `;
-        await deleteEmbedding(sql, candidate.id);
-        superseded.add(candidate.id);
-        merged++;
+    // Advance cursor to last row in batch
+    const lastRow = batch[batch.length - 1];
+    cursorCreatedAt = lastRow.created_at;
+    cursorId = lastRow.id;
 
-        logger.debug(
-          { kept: mem.id, superseded: candidate.id, similarity: similarity.toFixed(2), type: mem.type },
-          'Merged duplicate memory',
-        );
+    // Filter out already-superseded from this batch
+    const activeBatch = batch.filter(m => !superseded.has(m.id));
+    if (activeBatch.length === 0) continue;
+
+    // ── Intra-batch comparisons (pure in-process, no DB calls) ──
+    // Sort by importance DESC so the higher-importance memory always wins
+    activeBatch.sort((a, b) => b.importance - a.importance);
+    const toSupersede: Array<{ candidateId: string; keeperId: string }> = [];
+
+    for (let i = 0; i < activeBatch.length; i++) {
+      const mem = activeBatch[i];
+      if (superseded.has(mem.id)) continue;
+
+      for (let j = i + 1; j < activeBatch.length; j++) {
+        const other = activeBatch[j];
+        if (superseded.has(other.id)) continue;
+        if (mem.type !== other.type) continue;
+
+        const similarity = contentSimilarity(mem.content, other.content);
+        if (similarity >= threshold) {
+          superseded.add(other.id);
+          toSupersede.push({ candidateId: other.id, keeperId: mem.id });
+          logger.debug(
+            { kept: mem.id, superseded: other.id, similarity: similarity.toFixed(2), type: mem.type },
+            'Merged duplicate memory (intra-batch)',
+          );
+        }
       }
     }
+
+    // ── Cross-batch: use tsvector to find candidates from earlier batches ──
+    // Only check memories that survived intra-batch dedup
+    const survivors = activeBatch.filter(m => !superseded.has(m.id));
+    for (const mem of survivors) {
+      const candidates = await findDuplicates(sql, mem.content, mem.type);
+
+      for (const candidate of candidates) {
+        if (candidate.id === mem.id || superseded.has(candidate.id)) continue;
+
+        const similarity = contentSimilarity(mem.content, candidate.content);
+        if (similarity >= threshold) {
+          // Keep the one with higher importance
+          if (mem.importance >= candidate.importance) {
+            superseded.add(candidate.id);
+            toSupersede.push({ candidateId: candidate.id, keeperId: mem.id });
+          } else {
+            superseded.add(mem.id);
+            toSupersede.push({ candidateId: mem.id, keeperId: candidate.id });
+          }
+          logger.debug(
+            { kept: mem.id, superseded: candidate.id, similarity: similarity.toFixed(2), type: mem.type },
+            'Merged duplicate memory (cross-batch)',
+          );
+        }
+      }
+    }
+
+    // ── Batch supersede: single UPDATE for all merges in this batch ──
+    if (toSupersede.length > 0) {
+      // Group by keeper for efficient batched updates
+      const byKeeper = new Map<string, string[]>();
+      for (const { candidateId, keeperId } of toSupersede) {
+        const existing = byKeeper.get(keeperId);
+        if (existing) {
+          existing.push(candidateId);
+        } else {
+          byKeeper.set(keeperId, [candidateId]);
+        }
+      }
+
+      for (const [keeperId, candidateIds] of byKeeper) {
+        // Decrement category counts for superseded memories before marking them
+        try {
+          await sql`
+            UPDATE memory_categories SET count = GREATEST(0, count - sub.cnt)
+            FROM (
+              SELECT type, COUNT(*)::int AS cnt FROM memories
+              WHERE id = ANY(${candidateIds}) AND valid_until IS NULL
+              GROUP BY type
+            ) sub
+            WHERE memory_categories.name = sub.type
+          `;
+        } catch { /* non-critical */ }
+
+        // Batch soft-delete all candidates superseded by this keeper
+        await sql`
+          UPDATE memories
+          SET valid_until = NOW(), superseded_by = ${keeperId}
+          WHERE id = ANY(${candidateIds})
+            AND valid_until IS NULL
+        `;
+        // Batch clear embeddings
+        await sql`
+          UPDATE memories
+          SET embedding = NULL
+          WHERE id = ANY(${candidateIds})
+        `;
+        // Clean up entity junction rows for superseded memories
+        await sql`DELETE FROM memory_entities WHERE memory_id = ANY(${candidateIds})`;
+      }
+
+      merged += toSupersede.length;
+    }
+
+    logger.debug(
+      { batchSize: batch.length, batchMerged: toSupersede.length, totalMerged: merged },
+      'Consolidation batch processed',
+    );
   }
 
   return merged;
@@ -190,21 +312,45 @@ async function archiveMemories(sql: Sql): Promise<number> {
   const config = getConfig();
   const exemptCategories = config.memory.archiveExemptCategories;
 
-  const result = await sql`
-    UPDATE memories
-    SET valid_until = NOW()
+  // Collect IDs of memories about to be archived (for entity cleanup + category decrement)
+  const toArchive = await sql`
+    SELECT id, type FROM memories
     WHERE valid_until IS NULL
       AND importance <= ${config.memory.archiveThreshold}
       AND type != ALL(${exemptCategories})
+  ` as unknown as Array<{ id: string; type: string }>;
+
+  if (toArchive.length === 0) return 0;
+
+  const archiveIds = toArchive.map(m => m.id);
+
+  // Decrement category counts before archiving
+  try {
+    await sql`
+      UPDATE memory_categories SET count = GREATEST(0, count - sub.cnt)
+      FROM (
+        SELECT type, COUNT(*)::int AS cnt FROM memories
+        WHERE id = ANY(${archiveIds}) AND valid_until IS NULL
+        GROUP BY type
+      ) sub
+      WHERE memory_categories.name = sub.type
+    `;
+  } catch { /* non-critical */ }
+
+  // Archive the memories
+  await sql`
+    UPDATE memories
+    SET valid_until = NOW()
+    WHERE id = ANY(${archiveIds})
+      AND valid_until IS NULL
   `;
 
-  const count = Number(result.count ?? 0);
+  // Clean up entity junction rows for archived memories
+  await sql`DELETE FROM memory_entities WHERE memory_id = ANY(${archiveIds})`;
 
-  if (count > 0) {
-    logger.info({ archived: count }, 'Archived low-importance memories');
-  }
+  logger.info({ archived: toArchive.length }, 'Archived low-importance memories');
 
-  return count;
+  return toArchive.length;
 }
 
 /**
