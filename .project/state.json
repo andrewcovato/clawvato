@@ -2,16 +2,16 @@
   "project": {
     "name": "Clawvato",
     "description": "Business operating system for solo technical founders — memory-powered AI agent across Slack, email, calendar, Drive, meetings, and Claude Code",
-    "version": "0.12.0",
+    "version": "0.13.0",
     "status": "active",
-    "phase": "proactive-intelligence",
+    "phase": "brain-complete",
     "startDate": "2026-03-06",
     "adoptedDate": "2026-03-07"
   },
   "phases": {
     "1": { "name": "Build the Agent", "status": "complete", "description": "Reactive agent that responds when asked. Slack, memory, Google, Fireflies, sweeps, tasks." },
-    "2": { "name": "Build the Brain", "status": "in_progress", "description": "Memory durability — scoping, reranking, retrieval quality. Foundation for everything." },
-    "3": { "name": "Build the Nervous System", "status": "planned", "description": "Scheduler rebuild, webhook ingest, real-time memory. The agent acts on its own." },
+    "2": { "name": "Build the Brain", "status": "complete", "description": "Smart memory plugin: embeddings, hybrid search, reranking, dedup, clustering, journaling, reflection. Agent-agnostic." },
+    "3": { "name": "Build the Nervous System", "status": "planned", "description": "Agent-side scheduler rebuild, webhook ingest, real-time triggers. The agent acts on its own." },
     "4": { "name": "Build the Judgment", "status": "planned", "description": "Autonomous workflows — CRM, project tracking, proactive surfacing. Good autonomous decisions." }
   },
   "tracks": {
@@ -19,54 +19,57 @@
     "B": { "name": "Slack MCP + Agent Core", "status": "complete", "completedDate": "2026-03-17" },
     "C": { "name": "Google Workspace", "status": "complete", "completedDate": "2026-03-19" },
     "D": { "name": "Memory + Embeddings", "status": "complete", "completedDate": "2026-03-19" },
-    "E": { "name": "Proactive Intelligence", "status": "in_progress", "notes": "Sweep pipeline working. Now evolving into Phase 2 (scheduler + ingest + autonomous workflows)." },
+    "E": { "name": "Proactive Intelligence", "status": "in_progress", "notes": "Sweep pipeline working. Evolving into Phase 3 (agent scheduler + ingest)." },
     "F": { "name": "Security Hardening", "status": "partial", "notes": "Training wheels removed. Pre-tool security checks + output sanitization remain." },
-    "G": { "name": "GitHub + Self-Development", "status": "deferred", "notes": "Designed (three-gate safety model). Deferred until Phase 3/4 stable. Design at docs/DESIGN_TRACK_G_SELF_DEV.md." },
-    "H": { "name": "Plugin Adapter + CC Bridge", "status": "complete", "completedDate": "2026-03-23", "notes": "HTTP memory plugin deployed on Railway. In-tree MCP server removed (Session 23)." },
+    "G": { "name": "GitHub + Self-Development", "status": "deferred", "notes": "Designed (three-gate safety model). Deferred until Phase 3/4 stable." },
+    "H": { "name": "Smart Plugin Brain", "status": "complete", "completedDate": "2026-03-24", "notes": "Full intelligence migrated: embeddings, hybrid search, reranking, dedup, entity-hop, clustering, scheduler, journaling, reflection." },
     "I": { "name": "Fireflies.ai", "status": "complete", "completedDate": "2026-03-18" },
-    "J": { "name": "Hybrid Architecture", "status": "superseded", "notes": "Replaced by CC-Native Engine. Hybrid code preserved on main branch as fallback." },
+    "J": { "name": "Hybrid Architecture", "status": "superseded", "notes": "Replaced by CC-Native Engine. Hybrid code preserved on main as fallback." },
     "K": { "name": "Postgres Migration", "status": "complete", "completedDate": "2026-03-19" },
-    "L": { "name": "Autonomous Task Queue", "status": "complete", "completedDate": "2026-03-20", "notes": "Task CRUD + channel manager complete. Standalone scheduler broken — rebuild in S11." },
-    "M": { "name": "Background Sweeps", "status": "complete", "completedDate": "2026-03-23", "notes": "Pipeline working. Will become a recurring task in S12 (sweep consolidation)." },
+    "L": { "name": "Autonomous Task Queue", "status": "complete", "completedDate": "2026-03-20", "notes": "Task CRUD + channel manager complete. Agent-side scheduler needs rebuild." },
+    "M": { "name": "Background Sweeps", "status": "complete", "completedDate": "2026-03-23" },
     "N": { "name": "Context Planner", "status": "superseded", "notes": "Superseded by CC-Native Engine." },
-    "O": { "name": "CC-Native Engine", "status": "deployed", "notes": "Claude Code as core engine via Channels. Strategic decision (Session 23): double down on CC-native, don't abstract for model-agnosticism." }
+    "O": { "name": "CC-Native Engine", "status": "deployed", "notes": "Claude Code as core engine via Channels. Double down on CC-native." },
+    "P": { "name": "Smart Plugin Migration", "status": "complete", "completedDate": "2026-03-24", "notes": "5-phase migration: embeddings → hybrid search + reranking → write-time dedup → entity-hop + clustering → memory scheduler + journaling. Design: docs/DESIGN_SMART_PLUGIN_MIGRATION.md" }
   },
   "infrastructure": {
-    "local": "macOS, .mcp.json points to Railway HTTP memory plugin",
+    "local": "macOS, .mcp.json runs plugin as local stdio process with Railway DB URL",
     "cloud": "Railway (Growth By Science workspace)",
     "railwayProject": "99ecf42e-5142-442c-a79a-2f6fd0864ecf",
-    "railwayServices": ["clawvato (agent)", "clawvato-memory (HTTP MCP server)", "Postgres (managed DB)"],
-    "database": "Railway managed Postgres (automatic backups, pgvector)",
+    "railwayServices": ["clawvato (agent)", "clawvato-memory (smart brain)", "Postgres (managed DB)"],
+    "database": "Railway managed Postgres (automatic backups, pgvector, tsvector)",
     "taskChannel": "C0AN5J0LCP3 (#clawvato-tasks)",
-    "dataVolume": "/data (Claude CLI auth + gws config + debug workspaces)",
+    "dataVolume": "/data (Claude CLI auth + gws config)",
     "deployMethod": "GitHub auto-deploy — clawvato from cc-native-engine branch, clawvato-memory from main branch",
     "maxPlan": "Claude Max subscription — CC-native engine costs $0",
-    "memoryPlugin": "github.com/andrewcovato/clawvato-memory — deployed as HTTP MCP server on Railway. Public: clawvato-memory-production.up.railway.app/mcp. Internal: clawvato-memory.railway.internal:8080/mcp",
-    "memoryPluginAuth": "Bearer token via MCP_AUTH_TOKEN env var on both Railway services"
+    "memoryPlugin": "github.com/andrewcovato/clawvato-memory — smart brain on Railway. Public: clawvato-memory-production.up.railway.app/mcp + /ingest + /health",
+    "memoryPluginAuth": "Bearer token via MCP_AUTH_TOKEN env var",
+    "memoryPluginModels": "nomic-embed-text-v1.5 (embeddings, 384d), ms-marco-MiniLM-L-6-v2 (reranking), HDBSCAN (clustering)"
   },
   "metrics": {
     "testFiles": 23,
-    "taskStoreTests": 26,
-    "testsPassing": "requires DATABASE_URL",
-    "memoriesStored": "125+",
-    "entityTags": 693,
-    "pluginTestsPassing": "10/10 CRUD cycle + HTTP transport verified"
+    "memoriesStored": "156 active (post-cleanup)",
+    "memoryClusters": 10,
+    "embeddingCoverage": "99%",
+    "reflections": 5,
+    "pluginVersion": "0.5.0",
+    "pluginTools": 18,
+    "pluginModels": 2,
+    "pluginSchedulerJobs": 3
   },
   "currentSprint": {
-    "id": "S11",
-    "name": "Scheduler Rebuild + Memory Intelligence",
+    "id": "S25",
+    "name": "Nervous System — Agent Scheduler + Triggers",
     "goals": [
-      "S11a: Plugin scheduler tools (get_due_tasks, mark_running/completed/failed)",
-      "S11b: Sidecar rebuild — HTTP plugin + Slack, no direct DB",
-      "S11c: Validation — ad-hoc task creation + execution end-to-end",
-      "S11d: Sleep-time consolidation (18% accuracy gain)",
-      "S11e: Reflection synthesis (higher-level inferences)",
-      "S11f: Temporal decay scoring",
-      "S11g: Explicit relationship extraction (subject/predicate/object triples)",
-      "S11h: Inferred relationships via sleep-time compute"
+      "Agent-side task scheduler rebuild (get_due_tasks, mark_running/completed/failed)",
+      "Sidecar rebuild against HTTP plugin (no direct DB)",
+      "End-to-end task validation (ad-hoc creation → execution)",
+      "/handoff + /continue skill for session continuity",
+      "Explicit relationship extraction (subject/predicate/object triples)",
+      "Louvain community detection on entity co-occurrence graph"
     ],
-    "designDoc": "TBD — planning this session",
-    "progress": "0% — planning phase"
+    "designDoc": "TBD",
+    "progress": "0% — scoping"
   },
   "completedSprints": {
     "S10": {
@@ -80,47 +83,75 @@
         "WS5: Memory instructions — comprehensive prompt + XML-tagged context",
         "Bonus: Entity-hop traversal, domain taxonomy, scoping refactor"
       ]
+    },
+    "S24": {
+      "name": "Smart Plugin Migration",
+      "completedDate": "2026-03-24",
+      "workstreams": [
+        "Phase 0: Module restructure (798→142 line entrypoint)",
+        "Phase 1: Embeddings at write time (nomic-embed-text-v1.5)",
+        "Phase 2: Hybrid search + RRF + cross-encoder reranking",
+        "Phase 3: Three-tier write-time dedup (heuristic → cross-encoder → Haiku)",
+        "Phase 4: Entity-hop traversal in retrieve pipeline",
+        "Phase 5: Memory scheduler (consolidation, reflection, decay)",
+        "Conversation journaling (ingest_conversation + /ingest + PostToolUse hook)",
+        "HDBSCAN semantic clustering (10 clusters discovered, auto-labeled)",
+        "Cluster expansion in retrieval pipeline",
+        "Agent wiring (retire agent-side memory stack in production)",
+        "Merged cc-native-engine → main (43 commits)"
+      ]
     }
   },
   "upcomingSprints": {
-    "S12": {
+    "S26": {
       "name": "Real-Time Ingest",
       "goals": [
-        "S12a: Gmail webhook (Google Pub/Sub → sidecar → plugin)",
-        "S12b: Calendar push notifications",
-        "S12c: Sweep consolidation — sweeps become a recurring task"
+        "Gmail webhook (Google Pub/Sub → sidecar → plugin)",
+        "Calendar push notifications",
+        "Sweep consolidation — sweeps become a recurring task"
       ],
-      "dependsOn": "S11"
+      "dependsOn": "S25"
     },
-    "S13": {
+    "S27": {
       "name": "Autonomous Workflows",
       "goals": [
         "First autonomous workflows created as ad-hoc tasks",
         "Validation: system surfaces things owner didn't ask about"
       ],
-      "dependsOn": "S12"
+      "dependsOn": "S26"
     }
   },
   "lastSession": {
     "number": 24,
     "date": "2026-03-24",
-    "type": "Plugin scoping update + merge to main + S11 planning",
-    "keyDecisions": []
+    "type": "Smart Plugin Migration — massive session",
+    "keyDecisions": [
+      "Move ALL memory intelligence from agent into plugin (smart brain)",
+      "Plugin handles: embeddings, hybrid search, reranking, dedup, clustering, scheduler, journaling",
+      "Agent retired from memory operations in production (code preserved for hybrid fallback)",
+      "Three-tier dedup: heuristic → cross-encoder → Haiku (model-agnostic when no API key)",
+      "HDBSCAN semantic clustering (auto-discovers memory groups)",
+      "Conversation journaling via PostToolUse hook → /ingest REST endpoint",
+      "Two schedulers: memory (plugin) and agent-facing (agent)",
+      "Working context deprecated — briefs + journaling replace it",
+      "Cluster expansion added to retrieval pipeline (Stage 3.5)",
+      "Merged cc-native-engine → main"
+    ]
   },
   "immediateBacklog": [
-    { "id": "SCHEDULER-PLUGIN-TOOLS", "title": "Add scheduler tools to plugin (get_due_tasks, mark_running/completed/failed)." },
+    { "id": "HANDOFF-SKILL", "title": "/handoff + /continue slash commands for session continuity" },
+    { "id": "AGENT-SCHEDULER-REBUILD", "title": "Agent-side task scheduler (get_due_tasks, mark_running/completed/failed)" },
     { "id": "SIDECAR-REBUILD", "title": "Rebuild task-scheduler-standalone.ts against HTTP plugin. No direct DB." },
-    { "id": "SLEEP-TIME-CONSOLIDATION", "title": "Sleep-time consolidation: scheduled idle-time review + dedup + synthesis." }
+    { "id": "LOUVAIN-COMMUNITY", "title": "Louvain community detection on entity co-occurrence graph (complementary to HDBSCAN)" },
+    { "id": "RELATIONSHIP-EXTRACTION", "title": "Explicit relationship extraction (subject/predicate/object triples)" }
   ],
   "backlog": [
     { "id": "GMAIL-WEBHOOK", "priority": "high", "title": "Gmail webhook ingest (Google Pub/Sub → sidecar → plugin)" },
     { "id": "CALENDAR-PUSH", "priority": "high", "title": "Calendar push notification ingest" },
-    { "id": "SWEEP-CONSOLIDATION", "priority": "high", "title": "Sweeps become a recurring task (no standalone pipeline)" },
+    { "id": "SWEEP-CONSOLIDATION", "priority": "high", "title": "Sweeps become a recurring task" },
+    { "id": "PERF-OPTIMIZATION", "priority": "medium", "title": "Performance optimization pass (connection pooling, batch operations, MCP overhead)" },
     { "id": "GITHUB-PHASE1", "priority": "medium", "title": "Track G Phase 1: read-only GitHub access" },
-    { "id": "GITHUB-PHASE2", "priority": "medium", "title": "Track G Phase 2: branch + PR creation (self-development, owner-gated)" },
-    { "id": "MEMORY-TIERED-BUDGET", "priority": "medium", "title": "Tiered token budgets for retrieval" },
     { "id": "MEMORY-SUMMARIZATION", "priority": "medium", "title": "Hierarchical memory summarization (critical at 50K+)" },
-    { "id": "MEMORY-BETTER-EMBEDDINGS", "priority": "medium", "title": "Upgrade embedding model (evaluate at 10K+)" },
     { "id": "SESSION-TOPOLOGY", "priority": "medium", "title": "Session topology (design at 50+ msgs/day, 5+ topics)" },
     { "id": "FINANCE-001", "priority": "low", "title": "Finance integration" },
     { "id": "OBSIDIAN-001", "priority": "low", "title": "Obsidian integration — .md export" }
@@ -139,24 +170,27 @@
     "Always use soft-delete (valid_until = NOW()) for memories, never hard DELETE",
     "Hard DELETE can dangle superseded_by FK references",
     "CC instances won't know about MCP tools unless system prompt teaches them",
-    "Don't store clawvato dev memories to the shared brain until project scoping is implemented",
-    "Memory retrieval quality degrades at scale — scoping is the #1 lever, then reranking, then summarization",
+    "Memory intelligence belongs in the plugin, not the agent — the brain is agent-agnostic",
+    "postgres.js tagged templates silently drop ::vector cast on INSERT — use INSERT then UPDATE for embedding",
     "Haiku max output 8192 tokens — use Sonnet for extraction",
-    "Zod schema defaults override config/default.json — must update BOTH",
     "MCP config type must be 'http' not 'url' — CC schema validation rejects 'url'",
     "MCP SDK Server.connect() is 1:1 — for HTTP concurrency, create new Server+Transport per request",
-    "Railway CLI source.repo doesn't trigger GitHub webhook — connect repo through dashboard",
     "Don't impose artificial caps on query results — sensible defaults, no hard maximums",
     "CC session-scoped scheduling (/loop, CronCreate) dies on restart — own the scheduler",
-    "Sidecar marks running, CC marks completed — never mark complete before execution",
-    "Tasks and workflows are data, not code — new capabilities shouldn't require a deploy"
+    "Two schedulers: memory (plugin, self-maintenance) and agent (user-facing tasks, needs Slack/Google)",
+    "Tasks and workflows are data, not code — new capabilities shouldn't require a deploy",
+    "Journal hook uses /ingest REST endpoint (not MCP) — simpler for fire-and-forget background calls",
+    "HDBSCAN minClusterSize scales with corpus: max(3, n/50)",
+    "Local .mcp.json runs plugin as stdio process — MCP calls go to local Node, not Railway"
   ],
   "designDocs": [
     "docs/DESIGN_CC_NATIVE.md",
     "docs/DESIGN_REMOTE_MEMORY_PLUGIN.md",
     "docs/DESIGN_TRACK_G_SELF_DEV.md",
     "docs/DESIGN_WORKING_CONTEXT_V2.md",
-    "docs/DESIGN_PHASE2_PROACTIVE_INTELLIGENCE.md"
+    "docs/DESIGN_PHASE2_PROACTIVE_INTELLIGENCE.md",
+    "docs/DESIGN_S10_MEMORY_EXCELLENCE.md",
+    "docs/DESIGN_SMART_PLUGIN_MIGRATION.md"
   ],
-  "lastUpdated": "2026-03-23"
+  "lastUpdated": "2026-03-24"
 }

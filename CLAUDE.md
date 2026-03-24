@@ -1,7 +1,7 @@
 # CLAUDE.md — Clawvato Project Guide
 
 ## Project Overview
-Clawvato is an always-on personal AI agent deployed on Railway. It acts as a "chief of staff" — managing Slack, email, calendar, Drive, and meetings on behalf of its owner. Uses a **CC-native architecture**: Claude Code runs as the core engine via Channels, with Slack messages pushed in via a Channel MCP server. CC handles all tool orchestration, context management, and reasoning natively (Opus, $0 on Max plan). A legacy hybrid architecture (Haiku router → fast/medium/deep paths) exists on the `main` branch as a fallback.
+Clawvato is a business operating system for solo technical founders — a memory-powered AI agent across Slack, email, calendar, Drive, meetings, and Claude Code. Deployed on Railway using a **CC-native architecture**: Claude Code runs as the core engine via Channels, with a **smart memory plugin** (clawvato-memory) serving as the intelligent brain. The plugin handles embeddings, hybrid search, cross-encoder reranking, write-time dedup, semantic clustering, background consolidation/reflection, and conversation journaling. The agent is a thin executor; the brain is agent-agnostic. A legacy hybrid architecture exists on the `main` branch as a fallback.
 
 ## Quick Reference
 
@@ -25,16 +25,18 @@ Slack message arrives
   → 👀 reaction (code-enforced)
   → Channel event pushed into Claude Code session
   → CC processes natively (Opus, $0 on Max plan)
-    ├── Memory MCP: search, store, working context, tasks
+    ├── Memory Plugin (smart brain): search, store, retrieve, ingest, cluster, reflect
     ├── Google: gws CLI via Bash (gmail, calendar, drive)
-    ├── Fireflies: tools/fireflies.ts CLI via Bash
+    ├── Fireflies: native MCP tools (search, transcript, summary)
     └── Native CC tools: Read, Write, Bash, Glob, Grep, Agent, WebSearch
   → Response via slack_reply tool
   → 🧠 reaction lifecycle (prompt-driven)
+  → Background: journal hook accumulates → /ingest → plugin extracts facts
 
 Supervisor: expect + restart loop (handles PTY + trust prompt)
 Task scheduler: standalone sidecar (posts due tasks to Slack)
-Sweeps: 4 parallel collectors → Opus synthesis → Sonnet extraction → memory
+Plugin scheduler: consolidation (6h), reflection (12h), clustering (12h), decay
+Sweeps: 4 parallel collectors → Opus synthesis → Sonnet extraction → plugin
 
 Session lifecycle:
   Active → idle timeout → verified handoff (subagent test) → exit
@@ -75,13 +77,14 @@ src/
     schema.pg.sql  # Postgres schema (tsvector, pgvector, GIN/HNSW indexes)
   mcp/             # MCP servers
     slack/server.ts  # Slack tools (search, post, history)
-  memory/          # Memory system (crown jewel)
-    store.ts       # CRUD for memories table (unified — no people table)
-    retriever.ts   # Token-budgeted context retrieval (tsvector + pgvector hybrid)
-    extractor.ts   # Haiku fact extraction from conversations
-    embeddings.ts  # all-MiniLM-L6-v2 vector embeddings
-    reflection.ts  # Synthesized insights from memory accumulation
-    consolidation.ts # Duplicate merge, decay, archival
+  memory/          # Memory system (RETIRED in production — plugin handles all memory)
+    store.ts       # CRUD for memories table (hybrid fallback / local dev only)
+    retriever.ts   # Token-budgeted context retrieval (hybrid fallback only)
+    extractor.ts   # Haiku fact extraction (hybrid fallback only)
+    embeddings.ts  # nomic-embed-text-v1.5 vector embeddings (hybrid fallback only)
+    reranker.ts    # Cross-encoder reranking (hybrid fallback only)
+    reflection.ts  # Synthesized insights (hybrid fallback only)
+    consolidation.ts # Duplicate merge, decay (hybrid fallback only)
   tasks/           # Autonomous task queue
     store.ts       # CRUD + scheduler operations (async, Postgres)
     tools.ts       # Fast-path tools: list/create/update/delete/sync_tasks
@@ -266,13 +269,38 @@ The deep path spawns `claude --print --verbose --output-format stream-json` and 
 - `{"type":"result","result":"..."}` → final response
 - Tool names mapped to descriptions: "Searching Gmail...", "Reading meeting transcript..."
 
-### Memory MCP Plugin
-Memory is served by the `clawvato-memory` HTTP MCP plugin deployed on Railway. All CC instances (local, cloud, deep-path subprocess) connect via URL + bearer token. Config is generated at runtime by the entrypoint script or via `.claude/settings.local.json`.
+### Memory Plugin (Smart Brain)
+Memory is served by `clawvato-memory` — a smart HTTP MCP server on Railway with embedded ML models. All CC instances connect via URL + bearer token or local stdio.
 
-### Context Assembly (`context.ts`)
-Both paths share the same assembled context:
+**Plugin capabilities** (server-side, agent-agnostic):
+- Embeddings: nomic-embed-text-v1.5 (384d Matryoshka), pre-warmed on startup
+- Hybrid search: tsvector + pgvector + Reciprocal Rank Fusion (RRF)
+- Cross-encoder reranking: ms-marco-MiniLM-L-6-v2 (local, $0)
+- Write-time dedup: 3-tier (heuristic → cross-encoder → Haiku LLM)
+- Entity-hop traversal: discovers connected memories through shared entities
+- Semantic clustering: HDBSCAN (auto-discovers groups, labels via Haiku)
+- Cluster expansion: same-cluster memories pulled into retrieval candidates
+- Soft-signal boosting: domain 1.3x, surface 1.1x, importance 1.2x
+- Background scheduler: consolidation (6h), reflection (12h), clustering (12h), decay, backfill
+- Conversation journaling: /ingest REST endpoint for server-side fact extraction
+
+**Plugin MCP tools**: store_fact, store_facts, search_memory, retrieve_context, retire_memory, ingest_conversation, embed_batch, run_consolidation, run_reflection, run_clustering, get_memory_stats, get_cluster_stats, update_brief, get_briefs, update_handoff, get_handoff, update_working_context (deprecated), list_working_contexts (deprecated)
+
+**Retrieve pipeline** (7 stages): entity lookup → entity-hop → hybrid search (RRF) → cluster expansion → cross-encoder rerank → soft-signal boost → token budget
+
+**Plugin repo**: github.com/andrewcovato/clawvato-memory (auto-deploy from main to Railway)
+
+### Context in CC-Native Mode
+CC-native does NOT use `context.ts`. CC reads context natively:
+- Slack messages arrive as channel events (short-term)
+- CC calls `retrieve_context` on the plugin for long-term memory (smart brain)
+- CC calls `slack_get_history` for catch-up on restart
+- Background journaling hook extracts facts to the brain automatically
+
+### Context Assembly (`context.ts`) — Hybrid Fallback Only
+Used only by the legacy hybrid agent (fast-path, deep-path):
 - Working context from `agent_state` table (1000 token budget)
-- Long-term memory via `retrieveContext()` (1500 token budget)
+- Long-term memory via `retrieveContext()` (1500 token budget) — direct DB, not plugin
 - Conversation history from Slack API (8000 token budget)
 - New message
 
@@ -319,30 +347,38 @@ Supports `LOG_DESTINATION=stderr` for MCP server mode.
 | `sweeps.drive.maxFiles` | 500 | Max Drive files per sweep |
 | `sweeps.fireflies.maxMeetings` | 100 | Max meetings per sweep |
 
-### Three Memory Tiers
-- **Working context** = Scratch pad in `agent_state` (1000 tokens, auto-archives after 14 days)
-- **Short-term** = Slack message history (last 50 messages, 8000 tokens)
-- **Long-term** = Postgres (extracted facts via hybrid tsvector + pgvector search, 1500 tokens)
+### Memory Architecture
+- **Slack conversation** = CC reads via channel events + `slack_get_history`. NOT a memory tier — it's a tool.
+- **Long-term memory** = Plugin brain (facts with embeddings, hybrid search, clusters, reflections). The single source of truth.
+- **Session continuity** = Briefs (cross-surface awareness) + handoffs (same-surface resume) via plugin.
+- **Working context** = DEPRECATED. Briefs + journaling replace it. Tools kept for backward compatibility.
 
-### Memory Extraction
-After each interaction:
-- Owner's Slack message → Haiku extraction → store facts
-- Deep path response → Haiku extraction → store synthesized facts
-- SDK can also call `store_fact` via MCP during execution
+### Memory Write Paths
+- **Manual**: CC calls `store_fact` for high-value observations (decisions, commitments, relationships)
+- **Journaling**: PostToolUse hook (`scripts/journal-hook.sh`) accumulates tool summaries → flushes every 20 calls to plugin `/ingest` → Haiku extracts facts → embed + dedup + store. Background, non-blocking.
+- **Sweeps**: 4 collectors (Slack, Gmail, Drive, Fireflies) → Opus synthesis → extraction → plugin
+- **Reflection**: Plugin scheduler generates higher-level insights from accumulated facts (every 12h)
+
+### Two Schedulers
+- **Memory scheduler (plugin)**: consolidation, reflection, clustering, decay, embedding backfill. Database self-maintenance. No Slack, no user interaction.
+- **Agent scheduler (agent-side)**: user-facing tasks, briefs, emails, webhooks. Needs Slack + Google + reasoning. Swappable with agent framework.
 
 ## Project Phases
 - **Phase 1** ✅: Build the Agent — reactive, responds when asked (Tracks A-D, I-O)
-- **Phase 2** 🔶: Build the Brain — memory durability (scoping, reranking, retrieval quality)
-- **Phase 3** ⬜: Build the Nervous System — scheduler rebuild, webhook ingest, real-time memory
+- **Phase 2** ✅: Build the Brain — smart plugin: embeddings, search, reranking, dedup, clustering, journaling, reflection
+- **Phase 3** ⬜: Build the Nervous System — agent scheduler rebuild, webhook ingest, real-time triggers
 - **Phase 4** ⬜: Build the Judgment — autonomous workflows, proactive surfacing
 
-### Architecture: Plugin as Kernel
+### Architecture: Smart Brain + Thin Executor
 ```
-Plugin (always-on Railway service):  state, facts, tasks, scheduler tools, ingest endpoints
-Sidecar (always-on, lightweight):    polls plugin for due tasks, posts to Slack, receives webhooks
-CC session (on-demand, from Slack):  executes tasks, responds to user, writes to plugin
+Plugin (smart brain, always-on):  embeddings, search, reranking, dedup, clustering, scheduler,
+                                   reflection, journaling, facts, briefs, handoffs
+Sidecar (lightweight, always-on): polls plugin for due tasks, posts to Slack
+CC session (thin executor):       reads Slack, calls plugin tools, reasons, acts
+Journal hook (background):        accumulates tool calls → /ingest → plugin extracts facts
 ```
-Plugin is the kernel. CC is the process. Slack is the IPC. Design: `docs/DESIGN_PHASE2_PROACTIVE_INTELLIGENCE.md`
+Plugin is the brain. CC is the executor. Slack is the inbox. Journaling is the background scribe.
+Design: `docs/DESIGN_PHASE2_PROACTIVE_INTELLIGENCE.md`, `docs/DESIGN_SMART_PLUGIN_MIGRATION.md`
 
 ## Build Tracks
 - **Track A** ✅: Foundation — DB, config, security, CLI, hooks, tests
@@ -352,7 +388,7 @@ Plugin is the kernel. CC is the process. Slack is the IPC. Design: `docs/DESIGN_
 - **Track E** 🔶: Proactive Intelligence — sweeps working, evolving into Phase 3 (scheduler + ingest)
 - **Track F** 🔶: Security — pre-tool checks + output sanitization active, training wheels removed
 - **Track G** ⏸️: GitHub + Self-Development — designed, deferred until Phase 3/4 stable
-- **Track H** ✅: Plugin Adapter — HTTP memory plugin deployed, in-tree MCP server removed
+- **Track H** ✅: Smart Plugin Brain — full intelligence migrated (embeddings, search, reranking, dedup, clustering, scheduler, journaling)
 - **Track I** ✅: Fireflies.ai — GraphQL client, sync, CLI wrapper
 - **Track J** ⏸️: Hybrid Architecture — superseded by CC-native, preserved on main as fallback
 - **Track K** ✅: Postgres Migration — tsvector, pgvector, async ops
@@ -360,6 +396,7 @@ Plugin is the kernel. CC is the process. Slack is the IPC. Design: `docs/DESIGN_
 - **Track M** ✅: Background Sweeps — 4 collectors, Opus synthesis, will become recurring task
 - **Track N** ⏸️: Context Planner — superseded by CC-native
 - **Track O** ✅: CC-Native Engine — deployed on Railway, strategic decision to double down
+- **Track P** ✅: Smart Plugin Migration — 5-phase migration of memory intelligence into plugin (Session 24)
 
 ## Common Tasks
 
@@ -444,14 +481,16 @@ railway variables set GWS_CONFIG_B64="$(cd ~/.config/gws && tar czf - --exclude=
 ```
 
 ## Gotchas
-- **Docker `node:22-slim`**: Stripped of CA certificates — must `apt-get install ca-certificates` or gws/external HTTPS calls fail with TLS UnknownIssuer
-- **Deep path strips `ANTHROPIC_API_KEY`** from subprocess env so Claude CLI uses Max plan OAuth instead of API billing
-- **All DB ops are async** — every function touching Postgres returns a Promise. Missing `await` will silently succeed but not persist.
+- **postgres.js tagged templates silently drop `::vector` cast on INSERT** — use two-step: INSERT without embedding, then UPDATE SET embedding. SELECT with `::vector` works fine.
+- **Local `.mcp.json` runs plugin as stdio** (local Node process with Railway DB URL), NOT via Railway HTTP. MCP tool calls go to local process, not deployed server.
+- **Docker `node:22-slim`**: Stripped of CA certificates — must `apt-get install ca-certificates` or HTTPS calls fail
+- **Deep path strips `ANTHROPIC_API_KEY`** from subprocess env so Claude CLI uses Max plan OAuth
+- **All DB ops are async** — every function touching Postgres returns a Promise. Missing `await` silently fails.
 - DB interfaces MUST use snake_case to match Postgres column names
-- `keytar` CJS→ESM interop: `imported.default ?? imported`
 - Socket Mode startup is slow (~11s) — normal
-- Startup crawl skips if offline <5 min (prevents re-processing on quick redeploys)
-- Startup crawl always uses fast path (never routed to heavy)
-- Policy engine regexes must use `(?:^|_)` to match prefixed tool names
-- **Pre-flight must never imply starting without `[PROCEED]`** — saying "kicking it off" without the sentinel makes the user think it's broken
+- HDBSCAN `minClusterSize` scales with corpus: `max(3, n/50)` — too low and you get noise clusters
+- Journal hook uses `/ingest` REST endpoint (not MCP) — simpler for fire-and-forget background calls
+- Agent-side memory code (src/memory/*) is RETIRED in production — plugin handles everything. Code preserved for hybrid fallback.
 - **Brain reaction goes on user's message**, not the bot's confirmation message
+- Plugin needs `ANTHROPIC_API_KEY` for dedup judgment (tier 3) and reflection synthesis
+- Railway service linking: `clawvato` repo → `clawvato` service, `clawvato-memory` repo → `clawvato-memory` service. Don't cross them.
