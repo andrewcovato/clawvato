@@ -45,6 +45,21 @@ export async function initDb(): Promise<Sql> {
   const schema = readFileSync(schemaPath, 'utf-8');
   await sql.unsafe(schema);
 
+  // ── Migration: add surface_id column if missing ──
+  const [hasSurfaceId] = await sql`
+    SELECT column_name FROM information_schema.columns
+    WHERE table_name = 'memories' AND column_name = 'surface_id'
+  `;
+  if (!hasSurfaceId) {
+    logger.info('Migrating: adding surface_id column to memories');
+    await sql`ALTER TABLE memories ADD COLUMN surface_id TEXT NOT NULL DEFAULT 'global'`;
+    await sql`CREATE INDEX IF NOT EXISTS idx_memories_surface ON memories(surface_id)`;
+    await sql`CREATE INDEX IF NOT EXISTS idx_memories_surface_valid ON memories(surface_id, valid_until)`;
+    // Existing memories were created by the cloud agent — migrate them
+    await sql`UPDATE memories SET surface_id = 'cloud' WHERE surface_id = 'global'`;
+    logger.info('Migration complete: surface_id column added, existing memories set to cloud');
+  }
+
   // Seed categories on first run (check count, insert if 0)
   const [{ count }] = await sql`SELECT COUNT(*)::int as count FROM memory_categories`;
   if (count === 0) {

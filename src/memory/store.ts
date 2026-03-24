@@ -38,6 +38,7 @@ export interface NewMemory {
   importance?: number;
   confidence?: number;
   entities?: string[];
+  surface_id?: string;
 }
 
 // ── Memory CRUD ──
@@ -48,9 +49,10 @@ export async function insertMemory(sql: Sql, memory: NewMemory): Promise<string>
   const entities = JSON.stringify(entityList);
 
   await sql`
-    INSERT INTO memories (id, type, content, source, importance, confidence, entities)
+    INSERT INTO memories (id, type, content, source, importance, confidence, entities, surface_id)
     VALUES (${id}, ${memory.type}, ${memory.content}, ${memory.source},
-            ${memory.importance ?? 5}, ${memory.confidence ?? 0.5}, ${entities})
+            ${memory.importance ?? 5}, ${memory.confidence ?? 0.5}, ${entities},
+            ${memory.surface_id ?? 'global'})
   `;
 
   // Populate entity junction table
@@ -130,6 +132,7 @@ export async function searchMemories(
     type?: MemoryType;
     sourcePrefix?: string;
     minImportance?: number;
+    surfaces?: string[];
   },
 ): Promise<Memory[]> {
   const limit = opts?.limit ?? 20;
@@ -139,6 +142,7 @@ export async function searchMemories(
   if (opts?.type) filters.push(sql`type = ${opts.type}`);
   if (opts?.sourcePrefix) filters.push(sql`source LIKE ${opts.sourcePrefix + ':%'}`);
   if (opts?.minImportance) filters.push(sql`importance >= ${opts.minImportance}`);
+  if (opts?.surfaces?.length) filters.push(sql`surface_id = ANY(${opts.surfaces})`);
 
   const whereClause = filters.reduce((acc, frag) => sql`${acc} AND ${frag}`);
 
@@ -175,9 +179,18 @@ export async function searchMemories(
 export async function findMemoriesByEntity(
   sql: Sql,
   entity: string,
-  opts?: { limit?: number },
+  opts?: { limit?: number; surfaces?: string[] },
 ): Promise<Memory[]> {
   const limit = opts?.limit ?? 10;
+  if (opts?.surfaces?.length) {
+    return await sql`
+      SELECT m.* FROM memories m
+      JOIN memory_entities me ON m.id = me.memory_id
+      WHERE LOWER(me.entity) = LOWER(${entity}) AND m.valid_until IS NULL
+        AND m.surface_id = ANY(${opts.surfaces})
+      ORDER BY m.importance DESC, m.created_at DESC LIMIT ${limit}
+    ` as unknown as Memory[];
+  }
   return await sql`
     SELECT m.* FROM memories m
     JOIN memory_entities me ON m.id = me.memory_id
@@ -294,18 +307,27 @@ export async function deleteEmbedding(sql: Sql, memoryId: string): Promise<void>
 export async function vectorSearch(
   sql: Sql,
   queryEmbedding: Float32Array,
-  opts?: { limit?: number; ftsQuery?: string },
+  opts?: { limit?: number; ftsQuery?: string; surfaces?: string[] },
 ): Promise<Memory[]> {
   const limit = opts?.limit ?? 10;
 
   if (opts?.ftsQuery) {
     // Hybrid search: single CTE query with RRF
-    return hybridSearch(sql, queryEmbedding, opts.ftsQuery, limit);
+    return hybridSearch(sql, queryEmbedding, opts.ftsQuery, limit, opts?.surfaces);
   }
 
   // Pure vector search
   try {
     const vec = pgvector.toSql(Array.from(queryEmbedding));
+    if (opts?.surfaces?.length) {
+      return await sql`
+        SELECT * FROM memories
+        WHERE embedding IS NOT NULL AND valid_until IS NULL
+          AND surface_id = ANY(${opts.surfaces})
+        ORDER BY embedding <=> ${vec}
+        LIMIT ${limit}
+      ` as unknown as Memory[];
+    }
     return await sql`
       SELECT * FROM memories
       WHERE embedding IS NOT NULL AND valid_until IS NULL
@@ -327,16 +349,52 @@ async function hybridSearch(
   queryEmbedding: Float32Array,
   ftsQuery: string,
   limit: number,
+  surfaces?: string[],
 ): Promise<Memory[]> {
   try {
     const vec = pgvector.toSql(Array.from(queryEmbedding));
     const ftsExpr = buildFtsExpression(ftsQuery);
     if (!ftsExpr) {
       // No usable keywords — fall back to pure vector search
+      if (surfaces?.length) {
+        return await sql`
+          SELECT * FROM memories
+          WHERE embedding IS NOT NULL AND valid_until IS NULL
+            AND surface_id = ANY(${surfaces})
+          ORDER BY embedding <=> ${vec}
+          LIMIT ${limit}
+        ` as unknown as Memory[];
+      }
       return await sql`
         SELECT * FROM memories
         WHERE embedding IS NOT NULL AND valid_until IS NULL
         ORDER BY embedding <=> ${vec}
+        LIMIT ${limit}
+      ` as unknown as Memory[];
+    }
+    if (surfaces?.length) {
+      return await sql`
+        WITH fts AS (
+          SELECT id, ROW_NUMBER() OVER (ORDER BY ts_rank(content_tsv, to_tsquery('english', ${ftsExpr})) DESC) as rn
+          FROM memories
+          WHERE content_tsv @@ to_tsquery('english', ${ftsExpr}) AND valid_until IS NULL
+            AND surface_id = ANY(${surfaces})
+          LIMIT 30
+        ),
+        vec AS (
+          SELECT id, ROW_NUMBER() OVER (ORDER BY embedding <=> ${vec}) as rn
+          FROM memories
+          WHERE embedding IS NOT NULL AND valid_until IS NULL
+            AND surface_id = ANY(${surfaces})
+          LIMIT 30
+        )
+        SELECT m.* FROM (
+          SELECT COALESCE(f.id, v.id) as id,
+            COALESCE(1.0/(60+f.rn),0) + COALESCE(1.0/(60+v.rn),0) as score
+          FROM fts f FULL OUTER JOIN vec v USING (id)
+        ) ranked
+        JOIN memories m ON m.id = ranked.id
+        ORDER BY ranked.score DESC
         LIMIT ${limit}
       ` as unknown as Memory[];
     }
@@ -364,6 +422,46 @@ async function hybridSearch(
     ` as unknown as Memory[];
   } catch (error) {
     logger.debug({ error }, 'Hybrid search failed');
+    return [];
+  }
+}
+
+/**
+ * Find memories similar to a query embedding with configurable similarity threshold.
+ * Returns memories with their similarity score (1 - cosine distance).
+ */
+export async function findSimilarByVector(
+  sql: Sql,
+  queryEmbedding: Float32Array,
+  opts?: {
+    limit?: number;
+    type?: string;
+    surfaces?: string[];
+    minSimilarity?: number;
+  },
+): Promise<Array<Memory & { similarity: number }>> {
+  const limit = opts?.limit ?? 5;
+  const minSimilarity = opts?.minSimilarity ?? 0.7;
+
+  try {
+    const vec = pgvector.toSql(Array.from(queryEmbedding));
+    const filters = [sql`embedding IS NOT NULL`, sql`valid_until IS NULL`];
+    if (opts?.type) filters.push(sql`type = ${opts.type}`);
+    if (opts?.surfaces?.length) filters.push(sql`surface_id = ANY(${opts.surfaces})`);
+
+    const whereClause = filters.reduce((acc, frag) => sql`${acc} AND ${frag}`);
+
+    const rows = await sql`
+      SELECT *, 1 - (embedding <=> ${vec}) AS similarity
+      FROM memories
+      WHERE ${whereClause}
+      ORDER BY similarity DESC
+      LIMIT ${limit}
+    ` as unknown as Array<Memory & { similarity: number }>;
+
+    return rows.filter(r => r.similarity >= minSimilarity);
+  } catch (error) {
+    logger.debug({ error }, 'findSimilarByVector failed');
     return [];
   }
 }

@@ -86,6 +86,7 @@ async function processWorkspaceFiles(
   classifierModel: string,
   source: string,
   workspaceDir: string,
+  opts?: { surface_id?: string },
 ): Promise<{ stored: number; skipped: number; errors: number; filesProcessed: number }> {
   let stored = 0;
   let skipped = 0;
@@ -119,7 +120,7 @@ async function processWorkspaceFiles(
 
         if (fileName.endsWith('.json')) {
           // Structured JSON — parse and store directly (legacy findings file path)
-          const result = await processStructuredFindings(db, source, content);
+          const result = await processStructuredFindings(db, source, content, { surface_id: opts?.surface_id });
           stored += result.stored;
           skipped += result.skipped;
           errors += result.errors;
@@ -128,7 +129,7 @@ async function processWorkspaceFiles(
           const fileSource = `${source}:file:${fileName}`;
           const result = await extractFacts(anthropicClient, classifierModel, content, fileSource, db);
           if (result.facts.length > 0) {
-            const storeResult = await storeExtractionResult(db, result, fileSource);
+            const storeResult = await storeExtractionResult(db, result, fileSource, { surface_id: opts?.surface_id });
             stored += storeResult.memoriesStored;
             skipped += storeResult.duplicatesSkipped;
           }
@@ -172,6 +173,7 @@ async function processStructuredFindings(
   db: Sql,
   source: string,
   raw: string,
+  opts?: { surface_id?: string },
 ): Promise<{ stored: number; skipped: number; errors: number }> {
   let stored = 0;
   let skipped = 0;
@@ -221,7 +223,7 @@ async function processStructuredFindings(
 
       if (closeMatch) {
         if (confidence > closeMatch.confidence) {
-          const newId = await insertMemory(db, { type, content, source: factSource, importance, confidence, entities });
+          const newId = await insertMemory(db, { type, content, source: factSource, importance, confidence, entities, surface_id: opts?.surface_id });
           await supersedeMemory(db, closeMatch.id, newId);
           await deleteEmbedding(db, closeMatch.id);
           newMemoryIds.push({ id: newId, content });
@@ -230,7 +232,7 @@ async function processStructuredFindings(
           skipped++;
         }
       } else {
-        const newId = await insertMemory(db, { type, content, source: factSource, importance, confidence, entities });
+        const newId = await insertMemory(db, { type, content, source: factSource, importance, confidence, entities, surface_id: opts?.surface_id });
         newMemoryIds.push({ id: newId, content });
         stored++;
       }
@@ -400,6 +402,7 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
           // Re-retrieve memory with deep-path budget ($0 on Max — no cost reason to limit)
           const deepMemory = await retrieveContext(db, message, {
             tokenBudget: config.context.deepPathLongTermTokenBudget,
+            surfaces: [process.env.CLAWVATO_SURFACE ?? 'cloud', 'global'],
           });
           const deepWorkingContext = await loadWorkingContext(db, config.context.deepPathWorkingContextTokenBudget);
 
@@ -627,10 +630,11 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
         // Extract facts from the owner's message
         if (isRealSlackMessage && message.length > 10) {
           const extractionSource = `slack:${batch.channel}:${lastMsg.ts}`;
+          const extractionSurfaceId = process.env.CLAWVATO_SURFACE ?? 'cloud';
           extractFacts(anthropicClient, config.models.classifier, message, extractionSource, db)
             .then(async result => {
               if (result.facts.length > 0) {
-                await storeExtractionResult(db, result, extractionSource);
+                await storeExtractionResult(db, result, extractionSource, { surface_id: extractionSurfaceId });
                 await maybeReflect(db, anthropicClient, config.models.classifier);
               }
             })
@@ -645,7 +649,7 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
         // fire-and-forget processWorkspaceFiles call.
         if (routing?.decision === 'deep' && workspaceDir) {
           const wsDir = workspaceDir; // capture for closure
-          processWorkspaceFiles(db, anthropicClient, config.models.classifier, `deep:${batch.channel}:${lastMsg.ts}`, wsDir)
+          processWorkspaceFiles(db, anthropicClient, config.models.classifier, `deep:${batch.channel}:${lastMsg.ts}`, wsDir, { surface_id: process.env.CLAWVATO_SURFACE ?? 'cloud' })
             .then(async result => {
               if (result.stored > 0 || result.filesProcessed > 0) {
                 logger.info(

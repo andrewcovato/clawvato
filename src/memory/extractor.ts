@@ -137,6 +137,7 @@ export async function storeExtractionResult(
   sql: Sql,
   result: ExtractionResult,
   source: string,
+  opts?: { surface_id?: string },
 ): Promise<{ memoriesStored: number; duplicatesSkipped: number }> {
   let memoriesStored = 0;
   let duplicatesSkipped = 0;
@@ -156,6 +157,7 @@ export async function storeExtractionResult(
           importance: fact.importance,
           confidence: fact.confidence,
           entities: fact.entities,
+          surface_id: opts?.surface_id,
         };
         const newId = await insertMemory(sql, newMemory);
         await supersedeMemory(sql, closeMatch.id, newId);
@@ -177,6 +179,7 @@ export async function storeExtractionResult(
         importance: fact.importance,
         confidence: fact.confidence,
         entities: fact.entities,
+        surface_id: opts?.surface_id,
       };
       const newId = await insertMemory(sql, newMemory);
       newMemoryIds.push({ id: newId, content: fact.content });

@@ -26,6 +26,9 @@ CREATE TABLE IF NOT EXISTS memories (
   -- Entity references (JSON array of entity names/IDs)
   entities TEXT DEFAULT '[]',
 
+  -- Surface isolation (local = dev, cloud = Slack agent, global = shared)
+  surface_id TEXT NOT NULL DEFAULT 'global',
+
   -- Consolidation tracking
   superseded_by TEXT REFERENCES memories(id),
   reflection_source INTEGER DEFAULT 0,
@@ -42,6 +45,9 @@ CREATE INDEX IF NOT EXISTS idx_memories_valid ON memories(valid_until);
 CREATE INDEX IF NOT EXISTS idx_memories_importance ON memories(importance DESC);
 CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_memories_type_valid ON memories(type, valid_until);
+
+CREATE INDEX IF NOT EXISTS idx_memories_surface ON memories(surface_id);
+CREATE INDEX IF NOT EXISTS idx_memories_surface_valid ON memories(surface_id, valid_until);
 
 -- GIN index for full-text search
 CREATE INDEX IF NOT EXISTS idx_memories_fts ON memories USING GIN(content_tsv);

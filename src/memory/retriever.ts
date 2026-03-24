@@ -167,10 +167,11 @@ async function rerankMemories(
 export async function retrieveContext(
   sql: Sql,
   message: string,
-  opts?: { tokenBudget?: number },
+  opts?: { tokenBudget?: number; surfaces?: string[] },
 ): Promise<RetrievalResult> {
   const config = getConfig();
   const budget = opts?.tokenBudget ?? config.context.longTermTokenBudget;
+  const surfaces = opts?.surfaces ?? [process.env.CLAWVATO_SURFACE ?? 'cloud', 'global'];
   const parts: string[] = [];
   let tokensUsed = 0;
   let memoriesRetrieved = 0;
@@ -181,7 +182,7 @@ export async function retrieveContext(
   for (const name of names) {
     if (tokensUsed >= budget) break;
 
-    const entityMemories = await findMemoriesByEntity(sql, name, { limit: 3 });
+    const entityMemories = await findMemoriesByEntity(sql, name, { limit: 3, surfaces });
     for (const mem of entityMemories) {
       if (tokensUsed >= budget) break;
 
@@ -205,10 +206,10 @@ export async function retrieveContext(
     // Use hybrid search (vector + tsvector) — pgvector always available
     try {
       const queryEmbedding = await embed(message, 'query');
-      searchResults = await vectorSearch(sql, queryEmbedding, { limit: 20, ftsQuery });
+      searchResults = await vectorSearch(sql, queryEmbedding, { limit: 20, ftsQuery, surfaces });
     } catch {
       // Embedding failed — fall back to tsvector only
-      searchResults = await searchMemories(sql, ftsQuery, { limit: 20 });
+      searchResults = await searchMemories(sql, ftsQuery, { limit: 20, surfaces });
     }
 
     // LLM rerank: Haiku scores candidates for actual relevance to the query

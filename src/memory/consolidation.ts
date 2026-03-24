@@ -123,18 +123,18 @@ async function mergeDuplicates(sql: Sql): Promise<number> {
     // ── Fetch next batch using keyset pagination ──
     // Order by importance DESC ensures higher-importance memories are processed first
     // within each batch. We paginate by (created_at, id) for stable cursors.
-    let batch: Array<{ id: string; type: string; content: string; importance: number; confidence: number; created_at: string }>;
+    let batch: Array<{ id: string; type: string; content: string; importance: number; confidence: number; created_at: string; surface_id: string }>;
 
     if (cursorCreatedAt === null) {
       batch = await sql`
-        SELECT id, type, content, importance, confidence, created_at FROM memories
+        SELECT id, type, content, importance, confidence, created_at, surface_id FROM memories
         WHERE valid_until IS NULL
         ORDER BY created_at ASC, id ASC
         LIMIT ${batchSize}
       ` as unknown as typeof batch;
     } else {
       batch = await sql`
-        SELECT id, type, content, importance, confidence, created_at FROM memories
+        SELECT id, type, content, importance, confidence, created_at, surface_id FROM memories
         WHERE valid_until IS NULL
           AND (created_at, id) > (${cursorCreatedAt}, ${cursorId})
         ORDER BY created_at ASC, id ASC
@@ -167,6 +167,7 @@ async function mergeDuplicates(sql: Sql): Promise<number> {
         const other = activeBatch[j];
         if (superseded.has(other.id)) continue;
         if (mem.type !== other.type) continue;
+        if (mem.surface_id !== other.surface_id) continue;
 
         const similarity = contentSimilarity(mem.content, other.content);
         if (similarity >= threshold) {
