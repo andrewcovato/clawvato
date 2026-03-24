@@ -43,15 +43,8 @@ export async function startAgent(): Promise<void> {
   const [version] = await db`SELECT version FROM schema_version ORDER BY version DESC LIMIT 1`;
   logger.info({ schemaVersion: (version?.version as number) ?? 0 }, 'Database connected');
 
-  // ── Run memory consolidation if due (>24h since last run) ──
-  if (await shouldConsolidate(db)) {
-    try {
-      const result = await consolidate(db);
-      logger.info(result, 'Startup consolidation complete');
-    } catch (error) {
-      logger.warn({ error }, 'Startup consolidation failed — non-critical');
-    }
-  }
+  // Memory consolidation, re-embedding, and reflection are handled by the
+  // plugin scheduler (clawvato-memory). No agent-side startup maintenance needed.
 
   // ── Verify required credentials ──
   const missingCreds: string[] = [];
@@ -227,19 +220,10 @@ export async function startAgent(): Promise<void> {
     });
   }
 
-  // ── Periodic consolidation + pin sync ──
-  const consolidationCheckMs = config.memory.consolidationCheckIntervalHours * 60 * 60 * 1000;
-  const consolidationTimer = setInterval(async () => {
-    try {
-      if (await shouldConsolidate(db)) {
-        const result = await consolidate(db);
-        logger.info(result, 'Periodic consolidation complete');
-      }
-    } catch (error) {
-      logger.warn({ error }, 'Periodic consolidation failed — non-critical');
-    }
-
-    // Periodic pin sync
+  // Memory consolidation handled by plugin scheduler.
+  // Periodic pin sync still runs agent-side (task channel is agent-owned).
+  const pinSyncMs = (config.memory.consolidationCheckIntervalHours ?? 6) * 60 * 60 * 1000;
+  const pinSyncTimer = setInterval(async () => {
     if (taskChannelManager) {
       try {
         await taskChannelManager.reconcilePins();
@@ -247,13 +231,13 @@ export async function startAgent(): Promise<void> {
         logger.debug({ error }, 'Periodic pin sync failed — non-critical');
       }
     }
-  }, consolidationCheckMs);
+  }, pinSyncMs);
 
   // ── Graceful shutdown ──
   const shutdown = async () => {
     logger.info('Shutting down...');
     try { writeFileSync(join(config.dataDir, 'last-active.txt'), String(Date.now()), 'utf-8'); } catch { /* */ }
-    clearInterval(consolidationTimer);
+    clearInterval(pinSyncTimer);
     scheduler.stop();
     await agent.shutdown();
     await slack.stop();

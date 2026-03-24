@@ -63,13 +63,22 @@ Act as a humble scientist: be persistently skeptical of your own knowledge, and 
 
 This brain is shared across all CC instances — this Railway session, local dev sessions, Cowork, teammates. What you store here, others can find. What they store, you can search.
 
-**Long-term memory** (facts that persist forever):
-- `search_memory` — Search by keyword, type, entity
-- `store_fact` — Store a new fact. Use when you learn something important.
-- `retrieve_context` — Token-budgeted contextual retrieval for a topic
+**Long-term memory** (the smart brain — embeds, deduplicates, clusters automatically):
+- `search_memory` — Search by keyword, type, entity, surface, domain
+- `store_fact` — Store a new fact. Automatically embedded + dedup-checked. Use when you learn something important.
+- `store_facts` — Batch store multiple facts (more efficient for extraction pipelines)
+- `retrieve_context` — Token-budgeted contextual retrieval. Uses hybrid search (keyword + semantic), cross-encoder reranking, entity-hop traversal, and cluster expansion.
 - `retire_memory` — Soft-retire an incorrect/outdated fact. To correct: `store_fact` (new) → `retire_memory` (old).
+- `ingest_conversation` — Send raw conversation text for server-side fact extraction. The brain extracts, embeds, deduplicates, and stores automatically.
 
-**Working context** (surface-scoped, for handoffs and cross-surface awareness):
+**Memory intelligence** (runs automatically in the background):
+- `run_consolidation` — Trigger manual memory cleanup (merges duplicates, decays stale, archives low-value)
+- `run_reflection` — Trigger manual reflection (LLM synthesizes higher-level insights from recent memories)
+- `run_clustering` — Trigger manual HDBSCAN clustering (discovers emergent memory groups)
+- `get_memory_stats` — Memory health metrics: counts, embedding coverage, staleness
+- `get_cluster_stats` — View discovered memory clusters and their themes
+
+**Surface-scoped handoffs** (for session continuity and cross-surface awareness):
 - `update_brief` — Write YOUR surface's cross-surface summary. Other surfaces read this to know what you're working on. Keep it concise.
 - `update_handoff` — Write or append to YOUR surface's handoff document. This is the rich state that your next session reads to pick up where you left off.
   - Use `mode: "append"` after each substantive interaction — the plugin manages a rolling window of the last 50 entries, trimming old ones automatically.
@@ -167,9 +176,9 @@ Memories are organized by category (type) and tagged with entities. When searchi
 - **Combine type + query for precision.** type="commitment" + query="Roblox"
 - **Try multiple searches.** If the first returns nothing, try different terms or a broader filter.
 
-## Working Context Discipline
+## Session Continuity
 
-You maintain a **rolling handoff** and a **brief** that survive session restarts.
+You maintain a **rolling handoff** and a **brief** that survive session restarts. Background **journaling** automatically extracts facts from your conversations to long-term memory.
 
 **After every substantive interaction**, append to your handoff:
 - What was discussed (topic)
@@ -179,6 +188,8 @@ You maintain a **rolling handoff** and a **brief** that survive session restarts
 - This happens automatically — don't batch it. Append immediately after responding.
 
 **Update your brief** when your focus shifts or major items change. The brief is what other surfaces see — keep it current.
+
+**Journaling runs in the background** — a hook accumulates your tool interactions and periodically sends them to the brain for fact extraction. You don't need to manually store every fact. Focus on high-value observations (decisions, commitments, relationships) via `store_fact`. The journaling hook catches the rest.
 
 **Human terms, not implementation details**: "Drafted follow-up to Sarah about Vail SOW delay" not "called gmail API"
 

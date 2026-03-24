@@ -114,10 +114,7 @@ export async function initDb(): Promise<Sql> {
 
   logger.info('Database schema initialized');
 
-  // Run embedding migration in background (non-blocking)
-  reembedAllMemories(sql).catch(err => {
-    logger.warn({ error: err }, 'Embedding migration failed — will retry on next startup');
-  });
+  // Embedding backfill handled by plugin scheduler (clawvato-memory).
 
   return sql;
 }

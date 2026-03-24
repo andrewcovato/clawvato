@@ -89,9 +89,9 @@ MCPJSON
 chmod 600 "$MCP_CONFIG"
 echo "[supervisor] MCP config written to $MCP_CONFIG"
 
-# Save API key for extraction hooks before unsetting for CC.
-# CC itself uses Max plan OAuth (free), but the async extraction hook
-# needs the API key for Sonnet calls (~$0.001/extraction).
+# API key is used by the plugin (clawvato-memory) for extraction, dedup, and reflection.
+# Agent-side extraction is retired — journaling hook sends to plugin's /ingest endpoint.
+# Save key to file for any hooks that still need it (legacy compatibility).
 if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
   OLD_UMASK=$(umask)
   umask 077
