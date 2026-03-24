@@ -54,13 +54,17 @@
   },
   "currentSprint": {
     "id": "S10",
-    "name": "Memory Durability",
+    "name": "Memory Excellence",
     "goals": [
-      "Memory scoping — per-project/surface domain filters ⬜ (BLOCKING)",
-      "LLM reranking — Haiku reranker in plugin retrieve_context ⬜",
-      "Merge cc-native-engine → main ⬜"
+      "1. Memory scoping — surface_id on all queries, hard isolation ⬜",
+      "2. Write-time dedup — ADD/UPDATE/DELETE/NOOP at extraction ⬜",
+      "3. Embedding upgrade — nomic-embed-text-v1.5 (56% → 86% accuracy) ⬜",
+      "4. Cross-encoder reranking — replace LLM reranking ⬜",
+      "5. Memory usage instructions — teach CC to wield memory ⬜",
+      "Merge cc-native-engine → main (after memory work stable) ⬜"
     ],
-    "progress": "0% — sprint defined, ready to start"
+    "designDoc": "docs/DESIGN_S10_MEMORY_EXCELLENCE.md",
+    "progress": "0% — design doc written, ready to build"
   },
   "upcomingSprints": {
     "S11": {
@@ -68,9 +72,12 @@
       "goals": [
         "S11a: Plugin scheduler tools (get_due_tasks, mark_running/completed/failed)",
         "S11b: Sidecar rebuild — HTTP plugin + Slack, no direct DB",
-        "S11c: Validation — ad-hoc task creation + execution end-to-end"
+        "S11c: Validation — ad-hoc task creation + execution end-to-end",
+        "S11d: Sleep-time consolidation — scheduled idle-time task: review recent memories, synthesize insights, merge duplicates (18% accuracy gain)",
+        "S11e: Reflection synthesis — LLM generates higher-level inferences from accumulated facts",
+        "S11f: Temporal decay scoring — recency * importance * relevance composite scoring"
       ],
-      "dependsOn": "S10 (partially — S11a can start in parallel)"
+      "dependsOn": "S10"
     },
     "S12": {
       "name": "Real-Time Ingest",
