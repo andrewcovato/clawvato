@@ -5,8 +5,8 @@
  * pipes everything through a single Opus CLI synthesis pass that
  * cross-references across sources, and stores the resulting facts.
  *
- * Fail-fast: if ANY enabled collector errors, the entire sweep aborts.
- * No partial data synthesis — it's all or nothing.
+ * Resilient: individual collector failures are logged and skipped.
+ * Successful collector results are preserved and passed to synthesis.
  */
 
 import { writeFileSync, readFileSync, mkdtempSync, mkdirSync, unlinkSync } from 'node:fs';
@@ -31,7 +31,7 @@ export interface SweepDeps {
 
 /**
  * Execute a full sweep: run all collectors, synthesize, store facts.
- * Aborts if any collector fails — no partial synthesis.
+ * Individual collector failures are logged and skipped — successful results proceed to synthesis.
  */
 export async function executeSweep(
   collectors: Collector[],
@@ -42,8 +42,9 @@ export async function executeSweep(
   let itemsCollected = 0;
   let sourcesSwept = 0;
 
-  // ── 1. Collect from all sources (fail-fast) ──
+  // ── 1. Collect from all sources (resilient — failures logged, not fatal) ──
   const allChunks: string[] = [];
+  const failedCollectors: string[] = [];
 
   // Run all collectors in parallel — they're independent data sources
   logger.info({ collectors: collectors.map(c => c.name) }, 'Sweep: running all collectors in parallel');
@@ -60,23 +61,31 @@ export async function executeSweep(
     }),
   );
 
-  // Check results — abort if any failed or returned empty
+  // Process results — failed collectors are logged and skipped, not fatal
   for (const settled of results) {
     if (settled.status === 'rejected') {
       const errMsg = settled.reason instanceof Error ? settled.reason.message : JSON.stringify(settled.reason);
-      logger.error({ error: errMsg }, 'Sweep: collector failed — ABORTING sweep');
-      return { sourcesSwept, itemsCollected, factsStored: 0, durationMs: Date.now() - startTime };
+      logger.warn({ error: errMsg }, 'Sweep: collector failed — skipping (other collectors will proceed)');
+      failedCollectors.push(errMsg);
+      continue;
     }
 
     const { name, result } = settled.value;
     if (result.itemsScanned === 0 && result.itemsNew === 0 && result.contentChunks.length === 0) {
-      logger.warn({ collector: name }, 'Sweep: collector returned zero items — ABORTING sweep (possible auth/config issue)');
-      return { sourcesSwept, itemsCollected, factsStored: 0, durationMs: Date.now() - startTime };
+      logger.info({ collector: name }, 'Sweep: collector returned zero items — skipping');
+      continue;
     }
 
     sourcesSwept++;
     itemsCollected += result.itemsNew;
     allChunks.push(...result.contentChunks);
+  }
+
+  if (failedCollectors.length > 0) {
+    logger.warn(
+      { failed: failedCollectors.length, succeeded: sourcesSwept, total: collectors.length },
+      'Sweep: some collectors failed — proceeding with successful results',
+    );
   }
 
   if (allChunks.length === 0) {
@@ -191,7 +200,6 @@ export async function executeSweep(
     itemsCollected,
     factsStored: 0, // updated by caller after processWorkspaceFiles
     durationMs,
-    // @ts-expect-error — extended result for internal use
     workspaceDir,
   };
 }

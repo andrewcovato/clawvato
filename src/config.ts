@@ -137,6 +137,7 @@ const ConfigSchema = z.object({
     archiveExemptCategories: z.array(z.string()).default(['preference', 'commitment', 'reflection']),
     categoryReorgIntervalHours: z.number().default(168),
     consolidationBatchSize: z.number().int().min(10).default(150),
+    consolidationCheckIntervalHours: z.number().min(1).default(6),
   }).default(() => ({
     consolidationIntervalHours: 24,
     workingContextArchiveDays: 14,
@@ -155,6 +156,7 @@ const ConfigSchema = z.object({
     archiveExemptCategories: ['preference', 'commitment', 'reflection'],
     categoryReorgIntervalHours: 168,
     consolidationBatchSize: 150,
+    consolidationCheckIntervalHours: 6,
   })),
 
   tasks: z.object({
@@ -319,6 +321,7 @@ function getDefaultConfig(): Partial<ClawvatoConfig> {
       archiveExemptCategories: ['preference', 'commitment', 'reflection'],
       categoryReorgIntervalHours: 168,
       consolidationBatchSize: 150,
+      consolidationCheckIntervalHours: 6,
     },
     tasks: {
       channelId: process.env.TASK_CHANNEL_ID,

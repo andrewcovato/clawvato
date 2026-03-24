@@ -156,8 +156,9 @@ async function processWorkspaceFiles(
         logger.debug({ error: err }, 'Failed to persist debug workspace');
       }
     }
-    // Clean up the temp workspace directory
-    try { rmSync(workspaceDir, { recursive: true }); } catch { /* best effort */ }
+    // NOTE: Workspace cleanup is handled by the processBatch finally block,
+    // not here, to prevent orphaned directories if the process crashes
+    // between completeProcessing() and this fire-and-forget function.
   }
 
   return { stored, skipped, errors, filesProcessed };
@@ -639,8 +640,12 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
         }
 
         // Process workspace files from deep path (unique dir per invocation)
+        // Cleanup happens here (not in processWorkspaceFiles) to prevent orphaned
+        // directories if the process crashes between completeProcessing() and the
+        // fire-and-forget processWorkspaceFiles call.
         if (routing?.decision === 'deep' && workspaceDir) {
-          processWorkspaceFiles(db, anthropicClient, config.models.classifier, `deep:${batch.channel}:${lastMsg.ts}`, workspaceDir)
+          const wsDir = workspaceDir; // capture for closure
+          processWorkspaceFiles(db, anthropicClient, config.models.classifier, `deep:${batch.channel}:${lastMsg.ts}`, wsDir)
             .then(async result => {
               if (result.stored > 0 || result.filesProcessed > 0) {
                 logger.info(
@@ -654,6 +659,10 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
             })
             .catch(err => {
               logger.debug({ error: err }, 'Deep path workspace processing failed');
+            })
+            .finally(() => {
+              // Always clean up workspace directory, even if processing fails
+              try { rmSync(wsDir, { recursive: true }); } catch { /* best effort */ }
             });
         }
 

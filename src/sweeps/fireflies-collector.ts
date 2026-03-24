@@ -12,6 +12,7 @@ import type { Sql } from '../db/index.js';
 import { logger } from '../logger.js';
 import { FirefliesClient, formatMeetingDate } from '../fireflies/api.js';
 import { getHighWaterMark, setHighWaterMark, type Collector, type CollectorResult } from './types.js';
+import { retryWithBackoff } from './retry.js';
 
 interface FirefliesSweepConfig {
   maxMeetings: number;
@@ -45,11 +46,16 @@ export function createFirefliesCollector(
         const transcripts: Awaited<ReturnType<typeof client.listTranscripts>> = [];
         let skip = 0;
         while (transcripts.length < config.maxMeetings) {
-          const batch = await client.listTranscripts({
-            fromDate,
-            limit: Math.min(PAGE_SIZE, config.maxMeetings - transcripts.length),
-            skip,
-          });
+          const currentSkip = skip;
+          const currentLimit = Math.min(PAGE_SIZE, config.maxMeetings - transcripts.length);
+          const batch = await retryWithBackoff(
+            'fireflies:listTranscripts',
+            () => client.listTranscripts({
+              fromDate,
+              limit: currentLimit,
+              skip: currentSkip,
+            }),
+          );
           if (batch.length === 0) break;
           transcripts.push(...batch);
           skip += batch.length;
@@ -78,7 +84,10 @@ export function createFirefliesCollector(
 
         for (const meta of newTranscripts) {
           try {
-            const summary = await client.getTranscriptSummary(meta.id);
+            const summary = await retryWithBackoff(
+              `fireflies:getSummary:${meta.id}`,
+              () => client.getTranscriptSummary(meta.id),
+            );
             itemsNew++;
 
             const meetingDate = formatMeetingDate(meta.date);

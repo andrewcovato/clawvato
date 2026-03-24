@@ -25,16 +25,19 @@ export async function createTestDb(): Promise<{ sql: TestSql; cleanup: () => Pro
 
   const schemaName = `test_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
 
-  // Single connection that sets search_path after every connect
+  // Create schema using a temporary connection
+  const setupSql = postgres(databaseUrl, { max: 1 });
+  await setupSql.unsafe(`CREATE SCHEMA ${schemaName}`);
+  await setupSql.end();
+
+  // Main connection with search_path set via connection option
+  // (persists across pool connections, unlike SET search_path)
   const sql = postgres(databaseUrl, {
     max: 1,
     idle_timeout: 5,
     transform: { undefined: null },
+    connection: { search_path: `${schemaName}, public` },
   });
-
-  // Create the schema and set search_path
-  await sql.unsafe(`CREATE SCHEMA ${schemaName}`);
-  await sql.unsafe(`SET search_path TO ${schemaName}, public`);
 
   // Run the Postgres schema
   const schemaPath = join(__dirname, '..', '..', 'src', 'db', 'schema.pg.sql');

@@ -40,6 +40,8 @@ export interface SweepResult {
   factsStored: number;
   /** Duration in milliseconds */
   durationMs: number;
+  /** Workspace directory for post-synthesis processing (internal use) */
+  workspaceDir?: string;
 }
 
 // ── High-water mark helpers ──

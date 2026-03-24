@@ -16,8 +16,12 @@
 #   CC_RESTART_DELAY    — Seconds to wait before restart (default: 5)
 #   CC_MAX_TURNS        — Max turns per session (default: 200)
 #   DATA_DIR            — Data directory (default: /data)
+#   CLAWVATO_MEMORY_INTERNAL_URL — Memory MCP server URL (default: http://clawvato-memory.railway.internal:8080/mcp)
 
 set -euo pipefail
+
+# Verify required tools
+command -v expect || { echo "expect is required but not installed"; exit 1; }
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -60,13 +64,14 @@ export MCP_AUTH_TOKEN="${MCP_AUTH_TOKEN:-}"
 # ── Generate MCP config with auth token ──
 # The memory MCP server runs as a separate Railway service (HTTP transport).
 # We template the config at runtime to inject the auth token from env vars.
+MEMORY_URL="${CLAWVATO_MEMORY_INTERNAL_URL:-http://clawvato-memory.railway.internal:8080/mcp}"
 MCP_CONFIG="/tmp/cc-native-mcp.json"
 cat > "$MCP_CONFIG" <<MCPJSON
 {
   "mcpServers": {
     "clawvato-memory": {
       "type": "http",
-      "url": "http://clawvato-memory.railway.internal:8080/mcp",
+      "url": "${MEMORY_URL}",
       "headers": {
         "Authorization": "Bearer ${MCP_AUTH_TOKEN}"
       }
@@ -118,6 +123,13 @@ trap cleanup SIGTERM SIGINT
 while true; do
   SESSION_COUNTER=$((SESSION_COUNTER + 1))
   echo "[supervisor] Starting CC session #$SESSION_COUNTER"
+
+  # Log rotation — keep only the last 5 session logs
+  LOG_RETENTION=5
+  for old_log in $(ls -1t /tmp/cc-session-*.log 2>/dev/null | tail -n +$((LOG_RETENTION + 1))); do
+    echo "[supervisor] Removing old log: $old_log"
+    rm -f "$old_log"
+  done
 
   # Run Claude Code with channels in interactive mode.
   #

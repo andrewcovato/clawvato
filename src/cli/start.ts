@@ -227,8 +227,8 @@ export async function startAgent(): Promise<void> {
     });
   }
 
-  // ── Periodic consolidation + pin sync (every 6h) ──
-  const CONSOLIDATION_CHECK_MS = 6 * 60 * 60 * 1000; // 6 hours
+  // ── Periodic consolidation + pin sync ──
+  const consolidationCheckMs = config.memory.consolidationCheckIntervalHours * 60 * 60 * 1000;
   const consolidationTimer = setInterval(async () => {
     try {
       if (await shouldConsolidate(db)) {
@@ -247,7 +247,7 @@ export async function startAgent(): Promise<void> {
         logger.debug({ error }, 'Periodic pin sync failed — non-critical');
       }
     }
-  }, CONSOLIDATION_CHECK_MS);
+  }, consolidationCheckMs);
 
   // ── Graceful shutdown ──
   const shutdown = async () => {

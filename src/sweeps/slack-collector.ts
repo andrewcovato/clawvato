@@ -16,6 +16,7 @@ import type { WebClient } from '@slack/web-api';
 import type { Sql } from '../db/index.js';
 import { logger } from '../logger.js';
 import { getHighWaterMark, setHighWaterMark, type Collector, type CollectorResult } from './types.js';
+import { retryWithBackoff } from './retry.js';
 
 export interface SlackSweepConfig {
   excludeChannels: string[];
@@ -49,13 +50,17 @@ export function createSlackCollector(
       let itemsNew = 0;
       const contentChunks: string[] = [];
 
-      // List all channels the user is a member of
-      const allChannels = await listUserChannels(userClient, config.excludeChannels, config.botUserId);
+      // List all channels the user is a member of (with retry for transient failures)
+      const allChannels = await retryWithBackoff(
+        'slack:listUserChannels',
+        () => listUserChannels(userClient, config.excludeChannels, config.botUserId),
+      );
       logger.info({ channelCount: allChannels.length }, 'Slack sweep: discovered channels');
 
-      // Cadence filter — check recent activity, skip dead channels
-      const activeChannels = await filterActiveChannels(
-        userClient, allChannels, cadenceSampleSize, maxGapMs,
+      // Cadence filter — check recent activity, skip dead channels (with retry)
+      const activeChannels = await retryWithBackoff(
+        'slack:filterActiveChannels',
+        () => filterActiveChannels(userClient, allChannels, cadenceSampleSize, maxGapMs),
       );
       logger.info({
         active: activeChannels.length,
@@ -67,12 +72,15 @@ export function createSlackCollector(
           const hwmKey = `slack:${channel.id}`;
           const lastTs = await getHighWaterMark(sql, hwmKey);
 
-          const messages = await fetchNewMessages(
-            userClient,
-            channel.id,
-            lastTs,
-            config.maxMessagesPerChannel,
-            config.beforeTs,
+          const messages = await retryWithBackoff(
+            `slack:fetchMessages:${channel.id}`,
+            () => fetchNewMessages(
+              userClient,
+              channel.id,
+              lastTs,
+              config.maxMessagesPerChannel,
+              config.beforeTs,
+            ),
           );
 
           itemsScanned += messages.length;

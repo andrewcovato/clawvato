@@ -13,6 +13,7 @@ import type { Sql } from '../db/index.js';
 import { logger } from '../logger.js';
 import { getFileContent, buildFolderPathMap } from '../google/drive-sync.js';
 import { getHighWaterMark, setHighWaterMark, type Collector, type CollectorResult } from './types.js';
+import { retryWithBackoff } from './retry.js';
 
 interface DriveSweepConfig {
   maxFiles: number;
@@ -83,16 +84,21 @@ export function createDriveCollector(
 
         let pageToken: string | undefined;
         while (files.length < config.maxFiles) {
-          const result = await drive.files.list({
-            q,
-            pageSize: Math.min(100, config.maxFiles - files.length),
-            pageToken,
-            fields: 'nextPageToken, files(id, name, mimeType, modifiedTime, viewedByMeTime, owners, parents)',
-            orderBy: 'modifiedTime desc',
-            // Include shared drives and files shared with user
-            includeItemsFromAllDrives: true,
-            supportsAllDrives: true,
-          });
+          const currentPageToken = pageToken;
+          const currentPageSize = Math.min(100, config.maxFiles - files.length);
+          const result = await retryWithBackoff(
+            'drive:files.list',
+            () => drive.files.list({
+              q,
+              pageSize: currentPageSize,
+              pageToken: currentPageToken,
+              fields: 'nextPageToken, files(id, name, mimeType, modifiedTime, viewedByMeTime, owners, parents)',
+              orderBy: 'modifiedTime desc',
+              // Include shared drives and files shared with user
+              includeItemsFromAllDrives: true,
+              supportsAllDrives: true,
+            }),
+          );
 
           for (const f of result.data.files ?? []) {
             const name = f.name ?? '';
@@ -138,7 +144,10 @@ export function createDriveCollector(
         }
 
         // Build full folder path map (BFS of all folders — reuses drive-sync engine)
-        const folderPathMap = await buildFolderPathMap(drive);
+        const folderPathMap = await retryWithBackoff(
+          'drive:buildFolderPathMap',
+          () => buildFolderPathMap(drive),
+        );
 
         // Process files: full path + content snippet
         const CONTENT_SNIPPET_CHARS = 2000;

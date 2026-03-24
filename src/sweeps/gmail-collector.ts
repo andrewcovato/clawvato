@@ -12,6 +12,7 @@ import { google } from 'googleapis';
 import type { Sql } from '../db/index.js';
 import { logger } from '../logger.js';
 import { getHighWaterMark, setHighWaterMark, type Collector, type CollectorResult } from './types.js';
+import { retryWithBackoff } from './retry.js';
 
 interface GmailSweepConfig {
   maxThreads: number;
@@ -51,12 +52,17 @@ export function createGmailCollector(
         let pageToken: string | undefined;
 
         while (threads.length < config.maxThreads) {
-          const result = await gmail.users.threads.list({
-            userId: 'me',
-            q: dateFilter,
-            maxResults: Math.min(config.maxThreads - threads.length, 100),
-            ...(pageToken ? { pageToken } : {}),
-          });
+          const currentPageToken = pageToken;
+          const currentMaxResults = Math.min(config.maxThreads - threads.length, 100);
+          const result = await retryWithBackoff(
+            'gmail:threads.list',
+            () => gmail.users.threads.list({
+              userId: 'me',
+              q: dateFilter,
+              maxResults: currentMaxResults,
+              ...(currentPageToken ? { pageToken: currentPageToken } : {}),
+            }),
+          );
 
           const pageThreads = result.data.threads ?? [];
           if (pageThreads.length === 0) break;
