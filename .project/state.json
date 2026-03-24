@@ -53,32 +53,36 @@
     "pluginTestsPassing": "10/10 CRUD cycle + HTTP transport verified"
   },
   "currentSprint": {
-    "id": "S10",
-    "name": "Memory Excellence",
+    "id": "S11",
+    "name": "Scheduler Rebuild + Memory Intelligence",
     "goals": [
-      "1. Memory scoping — surface_id on all queries, hard isolation ⬜",
-      "2. Write-time dedup — ADD/UPDATE/DELETE/NOOP at extraction ⬜",
-      "3. Embedding upgrade — nomic-embed-text-v1.5 (56% → 86% accuracy) ⬜",
-      "4. Cross-encoder reranking — replace LLM reranking ⬜",
-      "5. Memory usage instructions — teach CC to wield memory ⬜",
-      "Merge cc-native-engine → main (after memory work stable) ⬜"
+      "S11a: Plugin scheduler tools (get_due_tasks, mark_running/completed/failed)",
+      "S11b: Sidecar rebuild — HTTP plugin + Slack, no direct DB",
+      "S11c: Validation — ad-hoc task creation + execution end-to-end",
+      "S11d: Sleep-time consolidation (18% accuracy gain)",
+      "S11e: Reflection synthesis (higher-level inferences)",
+      "S11f: Temporal decay scoring",
+      "S11g: Explicit relationship extraction (subject/predicate/object triples)",
+      "S11h: Inferred relationships via sleep-time compute"
     ],
-    "designDoc": "docs/DESIGN_S10_MEMORY_EXCELLENCE.md",
-    "progress": "0% — design doc written, ready to build"
+    "designDoc": "TBD — planning this session",
+    "progress": "0% — planning phase"
+  },
+  "completedSprints": {
+    "S10": {
+      "name": "Memory Excellence",
+      "completedDate": "2026-03-24",
+      "workstreams": [
+        "WS1: Memory scoping — soft signals (domain 1.3x, surface 1.1x boost)",
+        "WS2: Write-time dedup — ADD/UPDATE/NOOP/DELETE via Haiku",
+        "WS3: Embedding upgrade — nomic-embed-text-v1.5 (Matryoshka 384d)",
+        "WS4: Cross-encoder reranking — local ms-marco-MiniLM ($0, 48x faster)",
+        "WS5: Memory instructions — comprehensive prompt + XML-tagged context",
+        "Bonus: Entity-hop traversal, domain taxonomy, scoping refactor"
+      ]
+    }
   },
   "upcomingSprints": {
-    "S11": {
-      "name": "Scheduler Rebuild",
-      "goals": [
-        "S11a: Plugin scheduler tools (get_due_tasks, mark_running/completed/failed)",
-        "S11b: Sidecar rebuild — HTTP plugin + Slack, no direct DB",
-        "S11c: Validation — ad-hoc task creation + execution end-to-end",
-        "S11d: Sleep-time consolidation — scheduled idle-time task: review recent memories, synthesize insights, merge duplicates (18% accuracy gain)",
-        "S11e: Reflection synthesis — LLM generates higher-level inferences from accumulated facts",
-        "S11f: Temporal decay scoring — recency * importance * relevance composite scoring"
-      ],
-      "dependsOn": "S10"
-    },
     "S12": {
       "name": "Real-Time Ingest",
       "goals": [
@@ -98,25 +102,15 @@
     }
   },
   "lastSession": {
-    "number": 23,
-    "date": "2026-03-23",
-    "type": "Dead code cleanup + Phase 2 strategic scoping",
-    "keyDecisions": [
-      "Double down on CC-native — don't abstract for model-agnosticism",
-      "Plugin is the kernel (state, facts, tasks), CC is the executor (reasoning, tools)",
-      "Own the scheduler — CC's built-in scheduling is session-scoped, doesn't survive restarts",
-      "Sidecar polls plugin for due tasks, posts to Slack, CC picks up and executes",
-      "Webhook ingest via sidecar (Gmail, Calendar) → plugin for extraction + storage",
-      "Tasks/workflows are data, not code — new capabilities shouldn't require a deploy",
-      "In-tree MCP server removed (dead code cleanup complete)"
-    ]
+    "number": 24,
+    "date": "2026-03-24",
+    "type": "Plugin scoping update + merge to main + S11 planning",
+    "keyDecisions": []
   },
   "immediateBacklog": [
-    { "id": "MEMORY-SCOPING-IMPL", "title": "Implement per-session memory scoping — BLOCKING further memory usage scaling." },
-    { "id": "MEMORY-RERANK", "title": "Add LLM reranking to plugin retrieve_context." },
-    { "id": "MERGE-TO-MAIN", "title": "Merge cc-native-engine → main. Preserve hybrid as git tag." },
     { "id": "SCHEDULER-PLUGIN-TOOLS", "title": "Add scheduler tools to plugin (get_due_tasks, mark_running/completed/failed)." },
-    { "id": "SIDECAR-REBUILD", "title": "Rebuild task-scheduler-standalone.ts against HTTP plugin. No direct DB." }
+    { "id": "SIDECAR-REBUILD", "title": "Rebuild task-scheduler-standalone.ts against HTTP plugin. No direct DB." },
+    { "id": "SLEEP-TIME-CONSOLIDATION", "title": "Sleep-time consolidation: scheduled idle-time review + dedup + synthesis." }
   ],
   "backlog": [
     { "id": "GMAIL-WEBHOOK", "priority": "high", "title": "Gmail webhook ingest (Google Pub/Sub → sidecar → plugin)" },
