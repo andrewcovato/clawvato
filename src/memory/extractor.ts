@@ -188,7 +188,7 @@ export async function storeExtractionResult(
   if (newMemoryIds.length > 0) {
     try {
       const texts = newMemoryIds.map(m => m.content);
-      const embeddings = await embedBatch(texts);
+      const embeddings = await embedBatch(texts, 'document');
       for (let i = 0; i < newMemoryIds.length; i++) {
         await insertEmbedding(sql, newMemoryIds[i].id, embeddings[i]);
       }

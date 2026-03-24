@@ -442,7 +442,7 @@ async function storeFileSummaryAsMemory(
   }
 
   // Embed the new memory
-  embedBatch([content]).then(async embeddings => {
+  embedBatch([content], 'document').then(async embeddings => {
     if (embeddings.length > 0) {
       await insertEmbedding(db, newId, embeddings[0]);
     }
@@ -712,7 +712,7 @@ export async function syncDrive(
     // Batch embed all at once (one call instead of N)
     if (newMemoryIds.length > 0) {
       try {
-        const embeddings = await embedBatch(newMemoryIds.map(m => m.content));
+        const embeddings = await embedBatch(newMemoryIds.map(m => m.content), 'document');
         for (let i = 0; i < newMemoryIds.length; i++) {
           await insertEmbedding(db, newMemoryIds[i].id, embeddings[i]);
         }
@@ -894,7 +894,7 @@ export async function deepReadFile(
     // Embed new memories
     if (newMemoryIds.length > 0) {
       try {
-        const embeddings = await embedBatch(newMemoryIds.map(m => m.content));
+        const embeddings = await embedBatch(newMemoryIds.map(m => m.content), 'document');
         for (let i = 0; i < newMemoryIds.length; i++) {
           await insertEmbedding(db, newMemoryIds[i].id, embeddings[i]);
         }

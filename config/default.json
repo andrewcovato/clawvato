@@ -59,11 +59,14 @@
     "categoryFuzzyThreshold": 0.8,
     "rerankEnabled": true,
     "rerankMaxCandidates": 10,
+    "rerankModel": "Xenova/ms-marco-MiniLM-L-6-v2",
+    "rerankTopK": 15,
     "decayExemptCategories": ["preference", "commitment"],
     "archiveExemptCategories": ["preference", "commitment", "reflection"],
     "categoryReorgIntervalHours": 168,
     "consolidationBatchSize": 150,
-    "consolidationCheckIntervalHours": 6
+    "consolidationCheckIntervalHours": 6,
+    "embeddingModel": "nomic-ai/nomic-embed-text-v1.5"
   },
   "tasks": {
     "schedulerPollMs": 60000,

@@ -289,7 +289,7 @@ async function extractMeetingSummary(
   // Batch embed all new memories
   if (newMemoryIds.length > 0) {
     try {
-      const embeddings = await embedBatch(newMemoryIds.map(m => m.content));
+      const embeddings = await embedBatch(newMemoryIds.map(m => m.content), 'document');
       for (let i = 0; i < newMemoryIds.length; i++) {
         await insertEmbedding(db, newMemoryIds[i].id, embeddings[i]);
       }
@@ -440,7 +440,7 @@ export async function deepReadMeeting(
   // Batch embed
   if (newMemoryIds.length > 0) {
     try {
-      const embeddings = await embedBatch(newMemoryIds.map(m => m.content));
+      const embeddings = await embedBatch(newMemoryIds.map(m => m.content), 'document');
       for (let i = 0; i < newMemoryIds.length; i++) {
         await insertEmbedding(db, newMemoryIds[i].id, embeddings[i]);
       }

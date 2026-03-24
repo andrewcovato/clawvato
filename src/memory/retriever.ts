@@ -22,15 +22,7 @@ import {
 } from './store.js';
 import { embed } from './embeddings.js';
 import { getConfig } from '../config.js';
-import { getPrompts } from '../prompts.js';
-import Anthropic from '@anthropic-ai/sdk';
-
-/** Module-level Anthropic client — reused across rerank calls */
-let _anthropicClient: Anthropic | null = null;
-function getAnthropicClient(): Anthropic {
-  if (!_anthropicClient) _anthropicClient = new Anthropic();
-  return _anthropicClient;
-}
+import { rerankWithCrossEncoder } from './reranker.js';
 
 /** Rough estimate: 1 token ≈ 4 characters */
 function estimateTokens(text: string): number {
@@ -44,13 +36,19 @@ export interface RetrievalResult {
 }
 
 /**
- * Format a memory as a concise context line.
+ * Calculate days since a memory was created.
+ */
+function daysSinceCreated(m: Memory): number {
+  return Math.floor((Date.now() - new Date(m.created_at).getTime()) / 86400000);
+}
+
+/**
+ * Format a memory as an XML-tagged fact for structured context injection.
  */
 function formatMemory(m: Memory): string {
-  // Dynamic label — capitalize first letter of any category
-  const typeLabel = m.type.charAt(0).toUpperCase() + m.type.slice(1);
-  const confidence = m.confidence >= 0.9 ? '' : ` [${Math.round(m.confidence * 100)}% confident]`;
-  return `${typeLabel}: ${m.content}${confidence}`;
+  const age = daysSinceCreated(m);
+  const conf = m.confidence < 0.9 ? ` confidence="${m.confidence.toFixed(2)}"` : '';
+  return `<fact type="${m.type}" importance="${m.importance}"${conf} age="${age}d">${m.content}</fact>`;
 }
 
 /**
@@ -127,15 +125,17 @@ const STOPWORDS = new Set([
 ]);
 
 /**
- * Rerank memory candidates using Haiku for relevance scoring.
+ * Rerank memory candidates using a local cross-encoder model.
  * Takes RRF-ranked candidates and rescores them based on actual relevance
  * to the query — catches keyword matches that aren't semantically relevant.
+ *
+ * Uses ms-marco-MiniLM-L-6-v2 locally ($0, ~5-15ms/candidate) instead of
+ * the previous Haiku API approach.
  */
 async function rerankMemories(
   query: string,
   candidates: Memory[],
   maxCandidates: number,
-  client?: Anthropic,
 ): Promise<Memory[]> {
   if (candidates.length === 0) return candidates;
 
@@ -143,42 +143,11 @@ async function rerankMemories(
   const toRerank = candidates.slice(0, maxCandidates);
 
   try {
-    const anthropic = client ?? getAnthropicClient();
-    const snippets = toRerank.map((m, i) => ({
-      id: i,
-      type: m.type,
-      content: m.content.slice(0, 500),
-    }));
-
-    const response = await anthropic.messages.create({
-      model: config.models.classifier,
-      max_tokens: 300,
-      system: getPrompts().rerank,
-      messages: [{
-        role: 'user',
-        content: `Query: "${query}"\n\nMemories:\n${JSON.stringify(snippets)}`,
-      }],
-    });
-
-    const text = response.content
-      .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-      .map(b => b.text)
-      .join('');
-
-    const jsonStr = text.replace(/^```json?\s*/i, '').replace(/\s*```$/, '').trim();
-    const scores: Array<{ id: number; score: number }> = JSON.parse(jsonStr);
-
-    // Build score map and sort
-    const scoreMap = new Map(scores.map(s => [s.id, s.score]));
-    const reranked = toRerank
-      .map((m, i) => ({ memory: m, score: scoreMap.get(i) ?? 0.5 }))
-      .sort((a, b) => b.score - a.score)
-      .filter(r => r.score > 0.1) // Drop clearly irrelevant results
-      .map(r => r.memory);
+    const reranked = await rerankWithCrossEncoder(query, toRerank, config.memory.rerankTopK);
 
     // Append any candidates beyond maxCandidates (weren't reranked)
     const remaining = candidates.slice(maxCandidates);
-    logger.debug({ reranked: reranked.length, dropped: toRerank.length - reranked.length }, 'Memory rerank complete');
+    logger.debug({ reranked: reranked.length, total: candidates.length }, 'Memory rerank complete');
     return [...reranked, ...remaining];
   } catch (error) {
     // Rerank failed — fall back to original RRF order
@@ -235,7 +204,7 @@ export async function retrieveContext(
 
     // Use hybrid search (vector + tsvector) — pgvector always available
     try {
-      const queryEmbedding = await embed(message);
+      const queryEmbedding = await embed(message, 'query');
       searchResults = await vectorSearch(sql, queryEmbedding, { limit: 20, ftsQuery });
     } catch {
       // Embedding failed — fall back to tsvector only
@@ -285,7 +254,7 @@ export async function retrieveContext(
   // (removed hardcoded type-biased pulls that consumed budget regardless of relevance)
 
   const context = parts.length > 0
-    ? `## Memory\n${parts.join('\n')}`
+    ? `<memories>\n${parts.join('\n')}\n</memories>`
     : '';
 
   logger.info(

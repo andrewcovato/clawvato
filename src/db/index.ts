@@ -4,6 +4,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getConfig } from '../config.js';
 import { logger } from '../logger.js';
+import { reembedAllMemories } from '../memory/embeddings.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -85,6 +86,12 @@ export async function initDb(): Promise<Sql> {
   }
 
   logger.info('Database schema initialized');
+
+  // Run embedding migration in background (non-blocking)
+  reembedAllMemories(sql).catch(err => {
+    logger.warn({ error: err }, 'Embedding migration failed — will retry on next startup');
+  });
+
   return sql;
 }
 

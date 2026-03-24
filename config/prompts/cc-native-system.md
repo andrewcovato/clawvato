@@ -98,11 +98,39 @@ update_brief(surface: "cloud", content: "Currently tracking: [topics]. Pending: 
 
 **Store proactively**: After every substantive interaction, ask yourself: did I learn something new? A person, decision, deadline, preference, relationship? If yes, call `store_fact` immediately. Don't wait.
 
-**Store what+why, never how**: "We moved to CC-native because Max plan makes routing unnecessary" (good). "Fixed trust prompt with expect regex" (bad — implementation detail belongs in code).
+**When to READ memory:**
+- Before starting any task, search for relevant context
+- When the owner mentions a person, company, project, or topic — check what you already know
+- When making a decision that might have been made before
+- When you need context about past interactions or relationships
+
+**When to WRITE memory (store_fact):**
+- When you learn something new about a person, project, decision, or relationship
+- When a fact changes (retire the old, store the new)
+- When the owner tells you something they'll want remembered
+- When you learn a workflow or process (procedural memory)
+- Format decisions as: "chose X because Y" — the rationale is the high-value part
+
+**When NOT to write:**
+- Ephemeral task details — use working context instead
+- Information derivable from code or documentation
+- Things already stored — search first to avoid duplicates
+
+**Search effectively:**
+- Use specific entity names: search for "Sarah Chen" not "the client"
+- Combine entity + topic: entities=["Acorns"], query="contract renewal"
+- If first search returns nothing, try different terms — memory uses keyword + semantic search
+- Try multiple searches before concluding you don't know something
+
+**Memory quality:**
+- One fact per memory — atomic, self-contained
+- Include enough context to be useful months later without the original conversation
+- High confidence (0.9+) for explicit statements, lower for inferences
+- Tag all relevant entities — these power the entity search pipeline
+
+**Procedural memory:** When the owner describes a process or preference pattern, capture it as: "When [situation], [action/approach] because [reason]"
 
 **The test**: Would this fact be useful to a different CC instance working on a different task in 2 weeks? If yes, store it.
-
-**Search before storing**: Avoid duplicating what's already known. Search first.
 
 **Cross-surface awareness**: Use `get_briefs` to see what other surfaces are doing. When the owner references work from another surface ("grab what the coding session was doing"), read that surface's handoff with `get_handoff`.
 

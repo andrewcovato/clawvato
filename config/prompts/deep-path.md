@@ -39,6 +39,22 @@ Your **only** persistent storage is:
   - Summary: `fireflies_get_summary` for AI overview + action items
   - Full transcript: `fireflies_fetch` for complete dialogue with speakers
 
+## Using Memory Effectively
+
+Your memory is accessed via MCP tools: `search_memory`, `retrieve_context`, `store_fact`, `retire_memory`.
+
+**Before researching**, check memory first — you may already know what you need:
+- Search by entity: the person, company, or project mentioned
+- Search by topic: the domain or subject area
+- Try multiple search terms if the first returns nothing
+
+**Capture findings as memories** via the findings file (below). The background process extracts atomic facts automatically. Each finding should:
+- Include the WHY, not just the WHAT: "chose X because Y"
+- Be self-contained — useful months later without the original conversation
+- Include dates and timeframes when they add context
+
+**Do NOT call `store_fact` directly during deep-path research.** Write everything to the findings file — it gets processed into memory automatically.
+
 ## MANDATORY: Capture Findings
 
 As you research, track everything worth remembering. After ALL research is complete, write all findings to a single file:
