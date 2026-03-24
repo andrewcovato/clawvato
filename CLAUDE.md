@@ -34,9 +34,11 @@ Slack message arrives
   → Background: journal hook accumulates → /ingest → plugin extracts facts
 
 Supervisor: expect + restart loop (handles PTY + trust prompt)
-Task scheduler: standalone sidecar (posts due tasks to Slack)
+Sidecar: unified process — task poller (60s) + tiered sweeps + event feed
+  Sweeps: Slack+FF hourly, Drive 6h, full backfill daily
+  Collectors run in-process → content sent to plugin /ingest → Sonnet extracts
+  Event feed: task dispatches/completions/failures posted to #clawvato-tasks
 Plugin scheduler: consolidation (6h), reflection (12h), clustering (12h), decay
-Sweeps: 4 parallel collectors → Opus synthesis → Sonnet extraction → plugin
 
 Session lifecycle:
   Active → idle timeout → verified handoff (subagent test) → exit
@@ -95,7 +97,7 @@ src/
   cc-native/       # CC-Native Engine (active architecture)
     slack-channel.ts   # Slack Channel MCP server (channel events + reply/react tools)
     start.ts           # Launcher for supervisor entrypoint
-    task-scheduler-standalone.ts  # Sidecar: polls tasks, posts to Slack
+    task-scheduler-standalone.ts  # Sidecar: task poller + tiered sweeps + event feed
   agent/           # Legacy hybrid agent orchestration (fallback on main branch)
     hybrid.ts      # Main orchestrator — routes to fast/medium/deep path
     router.ts      # Haiku complexity classifier (FAST/MEDIUM/DEEP)
@@ -123,11 +125,10 @@ src/
     consolidation.ts # Duplicate merge, decay (hybrid fallback only)
   tasks/           # Autonomous task queue
     store.ts       # CRUD + scheduler operations (async, Postgres)
-    tools.ts       # Fast-path tools: list/create/update/delete/sync_tasks
+    tools.ts       # Fast-path tools: list/create/update/delete (DB-only, no Slack side effects)
     scheduler.ts   # Polling loop (60s), executes due tasks
     executor.ts    # Task → agent pipeline bridge
-    channel-manager.ts  # Dedicated Slack channel: pins, notifications, threads
-    approval.ts    # Thumbs-up reaction approval for agent-created tasks
+    # channel-manager.ts and approval.ts DELETED (S25) — pins replaced by event feed
   security/        # sender-verify, output-sanitizer, path-validator, rate-limiter
   slack/           # Slack event handling
     handler.ts     # Event routing, reaction lifecycle, interrupt buffer
@@ -214,7 +215,10 @@ Key patterns:
 
 ### Two Schedulers
 - **Memory scheduler (PLUGIN)**: consolidation (6h), reflection (12h), clustering (12h), temporal decay, embedding backfill. No Slack, no user interaction. Runs inside the plugin process on Railway.
-- **Agent scheduler (AGENT)**: user-facing tasks, briefs, emails, webhooks. Needs Slack + Google. Runs as standalone sidecar (`task-scheduler-standalone.ts`).
+- **Agent sidecar (AGENT)**: unified process with three concerns:
+  1. **Tiered sweeps**: Slack+FF hourly, Drive 6h, full backfill daily. Collectors run in-process, content → plugin `/ingest`.
+  2. **Task poller**: 60s polling, user-facing tasks dispatched to Slack for CC.
+  3. **Event feed**: task/sweep events posted to #clawvato-tasks. No pins, no reconciliation.
 
 ### Security Model — Single-Principal Authority
 Only the owner (identified by `OWNER_SLACK_USER_ID`) can issue instructions. Everything else is **untrusted data**.
@@ -399,7 +403,9 @@ Supports `LOG_DESTINATION=stderr` for MCP server mode.
 | `memory.reflectionMaxTokens` | 1,000 | Haiku reflection response limit |
 | `slack.interruptConfidenceThreshold` | 0.7 | Below this, ask user to clarify |
 | `trainingWheels.graduationThreshold` | 10 | Approvals needed for graduation (DISABLED) |
-| `sweeps.cron` | every 6 hours | Background sweep schedule |
+| `sweeps.tiers.frequent.intervalMs` | 3,600,000 | Slack + Fireflies sweep (1h) |
+| `sweeps.tiers.standard.intervalMs` | 21,600,000 | Drive sweep (6h) |
+| `sweeps.tiers.backfill.intervalMs` | 86,400,000 | Full backfill sweep (24h) |
 | `sweeps.slack.maxMessagesPerChannel` | 500 | Max msgs per channel per sweep |
 | `sweeps.gmail.maxThreads` | 2,000 | Max email threads per sweep |
 | `sweeps.drive.maxFiles` | 500 | Max Drive files per sweep |
