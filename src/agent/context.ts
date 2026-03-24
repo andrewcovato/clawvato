@@ -129,7 +129,7 @@ export async function assembleContext(
 ): Promise<AssembledContext> {
   const config = getConfig();
 
-  // Retrieve memory context
+  // Retrieve memory context (surfaces default to [CLAWVATO_SURFACE, 'global'] inside retrieveContext)
   const memoryResult = await retrieveContext(sql, message, {
     tokenBudget: config.context.longTermTokenBudget,
   });
