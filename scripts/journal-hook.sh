@@ -109,20 +109,24 @@ SESSION_ID="${CLAUDE_SESSION_ID:-unknown}"
 SOURCE="journal:${SURFACE}:${SESSION_ID}"
 
 # Send to plugin via direct HTTP (not MCP — simpler, no SSE needed)
-# We'll add a /ingest REST endpoint alongside the MCP endpoint
-curl -s -X POST "${PLUGIN_URL}/ingest" \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer ${AUTH_TOKEN}" \
-  -d "$(node -e "
-    const text = process.argv[1];
-    const source = process.argv[2];
-    const surface = process.argv[3];
-    console.log(JSON.stringify({ text, source, surface_id: surface }));
-  " "$JOURNAL_CONTENT" "$SOURCE" "$SURFACE")" \
-  > /dev/null 2>&1 &
+# Write JSON payload to a temp file to avoid shell escaping issues
+PAYLOAD_FILE="/tmp/clawvato-journal-payload-$$.json"
+node -e "
+  const fs = require('fs');
+  const text = fs.readFileSync('/tmp/clawvato-journal.md', 'utf8');
+  const payload = { text, source: process.argv[1], surface_id: process.argv[2] };
+  fs.writeFileSync(process.argv[3], JSON.stringify(payload));
+" "$SOURCE" "$SURFACE" "$PAYLOAD_FILE"
 
-# Reset journal and counter
+# Reset journal and counter BEFORE the async send (payload is in the temp file)
 > "$JOURNAL_FILE"
 echo "0" > "$COUNTER_FILE"
+
+# Send async — curl reads payload file, then cleans up
+(curl -s -X POST "${PLUGIN_URL}/ingest" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer ${AUTH_TOKEN}" \
+  -d @"$PAYLOAD_FILE" \
+  > /dev/null 2>&1; rm -f "$PAYLOAD_FILE") &
 
 exit 0
