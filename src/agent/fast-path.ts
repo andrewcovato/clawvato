@@ -22,6 +22,7 @@ import { NO_RESPONSE } from '../prompts.js';
 import { searchMemories, supersedeMemory, type MemoryType } from '../memory/store.js';
 import { preToolUse, type ToolUseContext } from '../hooks/pre-tool-use.js';
 import { postToolUse, type ToolResult } from '../hooks/post-tool-use.js';
+import { validatePath } from '../security/path-validator.js';
 import type { ToolHandlerResult } from '../mcp/slack/server.js';
 import type { SlackHandler } from '../slack/handler.js';
 
@@ -205,6 +206,14 @@ export function createFastPathMemoryTools(db: Sql): Array<{ definition: Anthropi
           const offset = (args.offset as number) ?? 0;
           const limit = (args.limit as number) ?? 200;
 
+          // Defense-in-depth: validate path even if pre-tool hook missed it
+          const config = getConfig();
+          const pathCheck = validatePath(filePath, config.sandboxRoots);
+          if (!pathCheck.allowed) {
+            logger.warn({ tool: 'read_file', path: filePath, reason: pathCheck.reason }, 'read_file: path validation failed');
+            return { content: `Path blocked: ${pathCheck.reason}`, isError: true };
+          }
+
           const content = readFileSync(filePath, 'utf-8');
           const lines = content.split('\n');
           const slice = lines.slice(offset, offset + limit);
@@ -236,6 +245,15 @@ export function createFastPathMemoryTools(db: Sql): Array<{ definition: Anthropi
       handler: async (args) => {
         try {
           const dirPath = args.path as string;
+
+          // Defense-in-depth: validate path even if pre-tool hook missed it
+          const config = getConfig();
+          const pathCheck = validatePath(dirPath, config.sandboxRoots);
+          if (!pathCheck.allowed) {
+            logger.warn({ tool: 'list_files', path: dirPath, reason: pathCheck.reason }, 'list_files: path validation failed');
+            return { content: `Path blocked: ${pathCheck.reason}`, isError: true };
+          }
+
           const entries = readdirSync(dirPath);
           const details = entries.map(name => {
             try {
@@ -389,12 +407,18 @@ export async function executeFastPath(
   }
 }
 
+// Tools that perform filesystem operations and must go through path validation
+const FILESYSTEM_TOOLS = new Set(['read_file', 'list_files']);
+
 function runFastPathPreToolChecks(
   toolName: string,
   toolInput: Record<string, unknown>,
   senderSlackId?: string,
 ): boolean {
-  const serverName = toolName.startsWith('google_') ? 'google' : toolName.startsWith('slack_') ? 'slack' : 'agent';
+  const serverName = toolName.startsWith('google_') ? 'google'
+    : toolName.startsWith('slack_') ? 'slack'
+    : (FILESYSTEM_TOOLS.has(toolName) && typeof toolInput.path === 'string') ? 'filesystem'
+    : 'agent';
 
   const ctx: ToolUseContext = { toolName, serverName, input: toolInput, senderSlackId };
   const secResult = preToolUse(ctx);
@@ -412,7 +436,10 @@ function runFastPathPostToolChecks(
   output: string,
   isError: boolean,
 ): string {
-  const serverName = toolName.startsWith('google_') ? 'google' : toolName.startsWith('slack_') ? 'slack' : 'agent';
+  const serverName = toolName.startsWith('google_') ? 'google'
+    : toolName.startsWith('slack_') ? 'slack'
+    : (FILESYSTEM_TOOLS.has(toolName) && typeof toolInput.path === 'string') ? 'filesystem'
+    : 'agent';
 
   const result: ToolResult = {
     toolName,

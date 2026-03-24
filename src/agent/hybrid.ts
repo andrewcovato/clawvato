@@ -17,7 +17,6 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { WebClient } from '@slack/web-api';
 import { readFileSync, writeFileSync, existsSync, unlinkSync, mkdtempSync, mkdirSync, readdirSync, rmSync, cpSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import type { Sql } from '../db/index.js';
 import { logger } from '../logger.js';
 import { getConfig } from '../config.js';

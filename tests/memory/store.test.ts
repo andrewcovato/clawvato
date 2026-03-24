@@ -1,5 +1,5 @@
 /**
- * Tests for the Memory Store — CRUD operations for memories and people.
+ * Tests for the Memory Store — CRUD operations for memories.
  *
  * Uses isolated Postgres schemas per test suite via pg-test helper.
  */
@@ -16,14 +16,6 @@ import {
   supersedeMemory,
   findDuplicates,
   getRecentMemories,
-  insertPerson,
-  findPersonByName,
-  findPersonBySlackId,
-  findPersonByEmail,
-  touchPerson,
-  updatePerson,
-  findOrCreatePerson,
-  getAllPeople,
 } from '../../src/memory/store.js';
 
 let sql: TestSql;
@@ -186,101 +178,3 @@ describe('Memory CRUD', () => {
   });
 });
 
-describe('People CRUD', () => {
-  it('inserts and finds a person by name', async () => {
-    await insertPerson(sql, { name: 'Jake Wilson', email: 'jake@corp.com', role: 'Engineer' });
-
-    const person = await findPersonByName(sql, 'Jake Wilson');
-    expect(person).not.toBeNull();
-    expect(person!.name).toBe('Jake Wilson');
-    expect(person!.email).toBe('jake@corp.com');
-    expect(person!.role).toBe('Engineer');
-    expect(person!.relationship).toBe('unknown');
-    expect(person!.interaction_count).toBe(0);
-  });
-
-  it('finds person by name case-insensitively', async () => {
-    await insertPerson(sql, { name: 'Sarah Chen' });
-
-    const found = await findPersonByName(sql, 'sarah chen');
-    expect(found).not.toBeNull();
-    expect(found!.name).toBe('Sarah Chen');
-  });
-
-  it('finds person by Slack ID', async () => {
-    await insertPerson(sql, { name: 'Sarah', slack_id: 'U123ABC' });
-
-    const person = await findPersonBySlackId(sql, 'U123ABC');
-    expect(person).not.toBeNull();
-    expect(person!.name).toBe('Sarah');
-  });
-
-  it('finds person by email', async () => {
-    await insertPerson(sql, { name: 'Bob', email: 'bob@corp.com' });
-
-    const person = await findPersonByEmail(sql, 'bob@corp.com');
-    expect(person).not.toBeNull();
-    expect(person!.name).toBe('Bob');
-  });
-
-  it('touches a person (updates interaction tracking)', async () => {
-    const id = await insertPerson(sql, { name: 'Jake' });
-
-    await touchPerson(sql, id);
-    const person = await findPersonByName(sql, 'Jake');
-    expect(person!.interaction_count).toBe(1);
-    expect(person!.last_interaction_at).not.toBeNull();
-  });
-
-  it('updates person fields', async () => {
-    const id = await insertPerson(sql, { name: 'Jake' });
-
-    await updatePerson(sql, id, { email: 'jake@corp.com', role: 'Manager', timezone: 'US/Pacific' });
-
-    const updated = await findPersonByName(sql, 'Jake');
-    expect(updated!.email).toBe('jake@corp.com');
-    expect(updated!.role).toBe('Manager');
-    expect(updated!.timezone).toBe('US/Pacific');
-  });
-
-  it('findOrCreatePerson creates new person', async () => {
-    const id = await findOrCreatePerson(sql, { name: 'New Person', email: 'new@corp.com' });
-
-    const person = await findPersonByName(sql, 'New Person');
-    expect(person).not.toBeNull();
-    expect(person!.id).toBe(id);
-    expect(person!.email).toBe('new@corp.com');
-  });
-
-  it('findOrCreatePerson returns existing and enriches', async () => {
-    const id1 = await findOrCreatePerson(sql, { name: 'Jake' });
-    const id2 = await findOrCreatePerson(sql, { name: 'Jake', email: 'jake@corp.com', role: 'Engineer' });
-
-    expect(id2).toBe(id1);
-
-    const person = await findPersonByName(sql, 'Jake');
-    expect(person!.email).toBe('jake@corp.com');
-    expect(person!.role).toBe('Engineer');
-  });
-
-  it('findOrCreatePerson does not overwrite existing fields with nothing', async () => {
-    await findOrCreatePerson(sql, { name: 'Jake', email: 'jake@corp.com' });
-    await findOrCreatePerson(sql, { name: 'Jake' }); // no email this time
-
-    const person = await findPersonByName(sql, 'Jake');
-    expect(person!.email).toBe('jake@corp.com'); // not overwritten
-  });
-
-  it('getAllPeople returns people ordered by interaction count', async () => {
-    const id1 = await insertPerson(sql, { name: 'Alice' });
-    const id2 = await insertPerson(sql, { name: 'Bob' });
-
-    await touchPerson(sql, id2);
-    await touchPerson(sql, id2);
-    await touchPerson(sql, id1);
-
-    const people = await getAllPeople(sql);
-    expect(people[0].name).toBe('Bob');
-    expect(people[1].name).toBe('Alice');
-  });
-});

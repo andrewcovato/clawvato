@@ -8,7 +8,7 @@ WORKDIR /app
 
 # Install all deps (need typescript for build)
 COPY package.json package-lock.json* ./
-RUN npm ci || npm install
+RUN npm ci
 
 # Build TypeScript
 COPY tsconfig.json ./

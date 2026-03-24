@@ -24,6 +24,7 @@ import {
   CallToolRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { App } from '@slack/bolt';
+import { scanForSecrets } from '../security/output-sanitizer.js';
 
 // Redirect console to stderr (MCP protocol uses stdout)
 const stderrWrite = (msg: string) => process.stderr.write(msg + '\n');
@@ -179,9 +180,17 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
 
   try {
     if (name === 'slack_reply') {
-      const { channel_id, text, thread_ts } = args as {
+      const { channel_id, text: rawText, thread_ts } = args as {
         channel_id: string; text: string; thread_ts?: string;
       };
+
+      // Scan for secrets before posting — use redacted version if any found
+      const scanResult = scanForSecrets(rawText);
+      if (scanResult.hasSecrets) {
+        const types = scanResult.matches.map(m => m.type);
+        console.error(`[security] Redacted secrets in slack_reply: ${types.join(', ')}`);
+      }
+      const text = scanResult.hasSecrets ? scanResult.redacted : rawText;
 
       // Chunk long messages to avoid Slack's msg_too_long error
       const MAX_LEN = 3900;

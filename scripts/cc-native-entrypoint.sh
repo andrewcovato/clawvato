@@ -81,14 +81,17 @@ cat > "$MCP_CONFIG" <<MCPJSON
   }
 }
 MCPJSON
+chmod 600 "$MCP_CONFIG"
 echo "[supervisor] MCP config written to $MCP_CONFIG"
 
 # Save API key for extraction hooks before unsetting for CC.
 # CC itself uses Max plan OAuth (free), but the async extraction hook
 # needs the API key for Sonnet calls (~$0.001/extraction).
 if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+  OLD_UMASK=$(umask)
+  umask 077
   echo "$ANTHROPIC_API_KEY" > /tmp/.extraction-api-key
-  chmod 600 /tmp/.extraction-api-key
+  umask "$OLD_UMASK"
 fi
 
 # Do NOT export ANTHROPIC_API_KEY — force CC to use Max plan OAuth
@@ -106,6 +109,7 @@ echo "[supervisor] Task scheduler PID: $SCHEDULER_PID"
 cleanup() {
   echo "[supervisor] Shutting down..."
   kill "$SCHEDULER_PID" 2>/dev/null || true
+  rm -f "$MCP_CONFIG" /tmp/.extraction-api-key
   exit 0
 }
 trap cleanup SIGTERM SIGINT

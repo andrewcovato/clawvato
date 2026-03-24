@@ -13,6 +13,7 @@
 import { App, Assistant } from '@slack/bolt';
 import { WebClient } from '@slack/web-api';
 import { logger } from '../logger.js';
+import { getConfig } from '../config.js';
 import { SlackHandler, type SlackReactionAPI, type SlackMessageAPI } from './handler.js';
 
 /** Callback for task approval reactions. Set by start.ts after DB is ready. */
@@ -305,6 +306,9 @@ export async function createSlackConnection(config: {
 
       // Only handle thumbs-up reactions from the owner
       if (reaction !== '+1' && reaction !== 'thumbsup') return;
+
+      // Security: only the owner can approve tasks via reaction
+      if (user !== getConfig().ownerSlackUserId) return;
 
       const channel = item.channel as string;
       const messageTs = item.ts as string;

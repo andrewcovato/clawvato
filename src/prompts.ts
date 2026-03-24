@@ -92,7 +92,6 @@ interface LoadedPrompts {
   deepPath: string;
   router: string;
   factSynthesis: string;
-  preflight: string;
   rerank: string;
   sweepSynthesis: string;
   contextPlanner: string;
@@ -122,7 +121,6 @@ export function loadPrompts(): LoadedPrompts {
     deepPath: 'deep-path.md',
     router: 'router.md',
     factSynthesis: 'fact-synthesis.md',
-    preflight: 'preflight.md',
     rerank: 'rerank.md',
     sweepSynthesis: 'sweep-synthesis.md',
     contextPlanner: 'context-planner.md',

@@ -368,11 +368,28 @@ export function loadConfig(overrides?: Partial<ClawvatoConfig>): ClawvatoConfig 
   if (process.env.GOOGLE_AGENT_EMAIL) {
     envConfig.google = { ...(envConfig.google as Record<string, unknown> ?? {}), agentEmail: process.env.GOOGLE_AGENT_EMAIL };
   }
+  // Map Slack tokens from env so security validation can detect them
+  if (process.env.SLACK_BOT_TOKEN || process.env.SLACK_APP_TOKEN) {
+    const slackOverrides: Record<string, unknown> = {};
+    if (process.env.SLACK_BOT_TOKEN) slackOverrides.botToken = process.env.SLACK_BOT_TOKEN;
+    if (process.env.SLACK_APP_TOKEN) slackOverrides.appToken = process.env.SLACK_APP_TOKEN;
+    envConfig.slack = { ...(envConfig.slack as Record<string, unknown> ?? {}), ...slackOverrides };
+  }
 
   // Merge: defaults < file < env < overrides
   const merged = { ...defaults, ...fileConfig, ...envConfig, ...overrides };
 
   currentConfig = ConfigSchema.parse(merged);
+
+  // Security: ownerSlackUserId is required when Slack is configured
+  const hasSlackTokens = currentConfig.slack.botToken || currentConfig.slack.appToken;
+  if (hasSlackTokens && !currentConfig.ownerSlackUserId) {
+    throw new Error(
+      'OWNER_SLACK_USER_ID must be set when Slack tokens are configured. ' +
+      'Without it, sender verification cannot enforce single-principal authority.',
+    );
+  }
+
   return currentConfig;
 }
 
@@ -385,7 +402,7 @@ export function getConfig(): ClawvatoConfig {
 
 export function saveConfig(config: ClawvatoConfig): void {
   const configPath = join(config.dataDir, 'config.json');
-  writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
+  writeFileSync(configPath, JSON.stringify(config, null, 2), { encoding: 'utf-8', mode: 0o600 });
   currentConfig = config;
 }
 

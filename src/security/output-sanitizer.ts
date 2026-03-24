@@ -50,6 +50,10 @@ const SECRET_PATTERNS: Array<{ name: string; pattern: RegExp }> = [
   // SSN
   { name: 'ssn', pattern: /\b\d{3}-\d{2}-\d{4}\b/g },
 
+  // OAuth / Bearer tokens
+  { name: 'bearer_token', pattern: /(?:Bearer\s+)[A-Za-z0-9_\-/.=+]{40,}/g },
+  { name: 'oauth_token', pattern: /(?:oauth[_-]?token|access[_-]?token|refresh[_-]?token)\s*[=:]\s*['"]?[A-Za-z0-9_\-/.=+]{40,}['"]?/gi },
+
   // Credit card numbers (basic Luhn-candidate patterns)
   { name: 'credit_card', pattern: /\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|6(?:011|5[0-9]{2})[0-9]{12})\b/g },
 ];

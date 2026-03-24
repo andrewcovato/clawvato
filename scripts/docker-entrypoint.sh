@@ -60,7 +60,7 @@ chown -R clawvato:clawvato "$CLAWVATO_HOME/.claude" 2>/dev/null || true
 GWS_PERSIST_DIR="/data/gws-config"
 if [ -n "$GWS_CONFIG_B64" ]; then
   mkdir -p "$GWS_PERSIST_DIR"
-  echo "$GWS_CONFIG_B64" | base64 -d | tar xzf - -C "$GWS_PERSIST_DIR"
+  echo "$GWS_CONFIG_B64" | base64 -d | tar xzf - --no-same-owner --no-same-permissions -C "$GWS_PERSIST_DIR"
   mkdir -p "$CLAWVATO_HOME/.config/gws"
   cp -r "$GWS_PERSIST_DIR"/. "$CLAWVATO_HOME/.config/gws/"
   chown -R clawvato:clawvato "$CLAWVATO_HOME/.config" 2>/dev/null || true
