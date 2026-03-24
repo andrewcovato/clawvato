@@ -22,7 +22,6 @@ import type { ToolHandlerResult } from '../mcp/slack/server.js';
 import { getTask, rescheduleRecurring, markCompleted, markFailed } from './store.js';
 import type { ScheduledTask } from './store.js';
 import type { TaskExecutionResult } from './scheduler.js';
-import type { TaskChannelManager } from './channel-manager.js';
 import type { Collector } from '../sweeps/types.js';
 import { executeSweep } from '../sweeps/executor.js';
 import { extractFacts, storeExtractionResult } from '../memory/extractor.js';
@@ -34,7 +33,6 @@ export interface TaskExecutorDeps {
   anthropicClient: Anthropic;
   botClient: WebClient;
   fastPathTools: Array<{ definition: Anthropic.Tool; handler: (args: Record<string, unknown>) => Promise<ToolHandlerResult> }>;
-  channelManager?: TaskChannelManager;
   ownerDmChannel?: string; // fallback if no task channel
   botUserId?: string;
   /** Registered sweep collectors (populated at startup if sweeps enabled) */
@@ -49,6 +47,7 @@ export async function executeScheduledTask(
   deps: TaskExecutorDeps,
 ): Promise<TaskExecutionResult> {
   const config = getConfig();
+  const taskChannelId = config.tasks.channelId;
   const isSpawned = task.spawned_by_task;
 
   logger.info({ taskId: task.id, title: task.title, spawned: isSpawned }, 'Executing scheduled task');
@@ -99,8 +98,8 @@ export async function executeScheduledTask(
       const header = task.cron_expression ? `📊 *${task.title}* (${task.cron_expression})` : `📊 *${task.title}*`;
       const fullMessage = `${header}\n\n${result.response}`;
 
-      if (deps.channelManager) {
-        await deps.channelManager.postNotification(fullMessage);
+      if (taskChannelId) {
+        await deps.botClient.chat.postMessage({ channel: taskChannelId, text: fullMessage });
       } else if (deps.ownerDmChannel) {
         // Fallback: post to owner DM
         try {
@@ -111,18 +110,10 @@ export async function executeScheduledTask(
         } catch { /* non-critical */ }
       }
 
-      // Update pin with new run times
       if (task.cron_expression) {
         await rescheduleRecurring(deps.sql, task.id, result.response, task.cron_expression);
-        const updatedTask = await getTask(deps.sql, task.id);
-        if (updatedTask && deps.channelManager) {
-          await deps.channelManager.updateTaskPin(updatedTask);
-        }
       } else {
         await markCompleted(deps.sql, task.id, result.response);
-        if (deps.channelManager) {
-          await deps.channelManager.removeTaskPin(task, 'completed');
-        }
       }
 
       return { success: true, response: result.response };
@@ -131,15 +122,8 @@ export async function executeScheduledTask(
     // No noteworthy response — still update run times
     if (task.cron_expression) {
       await rescheduleRecurring(deps.sql, task.id, 'No noteworthy findings', task.cron_expression);
-      const updatedTask = await getTask(deps.sql, task.id);
-      if (updatedTask && deps.channelManager) {
-        await deps.channelManager.updateTaskPin(updatedTask);
-      }
     } else {
       await markCompleted(deps.sql, task.id, 'Completed — no output');
-      if (deps.channelManager) {
-        await deps.channelManager.removeTaskPin(task, 'completed');
-      }
     }
 
     return { success: true, response: result.response ?? '' };
@@ -150,9 +134,10 @@ export async function executeScheduledTask(
     await markFailed(deps.sql, task.id, errMsg);
 
     // Notify in task channel
-    if (deps.channelManager) {
-      await deps.channelManager.postNotification(`⚠️ *Task failed: ${task.title}*\n\nError: ${errMsg.slice(0, 500)}`);
-      await deps.channelManager.removeTaskPin(task, 'failed');
+    if (taskChannelId) {
+      try {
+        await deps.botClient.chat.postMessage({ channel: taskChannelId, text: `⚠️ *Task failed: ${task.title}*\n\nError: ${errMsg.slice(0, 500)}` });
+      } catch { /* non-critical */ }
     }
 
     return { success: false, response: '', error: errMsg };
@@ -228,18 +213,9 @@ async function executeSweepTask(
       ? `Re-extracted ${factsStored} facts from persisted findings.`
       : `Swept ${sweepResult!.sourcesSwept} sources, collected ${sweepResult!.itemsCollected} new items, stored ${factsStored} facts in ${Math.round(sweepResult!.durationMs / 1000)}s.`;
 
-    // Post result to task channel
-    if (deps.channelManager && (factsStored > 0 || (sweepResult?.itemsCollected ?? 0) > 0)) {
-      await deps.channelManager.postNotification(`🔄 *Background sweep complete*\n\n${summary}`);
-    }
-
     // Reschedule if recurring
     if (task.cron_expression) {
       await rescheduleRecurring(deps.sql, task.id, summary, task.cron_expression);
-      const updatedTask = await getTask(deps.sql, task.id);
-      if (updatedTask && deps.channelManager) {
-        await deps.channelManager.updateTaskPin(updatedTask);
-      }
     } else {
       await markCompleted(deps.sql, task.id, summary);
     }
@@ -250,8 +226,11 @@ async function executeSweepTask(
     logger.error({ error: errMsg, taskId: task.id }, 'Sweep task failed');
     await markFailed(deps.sql, task.id, errMsg);
 
-    if (deps.channelManager) {
-      await deps.channelManager.postNotification(`⚠️ *Sweep failed*\n\nError: ${errMsg.slice(0, 500)}`);
+    const sweepChannelId = config.tasks.channelId;
+    if (sweepChannelId) {
+      try {
+        await deps.botClient.chat.postMessage({ channel: sweepChannelId, text: `⚠️ *Sweep failed*\n\nError: ${errMsg.slice(0, 500)}` });
+      } catch { /* non-critical */ }
     }
 
     return { success: false, response: '', error: errMsg };

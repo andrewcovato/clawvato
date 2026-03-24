@@ -93,7 +93,11 @@
   },
   "sweeps": {
     "enabled": true,
-    "cron": "every 6 hours",
+    "tiers": {
+      "frequent":  { "sources": ["slack", "fireflies"], "intervalMs": 3600000 },
+      "standard":  { "sources": ["drive"],              "intervalMs": 21600000 },
+      "backfill":  { "sources": ["slack", "gmail", "drive", "fireflies"], "intervalMs": 86400000 }
+    },
     "slack": {
       "enabled": true,
       "excludeChannels": [],

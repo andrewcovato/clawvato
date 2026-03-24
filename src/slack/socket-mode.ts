@@ -16,22 +16,6 @@ import { logger } from '../logger.js';
 import { getConfig } from '../config.js';
 import { SlackHandler, type SlackReactionAPI, type SlackMessageAPI } from './handler.js';
 
-/** Callback for task approval reactions. Set by start.ts after DB is ready. */
-let onTaskApprovalReaction: ((channel: string, messageTs: string) => Promise<void>) | null = null;
-
-/** Callback to resolve task context from a thread parent ts. */
-let onResolveTaskFromThread: ((channel: string, threadTs: string) => Promise<{ taskId: string; title: string } | null>) | null = null;
-
-/** Register a callback for task approval reactions. */
-export function setTaskApprovalHandler(handler: (channel: string, messageTs: string) => Promise<void>): void {
-  onTaskApprovalReaction = handler;
-}
-
-/** Register a callback to resolve tasks from thread replies. */
-export function setTaskThreadResolver(resolver: (channel: string, threadTs: string) => Promise<{ taskId: string; title: string } | null>): void {
-  onResolveTaskFromThread = resolver;
-}
-
 export interface SlackConnection {
   app: App;
   handler: SlackHandler;
@@ -247,18 +231,7 @@ export async function createSlackConnection(config: {
       const threadTs = msg.thread_ts as string | undefined;
       const channelType = msg.channel_type as string | undefined;
 
-      // If this is a thread reply, check if the parent is a pinned task message
-      let messageText = (msg.text as string) ?? '';
-      if (threadTs && onResolveTaskFromThread) {
-        try {
-          const taskInfo = await onResolveTaskFromThread(channel, threadTs);
-          if (taskInfo) {
-            // Prepend deterministic task context so the agent knows exactly which task
-            messageText = `[Task modification — task ID: ${taskInfo.taskId}, title: "${taskInfo.title}"]\n\nUser says: ${messageText}`;
-            logger.info({ taskId: taskInfo.taskId, title: taskInfo.title }, 'Thread reply matched to pinned task');
-          }
-        } catch { /* non-critical — fall through to normal processing */ }
-      }
+      const messageText = (msg.text as string) ?? '';
 
       logger.info(
         { channel, user, ts, channelType },
@@ -294,31 +267,6 @@ export async function createSlackConnection(config: {
   app.event('user_typing' as 'message', async ({ event }) => {
     const typingEvent = event as unknown as { channel: string; thread_ts?: string; user: string };
     handler.handleTyping(typingEvent);
-  });
-
-  // Reaction events — used for task approval (thumbs-up on proposal messages)
-  app.event('reaction_added', async ({ event }) => {
-    try {
-      const evt = event as unknown as Record<string, unknown>;
-      const reaction = evt.reaction as string;
-      const item = evt.item as Record<string, unknown>;
-      const user = evt.user as string;
-
-      // Only handle thumbs-up reactions from the owner
-      if (reaction !== '+1' && reaction !== 'thumbsup') return;
-
-      // Security: only the owner can approve tasks via reaction
-      if (user !== getConfig().ownerSlackUserId) return;
-
-      const channel = item.channel as string;
-      const messageTs = item.ts as string;
-
-      if (onTaskApprovalReaction) {
-        await onTaskApprovalReaction(channel, messageTs);
-      }
-    } catch (error) {
-      logger.debug({ error }, 'Reaction event handler error — non-critical');
-    }
   });
 
   // ── Wire Assistant Framework ──

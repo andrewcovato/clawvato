@@ -40,8 +40,7 @@ import { maybeReflect } from '../memory/reflection.js';
 import { findOrCreateCategory, insertMemory, findDuplicates, supersedeMemory, deleteEmbedding, insertEmbedding } from '../memory/store.js';
 import { embedBatch } from '../memory/embeddings.js';
 import { classifyInterrupt, generateClarificationMessage } from '../slack/interrupt-classifier.js';
-import { createTaskTools, type TaskToolContext } from '../tasks/tools.js';
-import type { TaskChannelManager } from '../tasks/channel-manager.js';
+import { createTaskTools } from '../tasks/tools.js';
 import { scanForSecrets } from '../security/output-sanitizer.js';
 import type { SlackHandler } from '../slack/handler.js';
 import type { AccumulatedBatch } from '../slack/event-queue.js';
@@ -57,7 +56,6 @@ export interface HybridAgentOptions {
   apiKey?: string;
   botClient: WebClient;
   userClient?: WebClient;
-  taskChannelManager?: TaskChannelManager;
 }
 
 /** Create a unique workspace directory per deep-path invocation.
@@ -270,9 +268,8 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
   const db = getDb();
   const fastPathTools = createFastPathMemoryTools(db);
 
-  // Task queue tools — context is mutable, updated per-batch
-  const taskCtx: TaskToolContext = {};
-  const taskTools = createTaskTools(db, taskCtx, options.taskChannelManager);
+  // Task queue tools
+  const taskTools = createTaskTools(db);
   fastPathTools.push(...taskTools);
 
   // Slack tools — channel history + search
@@ -348,9 +345,6 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
         'Hybrid agent processing batch',
       );
 
-      // ── Update task tool context for this batch ──
-      taskCtx.channelName = batch.channel; // will be replaced with resolved name below
-
       // ── Assemble shared context ──
       const context = await assembleContext(
         db,
@@ -359,9 +353,6 @@ export async function createHybridAgent(options: HybridAgentOptions): Promise<Hy
         batch.channel,
         { botUserId, ownerUserId: config.ownerSlackUserId },
       );
-
-      // Update task context with resolved channel name
-      taskCtx.channelName = context.channelLabel;
 
       // ── Transition to processing state ──
       const lastMsg = batch.messages[batch.messages.length - 1];

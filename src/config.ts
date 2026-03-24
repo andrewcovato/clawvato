@@ -214,7 +214,24 @@ const ConfigSchema = z.object({
 
   sweeps: z.object({
     enabled: z.boolean().default(true),
-    cron: z.string().default('every 6 hours'),
+    tiers: z.object({
+      frequent: z.object({
+        sources: z.array(z.string()).default(['slack', 'fireflies']),
+        intervalMs: z.number().int().default(3_600_000),
+      }).default(() => ({ sources: ['slack', 'fireflies'], intervalMs: 3_600_000 })),
+      standard: z.object({
+        sources: z.array(z.string()).default(['drive']),
+        intervalMs: z.number().int().default(21_600_000),
+      }).default(() => ({ sources: ['drive'], intervalMs: 21_600_000 })),
+      backfill: z.object({
+        sources: z.array(z.string()).default(['slack', 'gmail', 'drive', 'fireflies']),
+        intervalMs: z.number().int().default(86_400_000),
+      }).default(() => ({ sources: ['slack', 'gmail', 'drive', 'fireflies'], intervalMs: 86_400_000 })),
+    }).default(() => ({
+      frequent: { sources: ['slack', 'fireflies'], intervalMs: 3_600_000 },
+      standard: { sources: ['drive'], intervalMs: 21_600_000 },
+      backfill: { sources: ['slack', 'gmail', 'drive', 'fireflies'], intervalMs: 86_400_000 },
+    })),
     slack: z.object({
       enabled: z.boolean().default(true),
       excludeChannels: z.array(z.string()).default([]),
@@ -247,7 +264,11 @@ const ConfigSchema = z.object({
     })),
   }).default(() => ({
     enabled: true,
-    cron: 'every 6 hours',
+    tiers: {
+      frequent: { sources: ['slack', 'fireflies'], intervalMs: 3_600_000 },
+      standard: { sources: ['drive'], intervalMs: 21_600_000 },
+      backfill: { sources: ['slack', 'gmail', 'drive', 'fireflies'], intervalMs: 86_400_000 },
+    },
     slack: { enabled: true, excludeChannels: [], maxMessagesPerChannel: 500 },
     gmail: { enabled: true, maxThreads: 2000 },
     fireflies: { enabled: true, maxMeetings: 100 },

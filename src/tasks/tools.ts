@@ -1,16 +1,14 @@
 /**
  * Task Queue Tools — fast-path tools for managing scheduled tasks.
  *
- * Five tools: list_tasks, create_task, update_task, delete_task, sync_tasks.
- * All follow the same { definition, handler } pattern as memory tools.
+ * Four tools: list_tasks, create_task, update_task, delete_task.
+ * All DB-only — no Slack side effects. Event feed handled by the sidecar.
  */
 
 import type { Sql } from '../db/index.js';
 import { getConfig } from '../config.js';
-import { logger } from '../logger.js';
 import type { ToolHandlerResult } from '../mcp/slack/server.js';
 import type Anthropic from '@anthropic-ai/sdk';
-import type { TaskChannelManager } from './channel-manager.js';
 import {
   createTask,
   getTask,
@@ -51,16 +49,7 @@ function parseDelay(delay: string): number | null {
   return MS[unit] ? n * MS[unit] : null;
 }
 
-/** Mutable context set per-batch so tools know where they're being called from */
-export interface TaskToolContext {
-  channelName?: string;
-}
-
-export function createTaskTools(
-  sql: Sql,
-  ctx?: TaskToolContext,
-  channelManager?: TaskChannelManager,
-): FastPathTool[] {
+export function createTaskTools(sql: Sql): FastPathTool[] {
   /**
    * Resolve a task by ID or title fragment. Handles short ID expansion.
    */
@@ -118,15 +107,32 @@ export function createTaskTools(
           return { content: status ? `No tasks with status "${status}".` : 'No active tasks.' };
         }
 
-        const lines = tasks.map((t, i) => {
-          const statusIcon = t.status === 'active' ? '✅' : t.status === 'pending_approval' ? '⏳' : t.status === 'paused' ? '⏸️' : '🔄';
-          const schedule = t.cron_expression ? ` (${t.cron_expression})` : t.due_at ? ` (due ${t.due_at})` : '';
-          const nextRun = t.next_run_at ? ` → next: ${new Date(t.next_run_at).toLocaleString()}` : '';
-          return `${i + 1}. ${statusIcon} *${t.title}*${schedule}${nextRun}\n   _ID: ${t.id.slice(0, 8)}_`;
-        });
+        // Group by status for clean output
+        const grouped: Record<string, ScheduledTask[]> = {};
+        for (const t of tasks) {
+          (grouped[t.status] ??= []).push(t);
+        }
 
-        const channelRef = getConfig().tasks.channelId ? ' See the task channel for full details.' : '';
-        return { content: `${tasks.length} task(s):${channelRef}\n${lines.join('\n')}` };
+        const sections: string[] = [];
+        const statusOrder = ['running', 'active', 'pending_approval', 'paused', 'completed', 'failed'];
+        const statusEmoji: Record<string, string> = {
+          running: '🔄', active: '📋', pending_approval: '⏳', paused: '⏸️',
+          completed: '✅', failed: '❌', cancelled: '🚫',
+        };
+
+        for (const s of statusOrder) {
+          const group = grouped[s];
+          if (!group) continue;
+          const lines = group.map(t => {
+            const schedule = t.cron_expression ? `  ${t.cron_expression}` : t.due_at ? `  due ${new Date(t.due_at).toLocaleDateString()}` : '';
+            const nextRun = t.next_run_at ? `  → next: ${new Date(t.next_run_at).toLocaleString()}` : '';
+            const lastResult = t.last_error ? `  ⚠️ ${t.last_error.slice(0, 80)}` : '';
+            return `  ${statusEmoji[s] ?? '•'} *${t.title}*${schedule}${nextRun}${lastResult}\n    _${t.id.slice(0, 8)}_`;
+          });
+          sections.push(`*${s.replace('_', ' ').toUpperCase()}*\n${lines.join('\n')}`);
+        }
+
+        return { content: `${tasks.length} task(s):\n\n${sections.join('\n\n')}` };
       },
     },
 
@@ -190,12 +196,6 @@ export function createTaskTools(
           status,
         });
 
-        // Post + pin in task channel
-        const task = await getTask(sql, id);
-        if (task && channelManager) {
-          await channelManager.postTaskPin(task);
-        }
-
         const scheduleInfo = args.cron_expression
           ? ` (${args.cron_expression})`
           : args.delay
@@ -245,40 +245,8 @@ export function createTaskTools(
 
         if (Object.keys(updates).length === 0) return { content: 'No updates provided.' };
 
-        // Clear cached summary if title or description changed
-        if (updates.title || updates.description) {
-          await sql`UPDATE scheduled_tasks SET pin_summary = NULL WHERE id = ${task.id}`;
-        }
-
         const updatedTask = await updateTask(sql, task.id, updates as Parameters<typeof updateTask>[2]);
         if (!updatedTask) return { content: `Task ${task.id.slice(0, 8)} not found.` };
-
-        // Update pin in task channel (re-generates summary if cleared)
-        if (channelManager) {
-          await channelManager.updateTaskPin(updatedTask);
-
-          // Update detail thread if core details changed
-          if (updates.title || updates.description || updates.cron_expression || updates.priority) {
-            await channelManager.updateDetailThread(updatedTask);
-          }
-
-          // Log modification in thread on the pinned message
-          if (updatedTask.pin_message_ts) {
-            const parts: string[] = [];
-            if (updates.title) parts.push(`title → "${updates.title}"`);
-            if (updates.description) parts.push('description updated');
-            if (updates.cron_expression) parts.push(`schedule → ${updates.cron_expression}`);
-            if (updates.priority) parts.push(`priority → ${updates.priority}`);
-            if (updates.status) parts.push(`status → ${updates.status}`);
-            const taskChannelId = getConfig().tasks.channelId;
-            const from = ctx?.channelName && ctx.channelName !== taskChannelId
-              ? ` (from #${ctx.channelName})` : '';
-            await channelManager.postThreadReply(
-              updatedTask.pin_message_ts,
-              `${parts.join(', ')}${from}`,
-            );
-          }
-        }
 
         return { content: `Task ${task.id.slice(0, 8)} updated: ${Object.keys(updates).join(', ')}` };
       },
@@ -302,36 +270,8 @@ export function createTaskTools(
         const task = await resolveTask(args);
         if (!task) return { content: args.title_match ? `No task found matching "${args.title_match}".` : 'Provide either id or title_match.' };
 
-        // Remove pin before cancelling
-        if (channelManager) {
-          await channelManager.removeTaskPin(task, 'cancelled');
-        }
-
         await deleteTask(sql, task.id);
         return { content: `Task ${task.id.slice(0, 8)} cancelled.` };
-      },
-    },
-
-    // ── sync_tasks ──
-    {
-      definition: {
-        name: 'sync_tasks',
-        description: 'Sync task channel pins with DB state. Re-renders all pinned messages from current data. Use when pins seem out of date.',
-        input_schema: {
-          type: 'object' as const,
-          properties: {},
-          required: [],
-        },
-      },
-      handler: async () => {
-        if (!channelManager) {
-          return { content: 'No task channel configured. Set TASK_CHANNEL_ID to enable.' };
-        }
-
-        const result = await channelManager.reconcilePins();
-        return {
-          content: `Task sync complete: ${result.created} pins created, ${result.updated} updated, ${result.orphaned} orphans removed.`,
-        };
       },
     },
   ];

@@ -49,7 +49,6 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
   create_task: 'Creating task...',
   update_task: 'Updating task...',
   delete_task: 'Removing task...',
-  sync_tasks: 'Syncing task channel...',
 };
 
 export interface FastPathOptions {
