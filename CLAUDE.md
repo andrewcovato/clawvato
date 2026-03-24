@@ -414,7 +414,7 @@ Supports `LOG_DESTINATION=stderr` for MCP server mode.
 ## Project Phases
 - **Phase 1** ✅: Build the Agent — reactive, responds when asked (Tracks A-D, I-O)
 - **Phase 2** ✅: Build the Brain — memory excellence (S10 scoping/reranking + S24 smart plugin migration)
-- **Phase 3** ⬜: Build the Nervous System — agent scheduler rebuild, webhook ingest, real-time memory
+- **Phase 3** 🔶: Build the Nervous System — sidecar rebuilt (S25), webhook ingest next (S26)
 - **Phase 4** ⬜: Build the Judgment — autonomous workflows, proactive surfacing
 
 ### Architecture: Plugin as Kernel
@@ -429,6 +429,7 @@ Plugin is the kernel. CC is the process. Slack is the IPC.
 Design docs:
 - `docs/DESIGN_PHASE2_PROACTIVE_INTELLIGENCE.md`
 - `docs/DESIGN_SMART_PLUGIN_MIGRATION.md`
+- `docs/DESIGN_PUBSUB_WEBHOOKS.md`
 
 ## Build Tracks
 - **Track A** ✅: Foundation — DB, config, security, CLI, hooks, tests

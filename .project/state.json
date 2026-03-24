@@ -52,24 +52,22 @@
     "memoryClusters": 10,
     "embeddingCoverage": "99%",
     "reflections": 5,
-    "pluginVersion": "0.5.0",
+    "pluginVersion": "0.6.2",
     "pluginTools": 18,
     "pluginModels": 2,
     "pluginSchedulerJobs": 3
   },
   "currentSprint": {
-    "id": "S25",
-    "name": "Nervous System — Agent Scheduler + Triggers",
+    "id": "S26",
+    "name": "Real-Time Ingest — Pub/Sub Webhooks",
     "goals": [
-      "Agent-side task scheduler rebuild (get_due_tasks, mark_running/completed/failed)",
-      "Sidecar rebuild against HTTP plugin (no direct DB)",
-      "End-to-end task validation (ad-hoc creation → execution)",
-      "/handoff + /continue skill for session continuity",
-      "Explicit relationship extraction (subject/predicate/object triples)",
-      "Louvain community detection on entity co-occurrence graph"
+      "Gmail webhook via Google Pub/Sub (Phase A)",
+      "Calendar webhook via events.watch() (Phase B)",
+      "Deploy sidecar as separate Railway service",
+      "Reduce sweep frequency once webhooks proven (Phase C)"
     ],
-    "designDoc": "TBD",
-    "progress": "0% — scoping"
+    "designDoc": "docs/DESIGN_PUBSUB_WEBHOOKS.md",
+    "progress": "0% — specced, ready to build"
   },
   "completedSprints": {
     "S10": {
@@ -100,55 +98,61 @@
         "Agent wiring (retire agent-side memory stack in production)",
         "Merged cc-native-engine → main (43 commits)"
       ]
+    },
+    "S25": {
+      "name": "Nervous System — Sidecar Rebuild + Task UX",
+      "completedDate": "2026-03-24",
+      "workstreams": [
+        "Journal hook wiring (PostToolUse) + insights scratch pad + brief auto-update on flush",
+        "Sonnet extraction upgrade (Haiku→Sonnet) + tighter prompt (quality over volume)",
+        "Plugin sync command — auto-update scripts on SessionStart across all projects",
+        "Comprehensive plugin README (install, update, architecture, hooks, tools)",
+        "Sidecar rebuild: tiered sweeps (Slack+FF 1h, Drive 6h, backfill 24h) running in-process",
+        "Task UX overhaul: deleted pins/approval/reconciliation (-685 lines), event feed (+311 lines)",
+        "Simplified task tools (4 tools, DB-only, no Slack side effects)",
+        "Sweep verified: 20 new memories within 30 min of deploy, 227 channels discovered",
+        "Pub/Sub webhook spec: docs/DESIGN_PUBSUB_WEBHOOKS.md"
+      ]
     }
   },
   "upcomingSprints": {
-    "S26": {
-      "name": "Real-Time Ingest",
-      "goals": [
-        "Gmail webhook (Google Pub/Sub → sidecar → plugin)",
-        "Calendar push notifications",
-        "Sweep consolidation — sweeps become a recurring task"
-      ],
-      "dependsOn": "S25"
-    },
     "S27": {
       "name": "Autonomous Workflows",
       "goals": [
         "First autonomous workflows created as ad-hoc tasks",
         "Validation: system surfaces things owner didn't ask about"
       ],
-      "dependsOn": "S26"
+      "dependsOn": "S26",
+      "notes": "Louvain community detection and relationship extraction moved here from S25"
     }
   },
   "lastSession": {
-    "number": 24,
+    "number": 25,
     "date": "2026-03-24",
-    "type": "Smart Plugin Migration — massive session",
+    "type": "Sidecar rebuild + observability + Pub/Sub spec",
     "keyDecisions": [
-      "Move ALL memory intelligence from agent into plugin (smart brain)",
-      "Plugin handles: embeddings, hybrid search, reranking, dedup, clustering, scheduler, journaling",
-      "Agent retired from memory operations in production (code preserved for hybrid fallback)",
-      "Three-tier dedup: heuristic → cross-encoder → Haiku (model-agnostic when no API key)",
-      "HDBSCAN semantic clustering (auto-discovers memory groups)",
-      "Conversation journaling via PostToolUse hook → /ingest REST endpoint",
-      "Two schedulers: memory (plugin) and agent-facing (agent)",
-      "Working context deprecated — briefs + journaling replace it",
-      "Cluster expansion added to retrieval pipeline (Stage 3.5)",
-      "Merged cc-native-engine → main"
+      "Insights scratch pad (/tmp/clawvato-insights.md) — agent writes insights, journal hook picks up on flush",
+      "Brief auto-update on flush — mechanical guarantee, not prompt compliance",
+      "Sonnet replaces Haiku for /ingest extraction (quality > volume, ~$0.03/session)",
+      "Flush interval 20→50 (fewer, richer batches)",
+      "Plugin sync command replaces check-version.sh (actually updates, not just warns)",
+      "Sidecar rebuilt: tiered sweeps in-process (no CC needed), event feed (no pins)",
+      "Deleted channel-manager.ts + approval.ts (-685 lines) — pins replaced by event feed",
+      "Task approval via natural language, not Slack reactions",
+      "Sweeps are now categorized: brain maintenance (plugin) vs data collection (sidecar) vs user tasks (CC)",
+      "Sweep:all-sources task cancelled — sweeps owned by sidecar timers",
+      "Agent-side task scheduler stays agent-side (NOT in plugin) — two schedulers by design",
+      "Pub/Sub webhook spec completed (S26): Gmail Pub/Sub + Calendar events.watch()"
     ]
   },
   "immediateBacklog": [
-    { "id": "HANDOFF-SKILL", "title": "/handoff + /continue slash commands for session continuity" },
-    { "id": "AGENT-SCHEDULER-REBUILD", "title": "Agent-side task scheduler (get_due_tasks, mark_running/completed/failed)" },
-    { "id": "SIDECAR-REBUILD", "title": "Rebuild task-scheduler-standalone.ts against HTTP plugin. No direct DB." },
-    { "id": "LOUVAIN-COMMUNITY", "title": "Louvain community detection on entity co-occurrence graph (complementary to HDBSCAN)" },
-    { "id": "RELATIONSHIP-EXTRACTION", "title": "Explicit relationship extraction (subject/predicate/object triples)" }
+    { "id": "GMAIL-WEBHOOK", "title": "Gmail webhook via Google Pub/Sub (S26 Phase A)", "status": "specced" },
+    { "id": "CALENDAR-WEBHOOK", "title": "Calendar webhook via events.watch() (S26 Phase B)", "status": "specced" },
+    { "id": "SIDECAR-SERVICE", "title": "Deploy sidecar as separate Railway service with public URL", "status": "specced" },
+    { "id": "LOUVAIN-COMMUNITY", "title": "Louvain community detection on entity co-occurrence graph (S27)" },
+    { "id": "RELATIONSHIP-EXTRACTION", "title": "Explicit relationship extraction (subject/predicate/object triples) (S27)" }
   ],
   "backlog": [
-    { "id": "GMAIL-WEBHOOK", "priority": "high", "title": "Gmail webhook ingest (Google Pub/Sub → sidecar → plugin)" },
-    { "id": "CALENDAR-PUSH", "priority": "high", "title": "Calendar push notification ingest" },
-    { "id": "SWEEP-CONSOLIDATION", "priority": "high", "title": "Sweeps become a recurring task" },
     { "id": "PERF-OPTIMIZATION", "priority": "medium", "title": "Performance optimization pass (connection pooling, batch operations, MCP overhead)" },
     { "id": "GITHUB-PHASE1", "priority": "medium", "title": "Track G Phase 1: read-only GitHub access" },
     { "id": "MEMORY-SUMMARIZATION", "priority": "medium", "title": "Hierarchical memory summarization (critical at 50K+)" },
@@ -181,7 +185,14 @@
     "Tasks and workflows are data, not code — new capabilities shouldn't require a deploy",
     "Journal hook uses /ingest REST endpoint (not MCP) — simpler for fire-and-forget background calls",
     "HDBSCAN minClusterSize scales with corpus: max(3, n/50)",
-    "Local .mcp.json runs plugin as stdio process — MCP calls go to local Node, not Railway"
+    "Local .mcp.json runs plugin as stdio process — MCP calls go to local Node, not Railway",
+    "Always bump clawvato-memory version on push — GitHub Packages won't publish duplicate versions",
+    "Insights scratch pad (/tmp/clawvato-insights.md) — agent writes, journal hook picks up. Never use store_fact for routine insights.",
+    "Brief auto-update is mechanically guaranteed via journal flush — don't depend on prompt compliance for cross-surface awareness",
+    "Sonnet > Haiku for /ingest extraction — Haiku extracts noise (file paths, tool usage), Sonnet has judgment to skip derivable facts",
+    "Three categories of scheduled work: brain maintenance (plugin), data collection (sidecar), user tasks (CC via Slack)",
+    "Sweeps: high-water marks + plugin dedup = two-layer idempotency. Safe to increase frequency, never duplicates.",
+    "Best refactors delete more than they add — -685/+311 lines for the task UX overhaul"
   ],
   "designDocs": [
     "docs/DESIGN_CC_NATIVE.md",
@@ -190,7 +201,8 @@
     "docs/DESIGN_WORKING_CONTEXT_V2.md",
     "docs/DESIGN_PHASE2_PROACTIVE_INTELLIGENCE.md",
     "docs/DESIGN_S10_MEMORY_EXCELLENCE.md",
-    "docs/DESIGN_SMART_PLUGIN_MIGRATION.md"
+    "docs/DESIGN_SMART_PLUGIN_MIGRATION.md",
+    "docs/DESIGN_PUBSUB_WEBHOOKS.md"
   ],
   "lastUpdated": "2026-03-24"
 }

@@ -1,78 +1,118 @@
 # Session Handoff
 
-> Last updated: 2026-03-24 | Session 24 | Phase 2 Complete
+> Last updated: 2026-03-24 | Session 25 | Phase 3 In Progress
 
 ## Quick Resume
 
 ```
-Phase: 2 COMPLETE — Build the Brain
-Branch: cc-native-engine (merged to main)
+Phase: 3 IN PROGRESS — Build the Nervous System
+Branch: cc-native-engine
 Build: Clean (both repos)
-Plugin: @andrewcovato/clawvato-memory v0.5.7 on GitHub Packages + Railway
-  - Smart brain: embeddings, hybrid search, reranking, 3-tier dedup, clustering, scheduler, journaling
-  - 2 ML models, 10 semantic clusters, 156 active memories, 99% embedded
-  - Auto-publishes on push via GitHub Action
-Skills: /handoff + /continue working (global ~/.claude/skills/)
-NEXT: Phase 3 — agent scheduler rebuild, Louvain community detection, perf optimization
+Plugin: @andrewcovato/clawvato-memory v0.6.2 on GitHub Packages + Railway
+  - Sonnet extraction (upgraded from Haiku), tighter prompt
+  - sync command: auto-updates scripts on SessionStart
+Sidecar: Rebuilt — tiered sweeps + task poller + event feed
+  - Slack+FF hourly, Drive 6h, full backfill daily
+  - 228 active memories, 20 new from first sweep run
+  - Deleted pins/approval/reconciliation (-685 lines)
+NEXT: S26 — Pub/Sub webhooks (Gmail + Calendar real-time ingest)
 ```
 
-## Session 24 — What Was Built
+## Session 25 — What Was Built
 
-### Smart Plugin Migration (5 phases)
-Transformed clawvato-memory from thin Postgres gateway to full intelligent memory kernel:
-- Phase 0: Module restructure (798→142 line entrypoint)
-- Phase 1: Embeddings at write time (nomic-embed-text-v1.5, 384d)
-- Phase 2: Hybrid search + RRF + cross-encoder reranking (7-stage pipeline)
-- Phase 3: Three-tier write-time dedup (heuristic → cross-encoder → Haiku)
-- Phase 5: Memory scheduler (consolidation 6h, reflection 12h, clustering 12h, decay)
+### Observability Pipeline
+- Wired PostToolUse journal hook in project settings
+- Insights scratch pad (`/tmp/clawvato-insights.md`) — agent writes insights, journal hook merges on flush
+- Brief auto-update on flush — scratch pad or auto-generated from tool activity
+- Three-tier brief reliability: agent-written > auto-generated > SessionEnd tombstone
+- Flush interval 20→50 tool calls (fewer, richer batches)
 
-### Conversation Journaling
-- PostToolUse hook accumulates tool calls → flushes to plugin /ingest every 20 calls
-- Plugin extracts facts via Haiku → embed → dedup → store
-- Tested end-to-end, working
+### Extraction Quality
+- Upgraded /ingest extraction from Haiku → Sonnet
+- Rewrote extraction prompt: explicit DO NOT EXTRACT list (file paths, tool usage, project structure)
+- Before: 6 facts from test input, ~75% noise. After: 2-3 focused facts.
+- Cost: ~$0.03/session (negligible for quality improvement)
 
-### HDBSCAN Semantic Clustering
-- 10 clusters auto-discovered from 155 memories, labeled by Haiku
-- Cluster expansion wired into retrieval pipeline (Stage 3.5)
+### Plugin Distribution
+- Added `sync` command: fast, non-interactive, copies scripts + updates version
+- SessionStart hook runs `npx @andrewcovato/clawvato-memory@latest sync`
+- Replaces check-version.sh (actually updates, not just warns)
+- Comprehensive README: install, update pipeline, architecture, hooks, tools
+- Plugin v0.6.2 published
 
-### Agent Wired to Plugin
-- Retired agent-side consolidation, re-embedding, extraction hook
-- Updated CC-native prompt with all new tools + insight storage + cross-project thinking
-- Production path: 100% plugin for all memory operations
+### Sidecar Rebuild (S25 core)
+- Sidecar becomes unified process: task poller + tiered sweeps + event feed
+- Tiered sweep intervals: Slack+FF hourly, Drive 6h, full backfill daily
+- Collectors run in-process — no CC session needed for sweeps
+- Content sent to plugin `/ingest` → Sonnet extracts facts
+- sweep:all-sources task cancelled — sweeps owned by sidecar timers
 
-### Distribution
-- Published to GitHub Packages (@andrewcovato/clawvato-memory)
-- `npx @andrewcovato/clawvato-memory@latest init` — one-command project setup
-- SessionStart version check hook (warns if outdated)
-- GitHub Action auto-publishes on push to main
+### Task UX Overhaul
+- Deleted `channel-manager.ts` (314 lines) and `approval.ts` (48 lines)
+- Removed sync_tasks tool, pin reconciliation, Haiku summaries, reaction approval
+- Task tools are now DB-only — no Slack side effects
+- list_tasks output grouped by status, clean formatting
+- Approval via natural language ("approve [task]") not reactions
+- Event feed: task/sweep events posted to #clawvato-tasks chronologically
+- Net: +311 / -685 lines
 
-### /handoff + /continue Skills
-- File-based core (works anywhere) + optional plugin enhancement
-- Installed globally (~/.claude/skills/)
+### Pub/Sub Webhook Spec
+- Full design doc: `docs/DESIGN_PUBSUB_WEBHOOKS.md`
+- Visual spec: `~/.agent/diagrams/pubsub-webhook-spec.html`
+- Gmail: Google Pub/Sub → sidecar `/webhooks/gmail` → fetch history → /ingest
+- Calendar: events.watch() → sidecar `/webhooks/calendar` → sync token → /ingest
+- Sidecar deploys as separate Railway service for public URL
+- Sweeps remain as daily backfill safety net
 
-### Docs
-- CLAUDE.md: comprehensive rewrite (architecture, tools, phases, gotchas)
-- state.json: Phase 2 complete, S24 sprint, Track P added
-- MEMORY.md: updated architecture, roadmap, gotchas
-- Design doc: docs/DESIGN_SMART_PLUGIN_MIGRATION.md
+### Sweep Verification
+- Production sidecar ran all 3 tiers within 30 min of deploy
+- 228 total memories (up from 208), 20 new from sweeps
+- 227 Slack channels discovered (8 public + 54 private + 165 mpim)
+- 20 active channels processed (cadence filter skips inactive)
+- High-water marks functioning — no duplicate processing
 
 ## Key Decisions
-1. Smart brain, thin executor — ALL memory intelligence in plugin
-2. Two schedulers — memory (plugin) and agent-facing (agent)
-3. Journaling over extraction hooks — PostToolUse → /ingest
-4. Working context deprecated — briefs + journaling replace it
-5. HDBSCAN for clustering — auto-discovers memory groups
-6. Three-tier dedup — model-agnostic without API key, premium with Haiku
-7. GitHub Packages for distribution — auto-publish on push
-8. Version check on SessionStart — warns if outdated, silent if current
-9. /handoff + /continue are file-first, plugin-optional
-10. CLAUDE.md snippet teaches worldview, not just tools
-11. Agents store insights as "reflection" type, think across projects
+1. Insights → scratch pad → journal flush (not explicit store_fact calls)
+2. Sonnet for extraction, Haiku was too noisy
+3. sync command replaces check-version.sh — actually updates
+4. Sidecar owns sweeps (not CC via Slack) — reliability proven
+5. Pins/approval deleted — event feed + natural language approval
+6. Agent scheduler stays agent-side (NOT in plugin) — confirmed as original design
+7. Three categories: brain maintenance (plugin), data collection (sidecar), user tasks (CC)
+8. Always bump plugin version on push — GitHub Packages won't publish duplicates
 
 ## Immediate Next Steps
-1. Agent-side task scheduler rebuild
-2. Sidecar rebuild against HTTP plugin
-3. Louvain community detection (entity co-occurrence graph)
-4. Explicit relationship extraction (subject/predicate/object)
-5. Performance optimization pass
-6. Tune version check prompt so agent reliably surfaces it
+1. S26 Phase A: Gmail Pub/Sub webhook (GCP setup + sidecar HTTP server)
+2. S26 Phase B: Calendar events.watch() webhook
+3. Deploy sidecar as separate Railway service
+4. S27: Louvain community detection + relationship extraction
+5. Merge cc-native-engine → main when S26 stable
+
+## Files Created This Session
+- `docs/DESIGN_PUBSUB_WEBHOOKS.md`
+- `~/.agent/diagrams/pubsub-webhook-spec.html`
+- `scripts/test-sweep.ts` (test utility)
+
+## Files Modified This Session
+- `src/cc-native/task-scheduler-standalone.ts` (complete rewrite)
+- `src/tasks/tools.ts` (complete rewrite)
+- `src/cli/start.ts` (major cleanup)
+- `src/slack/socket-mode.ts` (removed reaction/thread handlers)
+- `src/tasks/executor.ts` (removed channelManager)
+- `src/agent/hybrid.ts` (removed channelManager)
+- `src/agent/fast-path.ts` (removed sync_tasks)
+- `src/config.ts` (tiered sweep schema)
+- `config/default.json` (tiered sweep config)
+- `config/prompts/system.md` (removed pin references)
+- `scripts/journal-hook.sh` (insights + brief + interval)
+- `CLAUDE.md` (comprehensive updates)
+
+## Files Deleted This Session
+- `src/tasks/channel-manager.ts` (314 lines — pins)
+- `src/tasks/approval.ts` (48 lines — reaction approval)
+
+## Plugin Changes (clawvato-memory repo)
+- `server/handlers/ingest.ts` — Haiku → Sonnet, tighter extraction prompt
+- `bin/setup.ts` — added sync command, SessionStart hook updated
+- `README.md` — comprehensive documentation
+- `package.json` — v0.6.2

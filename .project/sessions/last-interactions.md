@@ -1,28 +1,36 @@
-# Last Interactions — Session 24
+# Last Interactions — Session 25
 
-### Publishing to GitHub Packages
-**User**: we should NOT clone locally. I want this as robust as possible. minimal hack, maximum assurance that as we develop this, all sessions using the memory get updated automatically.
-**Assistant**: Published @andrewcovato/clawvato-memory to GitHub Packages via GitHub Action. Auto-publishes on every push to main. Set up ~/.npmrc with GitHub auth for npx access.
-**Decision**: GitHub Packages for distribution (private, free, auto-publish). Will move to npm when ready to open source.
-**Pending**: None — publishing works.
+### Journal Hook + Insights Pipeline
+**User**: do we need to update the clawvato memory version right here, or because we're developing here it's the pure, sweet, sweet OG source?
+**Assistant**: Local .mcp.json points directly at source code via npx tsx. You're on the OG source — no version update needed.
 
-### SessionStart Hook for Auto-Sync
-**User**: can continue run the npx clawvato-memory init command automatically? I want to avoid having stagnant versions hanging around.
-**Assistant**: Tried multiple approaches: npx init in SessionStart hook (failed — interactive prompts, timing), sync-scripts.sh (too hacky), version check script. Landed on check-version.sh that reads installed version from ~/.clawvato/config.json and compares against npm view. Outputs status to agent context.
-**Decision**: Version check hook on SessionStart (silent when current, warns when outdated). Auto-update via npx was unreliable in hook context. CLAUDE.md snippet instructs agent to mention version status.
-**Pending**: Agent doesn't always surface the version message to user — prompt instruction is soft, not guaranteed.
+**User**: the journal will pick up the "insights" right? can we test if it's doing that?
+**Assistant**: No — journal hook only captures tool calls (PostToolUse), not conversational text. Insights written as text are invisible to the pipeline. Built insights scratch pad: echo to /tmp/clawvato-insights.md, hook merges on flush.
 
-### Memory Plugin CLAUDE.md Snippet
-**User**: I would have loved richer context, and for the new session to make the connection that "hey we could use the clawvato brain to help our project." What's the gap?
-**Assistant**: Rewrote CLAUDE.md snippet from tool docs to worldview. Now frames brain as shared business knowledge, instructs agents to look for transferable patterns across projects, and to store insights immediately as type "reflection".
-**Decision**: Brain snippet teaches worldview, not just tools. "Think across projects — the owner's projects share DNA."
+**User**: we explicitly said in the claude.md update that "whenever you create an insight, write it to memory" — did that not show up anywhere?
+**Assistant**: Found it in cc-native-system.md (cloud prompt) but not in local CLAUDE.md. Fixed: added scratch pad instruction to CLAUDE.md.
 
-### Handoff/Continue Skills
-**User**: I'm confused. handoff/continue should be its own thing. The memory plugin should be separate.
-**Assistant**: Rewrote both skills with clean separation. Core = file-based (works anywhere). Plugin enhancement = optional bridge (briefs, retrieve_context, store_fact for un-journaled facts). Skills live in ~/.claude/skills/ as directories with skill.md.
-**Decision**: /handoff and /continue are file-first, plugin-optional. Two independent systems that compose when both present.
+### Quality Tuning
+**User**: are we being TOO verbose with what to store? i dunno the quality of the memories we're making
+**Assistant**: Audited: ~75% of journal-extracted memories were noise (file paths, tool descriptions). Fixed: upgraded Haiku→Sonnet for extraction, rewrote prompt with explicit DO NOT EXTRACT list, bumped interval 20→50.
 
-### Cloud Agent Insights
-**User**: Can we also update the cloud agent to send insights to memory?
-**Assistant**: Added "Store insights" and "Think across projects" instructions to CC-native system prompt (config/prompts/cc-native-system.md).
-**Decision**: All surfaces (cloud, local, any connected project) now instructed to store insights as type "reflection" and look for cross-project patterns.
+### Plugin Propagation
+**User**: we need to address the update process NOW. I do NOT want straggler versions.
+**Assistant**: Built `sync` command. SessionStart hook runs `npx @andrewcovato/clawvato-memory@latest sync`. Auto-copies scripts, updates version. Wrote comprehensive README.
+
+### Scheduler Rebuild
+**User**: I want to build the scheduler. The design we agreed on was to have the scheduler be SEPARATE from the memory plugin.
+**Assistant**: Confirmed via memory search — two schedulers by design. Agent scheduler stays agent-side. Corrected a misleading memory that said "polls the memory plugin."
+
+**User**: I want a super clean, slack-friendly output. Scrap the pin stuff. Task channel = RSS feed.
+**Assistant**: Deleted channel-manager.ts + approval.ts (-685 lines). Rebuilt tools as DB-only. Event feed for notifications. Approval via natural language.
+
+**User**: the "sweep" should possibly be a more back-end task
+**Assistant**: Agreed. Sweeps moved from scheduled_tasks to sidecar's own timer. Three categories: brain maintenance (plugin), data collection (sidecar), user tasks (CC).
+
+**User**: we had discussed different cadences in the context of webhooks
+**Assistant**: Found in design doc: replace polling with real-time (Gmail Pub/Sub, Calendar push). Sweeps become backfill. Agreed on: Slack+FF hourly, Drive 6h, Gmail/Calendar via webhooks (S26).
+
+### Pub/Sub Spec
+**User**: one final thing to make this whole system start to pay off in spades: the pub/sub. can you spec this out?
+**Assistant**: Generated comprehensive visual spec (HTML with Mermaid diagrams) + design doc. Gmail via Pub/Sub, Calendar via events.watch(), sidecar gets HTTP server, deploys as separate Railway service.
