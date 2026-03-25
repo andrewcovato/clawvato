@@ -28,24 +28,12 @@ program
 
 program
   .command('start')
-  .description('Start the Clawvato agent')
+  .description('Start the Clawvato agent (CC-Native engine)')
   .option('--log-level <level>', 'Log level (debug, info, warn, error)')
-  .option('--engine <engine>', 'Engine mode: hybrid (default) or cc-native')
   .action(async (opts) => {
     const config = loadConfig(opts.logLevel ? { logLevel: opts.logLevel } : undefined);
     initLogger(config.logLevel);
-
-    const engine = opts.engine ?? process.env.ENGINE ?? 'hybrid';
-
-    if (engine === 'cc-native') {
-      // CC-Native mode: launch the supervisor entrypoint
-      // This spawns Claude Code with the Slack Channel + Memory MCP servers
-      const { startCCNativeEngine } = await import('../cc-native/start.js');
-      await startCCNativeEngine();
-    } else {
-      await initDb();
-      await startAgent();
-    }
+    await startAgent();
   });
 
 program

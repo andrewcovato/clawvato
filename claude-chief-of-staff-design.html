@@ -1,0 +1,1660 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Claude Chief-of-Staff — Design Document</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,600;12..96,700;12..96,800&family=Fragment+Mono:ital@0;1&display=swap" rel="stylesheet">
+<style>
+:root {
+  --font-body: 'Bricolage Grotesque', system-ui, sans-serif;
+  --font-mono: 'Fragment Mono', 'SF Mono', Consolas, monospace;
+
+  --bg: #faf8f5;
+  --surface: #ffffff;
+  --surface-elevated: #ffffff;
+  --surface-recessed: #f3f0eb;
+  --border: rgba(0, 0, 0, 0.08);
+  --border-bright: rgba(0, 0, 0, 0.15);
+  --text: #1c1917;
+  --text-dim: #78716c;
+  --text-bright: #0c0a09;
+
+  --accent: #b45309;
+  --accent-dim: rgba(180, 83, 9, 0.08);
+  --accent-glow: rgba(180, 83, 9, 0.12);
+
+  --teal: #0d9488;
+  --teal-dim: rgba(13, 148, 136, 0.08);
+  --sage: #059669;
+  --sage-dim: rgba(5, 150, 105, 0.08);
+  --rose: #be123c;
+  --rose-dim: rgba(190, 18, 60, 0.08);
+  --amber: #d97706;
+  --amber-dim: rgba(217, 119, 6, 0.08);
+  --indigo: #4338ca;
+  --indigo-dim: rgba(67, 56, 202, 0.08);
+  --slate: #475569;
+  --slate-dim: rgba(71, 85, 105, 0.06);
+
+  --green: #059669;
+  --green-dim: rgba(5, 150, 105, 0.1);
+  --red: #dc2626;
+  --red-dim: rgba(220, 38, 38, 0.08);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0c0a09;
+    --surface: #1c1917;
+    --surface-elevated: #231f1b;
+    --surface-recessed: #151210;
+    --border: rgba(255, 255, 255, 0.06);
+    --border-bright: rgba(255, 255, 255, 0.12);
+    --text: #e7e5e4;
+    --text-dim: #a8a29e;
+    --text-bright: #fafaf9;
+
+    --accent: #f59e0b;
+    --accent-dim: rgba(245, 158, 11, 0.1);
+    --accent-glow: rgba(245, 158, 11, 0.08);
+
+    --teal: #2dd4bf;
+    --teal-dim: rgba(45, 212, 191, 0.1);
+    --sage: #34d399;
+    --sage-dim: rgba(52, 211, 153, 0.1);
+    --rose: #fb7185;
+    --rose-dim: rgba(251, 113, 133, 0.1);
+    --amber: #fbbf24;
+    --amber-dim: rgba(251, 191, 36, 0.1);
+    --indigo: #818cf8;
+    --indigo-dim: rgba(129, 140, 248, 0.1);
+    --slate: #94a3b8;
+    --slate-dim: rgba(148, 163, 184, 0.08);
+
+    --green: #34d399;
+    --green-dim: rgba(52, 211, 153, 0.12);
+    --red: #fb7185;
+    --red-dim: rgba(251, 113, 133, 0.1);
+  }
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  line-height: 1.6;
+  overflow-wrap: break-word;
+  background-image:
+    radial-gradient(at 15% 10%, var(--accent-dim) 0%, transparent 50%),
+    radial-gradient(at 85% 30%, var(--teal-dim) 0%, transparent 50%);
+}
+
+.page {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 48px 24px 100px;
+}
+
+/* ─── Theme Toggle ─── */
+.theme-toggle {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  cursor: pointer;
+  z-index: 100;
+  color: var(--text-dim);
+  transition: background 0.15s;
+}
+.theme-toggle:hover { background: var(--surface-elevated); }
+[data-theme="light"] .theme-toggle__moon { display: none; }
+[data-theme="dark"] .theme-toggle__sun { display: none; }
+
+/* ─── Header ─── */
+.header {
+  text-align: center;
+  padding: 60px 0 48px;
+  position: relative;
+}
+.header::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 240px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+}
+.header__label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 3px;
+  color: var(--accent);
+  display: inline-block;
+  border: 1px solid var(--accent-dim);
+  background: var(--accent-dim);
+  padding: 5px 16px;
+  border-radius: 20px;
+  margin-bottom: 20px;
+}
+.header h1 {
+  font-size: clamp(32px, 5vw, 52px);
+  font-weight: 800;
+  line-height: 1.08;
+  letter-spacing: -1.5px;
+  color: var(--text-bright);
+  margin-bottom: 12px;
+}
+.header h1 em {
+  font-style: italic;
+  color: var(--accent);
+}
+.header__subtitle {
+  font-size: 18px;
+  color: var(--text-dim);
+  max-width: 600px;
+  margin: 0 auto;
+  line-height: 1.5;
+}
+
+/* ─── Section Headers ─── */
+.section {
+  margin-top: 56px;
+}
+.section__label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  color: var(--accent);
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.section__label::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.section h2 {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--text-bright);
+  letter-spacing: -0.5px;
+  margin-bottom: 16px;
+}
+.section__desc {
+  font-size: 15px;
+  color: var(--text-dim);
+  max-width: 700px;
+  margin-bottom: 24px;
+}
+
+/* ─── Cards ─── */
+.ve-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px 24px;
+  position: relative;
+  min-width: 0;
+}
+.ve-card--elevated {
+  background: var(--surface-elevated);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.03);
+}
+.ve-card--hero {
+  background: color-mix(in srgb, var(--surface) 92%, var(--accent) 8%);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.06);
+  border-color: color-mix(in srgb, var(--border) 50%, var(--accent) 50%);
+}
+.ve-card--recessed {
+  background: var(--surface-recessed);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+.ve-card--accent-left {
+  border-left: 3px solid var(--accent);
+}
+.ve-card--teal { border-left: 3px solid var(--teal); }
+.ve-card--sage { border-left: 3px solid var(--sage); }
+.ve-card--rose { border-left: 3px solid var(--rose); }
+.ve-card--indigo { border-left: 3px solid var(--indigo); }
+
+.ve-card__label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: var(--accent);
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ve-card__label::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.ve-card__label--teal { color: var(--teal); }
+.ve-card__label--sage { color: var(--sage); }
+.ve-card__label--rose { color: var(--rose); }
+.ve-card__label--indigo { color: var(--indigo); }
+
+/* ─── Grids ─── */
+.grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.grid-2 > * { min-width: 0; }
+.grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+.grid-3 > * { min-width: 0; }
+.grid-4 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+}
+.grid-4 > * { min-width: 0; }
+
+@media (max-width: 768px) {
+  .grid-2, .grid-3 { grid-template-columns: 1fr; }
+}
+
+/* ─── Before / After Panels ─── */
+.diff-panels {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.diff-panels > * { min-width: 0; overflow-wrap: break-word; }
+.diff-panel__header {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  padding: 12px 20px;
+}
+.diff-panel__header--before {
+  background: var(--rose-dim);
+  color: var(--rose);
+  border-bottom: 2px solid var(--rose);
+}
+.diff-panel__header--after {
+  background: var(--sage-dim);
+  color: var(--sage);
+  border-bottom: 2px solid var(--sage);
+}
+.diff-panel__body {
+  padding: 20px;
+  background: var(--surface);
+  font-size: 14px;
+  line-height: 1.7;
+}
+.diff-panel__body ol {
+  list-style: none;
+  padding: 0;
+  counter-reset: step;
+}
+.diff-panel__body ol li {
+  counter-increment: step;
+  padding-left: 28px;
+  position: relative;
+  margin-bottom: 10px;
+}
+.diff-panel__body ol li::before {
+  content: counter(step);
+  position: absolute;
+  left: 0;
+  top: 1px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+@media (max-width: 768px) {
+  .diff-panels { grid-template-columns: 1fr; }
+}
+
+/* ─── Tables ─── */
+.table-wrap {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.table-scroll { overflow-x: auto; }
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.data-table thead { position: sticky; top: 0; z-index: 2; }
+.data-table th {
+  background: var(--surface-elevated);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-dim);
+  text-align: left;
+  padding: 12px 16px;
+  border-bottom: 2px solid var(--border-bright);
+  white-space: nowrap;
+}
+.data-table td {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+  color: var(--text);
+}
+.data-table tbody tr:nth-child(even) { background: var(--accent-dim); }
+.data-table tbody tr:last-child td { border-bottom: none; }
+.data-table code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+/* ─── Code Blocks ─── */
+.code-file {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  margin: 12px 0;
+}
+.code-file__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.code-file__body {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 16px;
+  background: var(--surface-recessed);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 500px;
+  overflow: auto;
+  color: var(--text);
+}
+
+/* ─── Mermaid ─── */
+.mermaid-wrap {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 32px 24px;
+  overflow: auto;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 400px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+  cursor: grab;
+}
+.mermaid-wrap.is-panning { cursor: grabbing; user-select: none; }
+.mermaid-wrap .mermaid { zoom: 1.3; }
+.zoom-controls {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  gap: 2px;
+  z-index: 10;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px;
+}
+.zoom-controls button {
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  cursor: pointer;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s;
+}
+.zoom-controls button:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+/* ─── Callouts ─── */
+.callout {
+  padding: 16px 20px;
+  border-radius: 10px;
+  border-left: 4px solid var(--callout-border);
+  background: var(--callout-bg);
+  margin: 16px 0;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.callout--amber {
+  --callout-border: var(--amber);
+  --callout-bg: var(--amber-dim);
+}
+.callout--rose {
+  --callout-border: var(--rose);
+  --callout-bg: var(--rose-dim);
+}
+.callout--teal {
+  --callout-border: var(--teal);
+  --callout-bg: var(--teal-dim);
+}
+.callout--sage {
+  --callout-border: var(--sage);
+  --callout-bg: var(--sage-dim);
+}
+.callout__title {
+  font-weight: 700;
+  margin-bottom: 6px;
+  color: var(--callout-border);
+  font-size: 13px;
+}
+.callout ul, .callout ol { padding-left: 1.5em; margin: 6px 0 0; }
+.callout li { margin-bottom: 4px; }
+
+/* ─── Flow Arrow ─── */
+.flow-arrow {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 6px 0;
+  color: var(--text-dim);
+}
+.flow-arrow svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: var(--border-bright);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ─── Tags ─── */
+.tag {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 4px;
+  display: inline-block;
+}
+.tag--accent { background: var(--accent-dim); color: var(--accent); }
+.tag--teal { background: var(--teal-dim); color: var(--teal); }
+.tag--sage { background: var(--sage-dim); color: var(--sage); }
+.tag--rose { background: var(--rose-dim); color: var(--rose); }
+.tag--indigo { background: var(--indigo-dim); color: var(--indigo); }
+.tag--slate { background: var(--slate-dim); color: var(--slate); }
+
+/* ─── KPI Row ─── */
+.kpi-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+}
+.kpi-card {
+  background: var(--surface-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+}
+.kpi-card__value {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  line-height: 1.1;
+  color: var(--accent);
+}
+.kpi-card__label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: var(--text-dim);
+  margin-top: 6px;
+}
+
+/* ─── Timeline ─── */
+.timeline {
+  position: relative;
+  padding-left: 32px;
+}
+.timeline::before {
+  content: '';
+  position: absolute;
+  left: 11px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--border-bright);
+}
+.timeline__item {
+  position: relative;
+  margin-bottom: 20px;
+  padding-left: 16px;
+}
+.timeline__item::before {
+  content: '';
+  position: absolute;
+  left: -25px;
+  top: 6px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg);
+}
+.timeline__time {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--accent);
+  font-weight: 500;
+}
+.timeline__text {
+  font-size: 14px;
+  color: var(--text);
+  margin-top: 2px;
+}
+.timeline__detail {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-top: 2px;
+}
+
+/* ─── File Tree ─── */
+.file-tree {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.8;
+  color: var(--text);
+  white-space: pre;
+  padding: 16px 20px;
+  background: var(--surface-recessed);
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  overflow-x: auto;
+}
+.file-tree .comment {
+  color: var(--text-dim);
+}
+.file-tree .dir {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+/* ─── Phase Cards ─── */
+.phase-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 24px;
+  position: relative;
+  overflow: hidden;
+}
+.phase-card::before {
+  content: attr(data-phase);
+  position: absolute;
+  top: -8px;
+  right: 16px;
+  font-family: var(--font-mono);
+  font-size: 64px;
+  font-weight: 700;
+  color: var(--accent-dim);
+  line-height: 1;
+}
+.phase-card h3 {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-bright);
+  margin-bottom: 4px;
+}
+.phase-card__time {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent);
+  margin-bottom: 12px;
+}
+.phase-card ul {
+  list-style: none;
+  padding: 0;
+}
+.phase-card li {
+  padding-left: 16px;
+  position: relative;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text);
+}
+.phase-card li::before {
+  content: '\203A';
+  position: absolute;
+  left: 0;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+
+/* ─── Connector Line ─── */
+.connector-line {
+  text-align: center;
+  padding: 8px 0;
+  color: var(--border-bright);
+  font-size: 20px;
+}
+
+/* ─── Prose helper ─── */
+.prose { font-size: 15px; line-height: 1.7; color: var(--text); }
+.prose strong { color: var(--text-bright); font-weight: 600; }
+.prose code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+/* ─── Animations ─── */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.ve-card, .diff-panels, .table-wrap, .mermaid-wrap, .callout, .phase-card, .kpi-card {
+  animation: fadeUp 0.4s ease-out both;
+  animation-delay: calc(var(--i, 0) * 0.04s);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ─── Mermaid Text Overrides ─── */
+.mermaid .nodeLabel { color: var(--text) !important; }
+.mermaid .edgeLabel { color: var(--text-dim) !important; background-color: var(--bg) !important; }
+.mermaid .edgeLabel rect { fill: var(--bg) !important; }
+.mermaid .edgeLabel { font-family: var(--font-mono) !important; font-size: 12px !important; }
+.mermaid .nodeLabel { font-family: var(--font-body) !important; font-size: 14px !important; }
+
+/* ─── Misc ─── */
+a { color: var(--accent); }
+.caption {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  text-align: center;
+  margin-top: 12px;
+}
+.spacer { height: 32px; }
+hr {
+  border: none;
+  height: 1px;
+  background: var(--border);
+  margin: 48px 0;
+}
+</style>
+</head>
+<body>
+<button class="theme-toggle" onclick="toggleTheme()" aria-label="Toggle theme">
+  <svg class="theme-toggle__sun" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+  <svg class="theme-toggle__moon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+</button>
+
+<div class="page">
+
+  <!-- ═══════════════════════ HEADER ═══════════════════════ -->
+  <header class="header">
+    <div class="header__label">Design Document</div>
+    <h1>Claude Code<br><em>Chief-of-Staff</em></h1>
+    <p class="header__subtitle">An always-on personal AI assistant running Claude Code in the cloud, controlled through Slack, powered by your Max subscription.</p>
+  </header>
+
+  <!-- ═══════════════════════ OVERVIEW KPIs ═══════════════════════ -->
+  <div class="section" style="margin-top: 32px;">
+    <div class="kpi-row" style="--i: 1">
+      <div class="kpi-card" style="--i: 1">
+        <div class="kpi-card__value">$5-15</div>
+        <div class="kpi-card__label">Monthly Cloud Cost</div>
+      </div>
+      <div class="kpi-card" style="--i: 2">
+        <div class="kpi-card__value" style="color: var(--teal);">~200</div>
+        <div class="kpi-card__label">Lines of Core Code</div>
+      </div>
+      <div class="kpi-card" style="--i: 3">
+        <div class="kpi-card__value" style="color: var(--sage);">Max</div>
+        <div class="kpi-card__label">Plan (No API Key)</div>
+      </div>
+      <div class="kpi-card" style="--i: 4">
+        <div class="kpi-card__value" style="color: var(--indigo);">24/7</div>
+        <div class="kpi-card__label">Always On</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ THE PROBLEM ═══════════════════════ -->
+  <div class="section">
+    <div class="section__label">01 — The Problem</div>
+    <h2>Device-Bound vs. Always Available</h2>
+    <p class="section__desc">Claude Code is powerful but tethered to whatever terminal you're sitting at. The goal: make it accessible from anywhere via Slack, with persistent memory and proactive capabilities.</p>
+
+    <div class="diff-panels" style="--i: 3">
+      <div class="diff-panel__header diff-panel__header--before">Today</div>
+      <div class="diff-panel__header diff-panel__header--after">With Chief-of-Staff</div>
+      <div class="diff-panel__body">
+        <ol>
+          <li>Open laptop, launch terminal</li>
+          <li>Navigate to project directory</li>
+          <li>Run <code>claude</code>, wait for auth</li>
+          <li>Type prompt, get response</li>
+          <li>Context resets when you close the terminal</li>
+          <li>No proactive alerts or scheduled tasks</li>
+          <li>Can't access from phone or tablet</li>
+        </ol>
+      </div>
+      <div class="diff-panel__body">
+        <ol>
+          <li>Open Slack (any device, anywhere)</li>
+          <li>Type <code>@chief prep me for the Acme call</code></li>
+          <li>Bot reads persistent memory about Acme, checks email, posts brief</li>
+          <li>Context persists across conversations forever</li>
+          <li>Morning briefings, deadline alerts, meeting prep — automatically</li>
+          <li>Cross-reference emails, transcripts, calendar — on command</li>
+        </ol>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ ARCHITECTURE ═══════════════════════ -->
+  <div class="section">
+    <div class="section__label">02 — System Architecture</div>
+    <h2>How It All Connects</h2>
+    <p class="section__desc">A cloud VM hosts the Slack bot, Claude Code SDK, and MCP servers. Your Max subscription handles all AI compute. The VM is just a thin relay.</p>
+
+    <div class="mermaid-wrap" style="--i: 5">
+      <div class="zoom-controls">
+        <button onclick="zoomDiagram(this, 1.2)" title="Zoom in">+</button>
+        <button onclick="zoomDiagram(this, 0.8)" title="Zoom out">&minus;</button>
+        <button onclick="resetZoom(this)" title="Reset zoom">&#8634;</button>
+      </div>
+      <pre class="mermaid">
+flowchart TD
+    SLACK["Slack App\n(Socket Mode)"] -->|user message| BOT["Slack Bot\n(@slack/bolt)"]
+    CRON["Scheduler\n(node-cron)"] -->|timed trigger| QUEUE
+    BOT -->|enqueue| QUEUE["Task Queue\n(p-queue, concurrency: 1)"]
+    QUEUE -->|invoke| SDK["Claude Code SDK\n(@anthropic-ai/claude-code)"]
+    SDK -->|reads/writes| MEM["Memory System\n(/workspace/memory/)"]
+    SDK -->|authenticates via| AUTH["Max Plan OAuth\n(~/.claude/ credentials)"]
+    SDK -->|tool calls| MCP["MCP Servers"]
+    MCP --> GMAIL["Gmail"]
+    MCP --> FIRE["Fireflies"]
+    MCP --> GCAL["Calendar"]
+    SDK -->|result| BOT
+    BOT -->|formatted reply| SLACK
+
+    classDef primary fill:#b4530922,stroke:#b45309,stroke-width:2px
+    classDef secondary fill:#0d948822,stroke:#0d9488,stroke-width:1.5px
+    classDef storage fill:#05966922,stroke:#059669,stroke-width:1.5px
+    classDef external fill:#47556922,stroke:#475569,stroke-width:1px
+
+    class SLACK,BOT primary
+    class SDK,QUEUE,CRON secondary
+    class MEM,AUTH storage
+    class MCP,GMAIL,FIRE,GCAL external
+      </pre>
+    </div>
+    <p class="caption">System architecture — Slack and Scheduler feed a prioritized task queue. Claude Code SDK orchestrates everything.</p>
+  </div>
+
+  <!-- ═══════════════════════ AUTH ═══════════════════════ -->
+  <div class="section">
+    <div class="section__label">03 — Authentication</div>
+    <h2>Max Plan OAuth on a Headless Server</h2>
+    <p class="section__desc">The most critical design decision: using your Max subscription (not an API key) to power the bot. This keeps costs at zero beyond the VM.</p>
+
+    <div class="grid-2" style="--i: 6">
+      <div class="ve-card ve-card--elevated ve-card--accent-left">
+        <div class="ve-card__label">Initial Setup (One-Time)</div>
+        <div class="prose">
+          <ol style="padding-left: 1.5em; margin: 0;">
+            <li>SSH into your cloud VM</li>
+            <li>Run <code>claude</code> in the terminal</li>
+            <li>CLI outputs a URL — open it on your phone or laptop</li>
+            <li>Approve the OAuth consent in your browser</li>
+            <li>Credentials are stored in <code>~/.claude/</code> on the server</li>
+            <li>All future Claude Code invocations use these credentials</li>
+          </ol>
+        </div>
+      </div>
+      <div class="ve-card ve-card--elevated ve-card--teal">
+        <div class="ve-card__label ve-card__label--teal">Token Lifecycle</div>
+        <div class="prose">
+          <p><strong>Max OAuth tokens expire periodically.</strong> The bot must handle this gracefully:</p>
+          <ol style="padding-left: 1.5em; margin: 8px 0 0;">
+            <li>Claude Code SDK call fails with auth error</li>
+            <li>Bot catches the error, posts alert to Slack:<br><code>"Auth expired — SSH in and re-run claude to re-authenticate"</code></li>
+            <li>All queued tasks are paused until re-auth</li>
+            <li>You SSH in, run the OAuth flow again (~30 seconds)</li>
+            <li>Bot auto-resumes queued tasks</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="callout callout--amber" style="--i: 7">
+      <div class="callout__title">Why Not an API Key?</div>
+      <p>API keys charge per-token. For a personal always-on assistant with proactive tasks running throughout the day, this adds up fast. Your Max subscription gives you a flat monthly rate with generous usage limits — perfect for a single-user bot that runs many small tasks.</p>
+    </div>
+
+    <div class="spacer"></div>
+
+    <h3 style="font-size: 18px; margin-bottom: 12px; color: var(--text-bright);">Full Auth Map</h3>
+    <div class="table-wrap" style="--i: 8">
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Connection</th>
+              <th>Auth Method</th>
+              <th>Storage</th>
+              <th>Expiry</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Claude Code &harr; Anthropic</strong></td>
+              <td>Max plan OAuth (device-code flow)</td>
+              <td><code>~/.claude/</code></td>
+              <td>Periodic — re-auth via SSH</td>
+            </tr>
+            <tr>
+              <td><strong>Slack Bot &harr; Slack</strong></td>
+              <td>Bot Token + App-Level Token</td>
+              <td>Env vars on VM</td>
+              <td>Never (unless revoked)</td>
+            </tr>
+            <tr>
+              <td><strong>Gmail MCP &harr; Google</strong></td>
+              <td>Google OAuth2 (refresh token)</td>
+              <td>Env vars / config file</td>
+              <td>Refresh token is long-lived</td>
+            </tr>
+            <tr>
+              <td><strong>Fireflies MCP &harr; Fireflies</strong></td>
+              <td>API key</td>
+              <td>Env vars</td>
+              <td>Never (unless rotated)</td>
+            </tr>
+            <tr>
+              <td><strong>Calendar MCP &harr; Google</strong></td>
+              <td>Google OAuth2 (shared w/ Gmail)</td>
+              <td>Env vars / config file</td>
+              <td>Refresh token is long-lived</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ SLACK BOT LAYER ═══════════════════════ -->
+  <div class="section">
+    <div class="section__label">04 — Slack Bot Layer</div>
+    <h2>The Interface</h2>
+    <p class="section__desc">The Slack bot is the only user-facing surface. It receives your messages, delegates to Claude Code, and posts results back — handling all the formatting translation along the way.</p>
+
+    <div class="grid-3" style="--i: 9">
+      <div class="ve-card ve-card--elevated">
+        <div class="ve-card__label">Socket Mode</div>
+        <p class="prose">Bot connects <strong>outbound</strong> to Slack via WebSocket. No public IP, no domain, no SSL cert needed. Works with free Slack plans.</p>
+      </div>
+      <div class="ve-card ve-card--elevated">
+        <div class="ve-card__label ve-card__label--teal">Thread Mapping</div>
+        <p class="prose">Each Slack thread ID maps to a Claude Code <strong>session ID</strong>. Replies in the same thread continue the same conversation with full context.</p>
+      </div>
+      <div class="ve-card ve-card--elevated">
+        <div class="ve-card__label ve-card__label--sage">Response Handling</div>
+        <p class="prose">Posts a <strong>"working..."</strong> placeholder immediately. Replaces with result when done. Long responses (&gt;3k chars) get uploaded as file snippets.</p>
+      </div>
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="code-file" style="--i: 10">
+      <div class="code-file__header">src/bot.ts — Core message handler</div>
+      <pre class="code-file__body"><code>app.event('app_mention', async ({ event, say }) => {
+  const thread_ts = event.thread_ts || event.ts;
+  const sessionId = sessions.get(thread_ts);
+
+  // Immediate feedback
+  const thinking = await say({ text: 'Working on it...', thread_ts });
+
+  // Queue with priority (interactive > scheduled)
+  const result = await queue.add(async () => {
+    return claude({
+      prompt: event.text,
+      workingDirectory: '/workspace',
+      sessionId,
+      systemPrompt: loadMemoryContext(),
+    });
+  }, { priority: 10 });
+
+  // Persist session for thread continuity
+  sessions.set(thread_ts, result.sessionId);
+
+  // Format and post
+  const text = markdownToMrkdwn(result.text);
+  if (text.length > 3000) {
+    await app.client.files.uploadV2({
+      channel_id: event.channel,
+      content: result.text,
+      filename: 'response.md',
+      thread_ts,
+    });
+  } else {
+    await app.client.chat.update({
+      channel: event.channel, ts: thinking.ts, text
+    });
+  }
+});</code></pre>
+    </div>
+
+    <div class="spacer"></div>
+
+    <h3 style="font-size: 18px; margin-bottom: 12px; color: var(--text-bright);">Slack Bot Token Scopes</h3>
+    <div class="table-wrap" style="--i: 11">
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr><th>Scope</th><th>Purpose</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>chat:write</code></td><td>Post messages and update placeholders</td></tr>
+            <tr><td><code>files:write</code></td><td>Upload long responses as file snippets</td></tr>
+            <tr><td><code>app_mentions:read</code></td><td>Detect when user @mentions the bot</td></tr>
+            <tr><td><code>channels:history</code></td><td>Read thread context for conversation continuity</td></tr>
+            <tr><td><code>im:history</code></td><td>Support DM conversations with the bot</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ CLAUDE CODE SDK ═══════════════════════ -->
+  <div class="section">
+    <div class="section__label">05 — Claude Code SDK Integration</div>
+    <h2>The Brain</h2>
+    <p class="section__desc">The Claude Code SDK provides the same agent loop as the CLI — tool use, file editing, bash execution — but with structured programmatic I/O. It's the core of the entire system.</p>
+
+    <div class="grid-2" style="--i: 12">
+      <div class="ve-card ve-card--hero">
+        <div class="ve-card__label">SDK Invocation</div>
+        <div class="prose">
+          <p>Each task triggers a Claude Code SDK call with:</p>
+          <ul style="padding-left: 1.5em; margin: 8px 0 0;">
+            <li><strong>prompt</strong> — the user message or scheduled task description</li>
+            <li><strong>workingDirectory</strong> — always <code>/workspace</code></li>
+            <li><strong>sessionId</strong> — for conversation continuity</li>
+            <li><strong>systemPrompt</strong> — injected memory context</li>
+            <li><strong>allowedTools</strong> — read, write, edit, bash, MCP tools</li>
+          </ul>
+        </div>
+      </div>
+      <div class="ve-card ve-card--hero">
+        <div class="ve-card__label ve-card__label--teal">Structured Results</div>
+        <div class="prose">
+          <p>The SDK returns <strong>structured data</strong>, not a text blob:</p>
+          <ul style="padding-left: 1.5em; margin: 8px 0 0;">
+            <li><strong>Text responses</strong> — the main answer</li>
+            <li><strong>Tool calls</strong> — file reads, edits, bash commands</li>
+            <li><strong>Tool results</strong> — command output, file contents</li>
+            <li><strong>Session ID</strong> — for resuming later</li>
+          </ul>
+          <p style="margin-top: 8px;">This lets you decide <em>what to surface</em> in Slack: just the text, tool summaries, or full output.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="callout callout--rose" style="--i: 13">
+      <div class="callout__title">Critical: Task Queue with Concurrency 1</div>
+      <p>Max plan rate limits are <strong>per-account</strong>, not per-device. If a cron task and a Slack request hit Claude Code simultaneously, one will fail. Use <code>p-queue</code> with <code>concurrency: 1</code> and priority levels: interactive requests (priority 10) always jump ahead of scheduled tasks (priority 1).</p>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ MCP SERVERS ═══════════════════════ -->
+  <div class="section">
+    <div class="section__label">06 — MCP Servers</div>
+    <h2>External Service Access</h2>
+    <p class="section__desc">MCP servers give Claude Code access to Gmail, Fireflies, Calendar, and more. These are self-hosted — not the same as claude.ai's built-in integrations.</p>
+
+    <div class="callout callout--amber" style="--i: 14">
+      <div class="callout__title">Important Distinction</div>
+      <p>The Gmail, Fireflies, and Calendar integrations in <strong>claude.ai</strong> (the web app) are hosted by Anthropic with managed OAuth. They are <strong>not portable</strong> to Claude Code CLI. You need to run your own MCP servers that wrap these APIs directly.</p>
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="grid-3" style="--i: 15">
+      <div class="ve-card ve-card--elevated ve-card--accent-left">
+        <div class="ve-card__label">Gmail MCP</div>
+        <p class="prose"><strong>Wraps:</strong> Google Gmail API</p>
+        <p class="prose"><strong>Auth:</strong> Google OAuth2 refresh token</p>
+        <p class="prose"><strong>Tools:</strong> <code>search_emails</code>, <code>read_email</code>, <code>list_recent</code></p>
+        <p class="prose" style="margin-top: 8px;"><span class="tag tag--sage">Community server likely exists</span></p>
+      </div>
+      <div class="ve-card ve-card--elevated ve-card--teal">
+        <div class="ve-card__label ve-card__label--teal">Fireflies MCP</div>
+        <p class="prose"><strong>Wraps:</strong> Fireflies GraphQL API</p>
+        <p class="prose"><strong>Auth:</strong> API key</p>
+        <p class="prose"><strong>Tools:</strong> <code>get_transcripts</code>, <code>get_action_items</code>, <code>search_meetings</code></p>
+        <p class="prose" style="margin-top: 8px;"><span class="tag tag--rose">Custom build needed (~100 lines)</span></p>
+      </div>
+      <div class="ve-card ve-card--elevated ve-card--indigo">
+        <div class="ve-card__label ve-card__label--indigo">Calendar MCP</div>
+        <p class="prose"><strong>Wraps:</strong> Google Calendar API</p>
+        <p class="prose"><strong>Auth:</strong> Google OAuth2 (shared w/ Gmail)</p>
+        <p class="prose"><strong>Tools:</strong> <code>list_events</code>, <code>get_event</code>, <code>find_free_time</code></p>
+        <p class="prose" style="margin-top: 8px;"><span class="tag tag--sage">Community server likely exists</span></p>
+      </div>
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="code-file" style="--i: 16">
+      <div class="code-file__header">.claude/settings.json — MCP server configuration</div>
+      <pre class="code-file__body"><code>{
+  "mcpServers": {
+    "gmail": {
+      "command": "npx",
+      "args": ["@anthropic/mcp-gmail"],
+      "env": {
+        "GOOGLE_CLIENT_ID": "${GOOGLE_CLIENT_ID}",
+        "GOOGLE_CLIENT_SECRET": "${GOOGLE_CLIENT_SECRET}",
+        "GOOGLE_REFRESH_TOKEN": "${GOOGLE_REFRESH_TOKEN}"
+      }
+    },
+    "fireflies": {
+      "command": "node",
+      "args": ["./mcp-servers/fireflies/index.js"],
+      "env": {
+        "FIREFLIES_API_KEY": "${FIREFLIES_API_KEY}"
+      }
+    },
+    "calendar": {
+      "command": "npx",
+      "args": ["@anthropic/mcp-google-calendar"],
+      "env": {
+        "GOOGLE_CLIENT_ID": "${GOOGLE_CLIENT_ID}",
+        "GOOGLE_CLIENT_SECRET": "${GOOGLE_CLIENT_SECRET}",
+        "GOOGLE_REFRESH_TOKEN": "${GOOGLE_REFRESH_TOKEN}"
+      }
+    }
+  }
+}</code></pre>
+    </div>
+
+    <div class="callout callout--teal" style="--i: 17">
+      <div class="callout__title">Quick-Start Alternative: CLI Wrappers</div>
+      <p>Instead of full MCP servers, you can start with simple CLI scripts that Claude Code calls via bash. Put a <code>gmail.js</code> and <code>fireflies.js</code> in <code>/workspace/tools/</code> and instruct Claude Code in CLAUDE.md to use them. Scrappier, but gets you running in an afternoon.</p>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ MEMORY SYSTEM ═══════════════════════ -->
+  <div class="section">
+    <div class="section__label">07 — Persistent Memory</div>
+    <h2>The Long-Term Brain</h2>
+    <p class="section__desc">A structured file system that Claude Code reads and writes natively. No database, no adapter — just files. Git-tracked for version history, human-editable via SSH, self-maintaining via CLAUDE.md instructions.</p>
+
+    <div class="grid-2" style="--i: 18">
+      <div>
+        <div class="file-tree"><span class="dir">/workspace/memory/</span>
+├── <span class="dir">CLAUDE.md</span>             <span class="comment">← Memory management rules</span>
+├── me.md                  <span class="comment">← Identity, role, preferences</span>
+│
+├── <span class="dir">clients/</span>
+│   ├── _index.md          <span class="comment">← Client list + status</span>
+│   ├── acme-corp.md       <span class="comment">← Per-client history</span>
+│   ├── globex.md
+│   └── vip.md             <span class="comment">← Priority monitoring list</span>
+│
+├── <span class="dir">projects/</span>
+│   ├── _index.md
+│   └── website-redesign.md
+│
+├── todos.md               <span class="comment">← Master to-do list</span>
+├── decisions.md           <span class="comment">← Decision log + rationale</span>
+│
+├── <span class="dir">weekly/</span>
+│   ├── 2026-W11.md        <span class="comment">← Auto-generated summaries</span>
+│   └── 2026-W12.md
+│
+└── learned-context.md     <span class="comment">← "Remember X" from Slack</span></div>
+      </div>
+
+      <div class="ve-card ve-card--elevated">
+        <div class="ve-card__label ve-card__label--sage">Why Files Over a Database?</div>
+        <div class="prose">
+          <ul style="padding-left: 1.5em;">
+            <li><strong>Native I/O:</strong> Claude Code reads/writes files already — zero adapter code</li>
+            <li><strong>Human-editable:</strong> SSH in and edit directly when needed</li>
+            <li><strong>Git-trackable:</strong> Full version history of your memory for free</li>
+            <li><strong>Self-organizing:</strong> Claude Code can create new files, reorganize, archive stale info</li>
+            <li><strong>Transparent:</strong> You can always see exactly what the bot "knows"</li>
+          </ul>
+        </div>
+
+        <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border);">
+          <div class="ve-card__label">Self-Maintenance via CLAUDE.md</div>
+          <div class="prose">
+            <p>The root <code>CLAUDE.md</code> instructs Claude Code to update memory after every task:</p>
+            <ul style="padding-left: 1.5em; margin-top: 6px;">
+              <li>New client info → update their file</li>
+              <li>New to-dos → add to <code>todos.md</code></li>
+              <li>Key decision → log in <code>decisions.md</code></li>
+              <li>Completed to-do → mark done with date</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="code-file" style="--i: 19">
+      <div class="code-file__header">/workspace/memory/CLAUDE.md — Memory management rules</div>
+      <pre class="code-file__body"><code># Memory System
+
+Read all files in this directory tree for context before any task.
+
+## After Every Task
+1. If you learned new info about a client, update their file in clients/
+2. If new to-dos emerged, add them to todos.md with due dates
+3. If a to-do was completed, mark it done with the completion date
+4. If a key decision was made, log it in decisions.md with rationale
+
+## "Remember" Commands
+When the user says "remember X", append to learned-context.md.
+
+## Weekly Summaries
+Every Friday, create a weekly summary in weekly/ covering:
+- Client activity and changes
+- Completed and new to-dos
+- Key decisions made
+- Items needing follow-up next week
+
+## Maintenance
+Keep files concise. Archive stale info to an archive/ directory.
+Do not delete — archive. Memory is append-mostly.</code></pre>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ SCHEDULER ═══════════════════════ -->
+  <div class="section">
+    <div class="section__label">08 — Scheduler &amp; Proactivity</div>
+    <h2>Working While You Sleep</h2>
+    <p class="section__desc">Scheduled tasks make the bot proactive — it monitors, alerts, and prepares without being asked. The key principle: silent when nothing to report.</p>
+
+    <div class="table-wrap" style="--i: 20">
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Schedule</th>
+              <th>Task</th>
+              <th>Behavior</th>
+              <th>Posts to Slack?</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>0 8 * * 1-5</code></td>
+              <td><strong>Morning Briefing</strong></td>
+              <td>Check emails, today's meetings, overdue to-dos. Synthesize into a summary.</td>
+              <td><span class="tag tag--sage">Always</span></td>
+            </tr>
+            <tr>
+              <td><code>*/15 * * * *</code></td>
+              <td><strong>Urgent Email Monitor</strong></td>
+              <td>Check for VIP client emails. Only alert if time-sensitive.</td>
+              <td><span class="tag tag--rose">Only if urgent</span></td>
+            </tr>
+            <tr>
+              <td><code>0 * * * *</code></td>
+              <td><strong>Meeting Prep</strong></td>
+              <td>Check calendar for meetings in next 2 hours. Post prep brief 30 min before.</td>
+              <td><span class="tag tag--accent">If meeting found</span></td>
+            </tr>
+            <tr>
+              <td><code>0 9,13,17 * * *</code></td>
+              <td><strong>Deadline Watchdog</strong></td>
+              <td>Review todos.md for items due within 48 hours.</td>
+              <td><span class="tag tag--accent">If deadlines found</span></td>
+            </tr>
+            <tr>
+              <td><code>0 16 * * 5</code></td>
+              <td><strong>Weekly Review</strong></td>
+              <td>Summarize week's activity. Update weekly/ files. Post to Slack.</td>
+              <td><span class="tag tag--sage">Always</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="code-file" style="--i: 21">
+      <div class="code-file__header">src/scheduler.ts — Proactive task definitions</div>
+      <pre class="code-file__body"><code>import cron from 'node-cron';
+import { runTask } from './queue';
+
+// Morning briefing — weekdays at 8am
+cron.schedule('0 8 * * 1-5', () => {
+  runTask({
+    prompt: `Check emails and Fireflies transcripts from the last 24 hours.
+      Review today's calendar. Check todos.md for overdue items.
+      Post a concise morning briefing to Slack.`,
+    priority: 1,  // low priority — interactive requests jump ahead
+  });
+});
+
+// Urgent email monitor — every 15 minutes
+cron.schedule('*/15 * * * *', () => {
+  runTask({
+    prompt: `Check for new emails from VIP clients (see /memory/clients/vip.md).
+      If anything looks urgent or time-sensitive, alert in Slack.
+      If nothing urgent, do NOT post anything.`,
+    priority: 0,  // lowest — never blocks interactive work
+    silent: true,  // suppress "working on it" indicator
+  });
+});
+
+// Weekly review — Friday at 4pm
+cron.schedule('0 16 * * 5', () => {
+  runTask({
+    prompt: `Review all client and project activity this week.
+      Create a weekly summary in /memory/weekly/.
+      Post the summary to Slack.`,
+    priority: 1,
+  });
+});</code></pre>
+    </div>
+
+    <div class="callout callout--sage" style="--i: 22">
+      <div class="callout__title">Design Principle: Silent When Nothing to Report</div>
+      <p>A bot that posts noise every 15 minutes will get muted. Every proactive task prompt explicitly says <strong>"if nothing important, don't post."</strong> The bot should only speak up when something matters. This is what makes the difference between an assistant and an annoyance.</p>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ DATA FLOWS ═══════════════════════ -->
+  <div class="section">
+    <div class="section__label">09 — Data Flows</div>
+    <h2>Interactive &amp; Proactive Paths</h2>
+
+    <div class="grid-2" style="--i: 23">
+      <div class="ve-card ve-card--elevated ve-card--accent-left">
+        <div class="ve-card__label">Interactive Flow</div>
+        <div class="prose">
+          <ol style="padding-left: 1.5em; margin: 0;">
+            <li>User @mentions bot in Slack</li>
+            <li>Bot posts "working..." placeholder</li>
+            <li>Message queued <span class="tag tag--accent">Priority 10</span></li>
+            <li>Claude Code SDK invoked with prompt + workspace</li>
+            <li>Reads CLAUDE.md + memory for context</li>
+            <li>Uses tools (files, bash, MCP) as needed</li>
+            <li>Updates memory files if new info learned</li>
+            <li>Result formatted → placeholder replaced</li>
+          </ol>
+        </div>
+      </div>
+      <div class="ve-card ve-card--elevated ve-card--teal">
+        <div class="ve-card__label ve-card__label--teal">Proactive Flow</div>
+        <div class="prose">
+          <ol style="padding-left: 1.5em; margin: 0;">
+            <li>Scheduler triggers at configured time</li>
+            <li>Task queued <span class="tag tag--slate">Priority 1</span></li>
+            <li>Waits for any interactive tasks to finish</li>
+            <li>Claude Code SDK invoked with task prompt</li>
+            <li>Checks external services via MCP, reads memory</li>
+            <li>If actionable → posts to Slack channel</li>
+            <li>If nothing to report → <strong>silent, no post</strong></li>
+            <li>Memory files updated if needed</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ TECH STACK ═══════════════════════ -->
+  <div class="section">
+    <div class="section__label">10 — Tech Stack</div>
+    <h2>What You're Building With</h2>
+
+    <div class="table-wrap" style="--i: 24">
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr><th>Component</th><th>Technology</th><th>Role</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>Runtime</strong></td><td><code>Node.js + TypeScript</code></td><td>Application server</td></tr>
+            <tr><td><strong>Slack SDK</strong></td><td><code>@slack/bolt</code> (Socket Mode)</td><td>Slack integration — no public URL needed</td></tr>
+            <tr><td><strong>AI Engine</strong></td><td><code>@anthropic-ai/claude-code</code></td><td>Claude Code SDK — the agent loop</td></tr>
+            <tr><td><strong>Auth</strong></td><td>Max plan OAuth (device-code flow)</td><td>No API key, flat subscription cost</td></tr>
+            <tr><td><strong>Scheduler</strong></td><td><code>node-cron</code></td><td>Proactive task triggers</td></tr>
+            <tr><td><strong>Task Queue</strong></td><td><code>p-queue</code></td><td>Concurrency control + priority</td></tr>
+            <tr><td><strong>MCP Servers</strong></td><td><code>@modelcontextprotocol/sdk</code></td><td>External service integration</td></tr>
+            <tr><td><strong>Memory</strong></td><td>Flat files + <code>git</code></td><td>Persistent context, version history</td></tr>
+            <tr><td><strong>Hosting</strong></td><td>Railway / Fly.io / DigitalOcean</td><td>Always-on VM ($5-15/mo)</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ IMPLEMENTATION PHASES ═══════════════════════ -->
+  <div class="section">
+    <div class="section__label">11 — Implementation Phases</div>
+    <h2>Build Sequence</h2>
+    <p class="section__desc">Five phases, each delivering a working increment. Phase 1 gets you a functional bot in a day.</p>
+
+    <div class="spacer"></div>
+
+    <div class="grid-2">
+      <div class="phase-card" data-phase="1" style="--i: 25">
+        <h3>Slack &harr; Claude Code Bridge</h3>
+        <div class="phase-card__time">Day 1-2</div>
+        <ul>
+          <li>Set up VM, install Claude Code, authenticate with Max</li>
+          <li>Create Slack app with Socket Mode</li>
+          <li>Wire @mentions → Claude Code SDK → Slack replies</li>
+          <li>Handle message formatting and length limits</li>
+          <li>Test conversation continuity via thread mapping</li>
+        </ul>
+      </div>
+      <div class="phase-card" data-phase="2" style="--i: 26">
+        <h3>Persistent Memory</h3>
+        <div class="phase-card__time">Day 3-4</div>
+        <ul>
+          <li>Create <code>/workspace/memory/</code> structure</li>
+          <li>Write CLAUDE.md with memory management rules</li>
+          <li>Add "remember" command handling</li>
+          <li>Set up git tracking for memory files</li>
+          <li>Test self-maintenance (does CC update files?)</li>
+        </ul>
+      </div>
+      <div class="phase-card" data-phase="3" style="--i: 27">
+        <h3>MCP Servers</h3>
+        <div class="phase-card__time">Day 5-7</div>
+        <ul>
+          <li>Set up Gmail MCP (or CLI wrapper)</li>
+          <li>Build Fireflies MCP server (~100 lines)</li>
+          <li>Add Google Calendar integration</li>
+          <li>Configure in <code>.claude/settings.json</code></li>
+          <li>Test cross-referencing emails + transcripts</li>
+        </ul>
+      </div>
+      <div class="phase-card" data-phase="4" style="--i: 28">
+        <h3>Scheduler &amp; Proactivity</h3>
+        <div class="phase-card__time">Day 8-10</div>
+        <ul>
+          <li>Add node-cron with scheduled tasks</li>
+          <li>Implement task queue with priority</li>
+          <li>Configure proactive checks</li>
+          <li>Add morning briefing and weekly review</li>
+          <li>Tune "silent when nothing to report" behavior</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="phase-card" data-phase="5" style="--i: 29; max-width: 540px;">
+      <h3>Polish &amp; Reliability</h3>
+      <div class="phase-card__time">Day 11-14</div>
+      <ul>
+        <li>Auth failure detection → Slack notification</li>
+        <li><code>@bot status</code> command (queue, memory, auth state)</li>
+        <li>Error handling and graceful recovery</li>
+        <li>Periodic git commits for memory versioning</li>
+        <li>Process manager (pm2 / systemd) for auto-restart</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ SECURITY ═══════════════════════ -->
+  <div class="section">
+    <div class="section__label">12 — Security &amp; Edge Cases</div>
+    <h2>Things to Watch</h2>
+
+    <div class="grid-2" style="--i: 30">
+      <div class="callout callout--rose">
+        <div class="callout__title">Bash Access is Powerful</div>
+        <p>Claude Code can execute arbitrary shell commands. For a personal single-user system this is acceptable, but be aware: anything your VM user can do, Claude Code can do. Run as a non-root user with limited permissions.</p>
+      </div>
+      <div class="callout callout--amber">
+        <div class="callout__title">Sensitive Data in Memory</div>
+        <p>Memory files will contain business context — client names, deal values, to-dos. Keep the VM access locked down. If you git-push memory to a remote, use a <strong>private</strong> repository. Never store API keys or tokens in memory files — use env vars.</p>
+      </div>
+      <div class="callout callout--teal">
+        <div class="callout__title">Token Expiry Handling</div>
+        <p>Max OAuth tokens will expire. The bot must catch auth errors, pause all queued tasks, and alert you in Slack. Implement a simple health check that runs before each SDK invocation and short-circuits if credentials are invalid.</p>
+      </div>
+      <div class="callout callout--amber">
+        <div class="callout__title">Rate Limit Awareness</div>
+        <p>Max plan has usage rate limits that are per-account. Running many proactive tasks can eat into your interactive quota. The task queue (concurrency: 1, with priority) prevents collisions, but monitor your usage patterns and adjust cron frequencies if needed.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ EXAMPLE DAY ═══════════════════════ -->
+  <div class="section">
+    <div class="section__label">13 — A Day in the Life</div>
+    <h2>What This Looks Like in Practice</h2>
+    <p class="section__desc">Here's a typical workday with the Chief-of-Staff bot running.</p>
+
+    <div class="ve-card ve-card--elevated" style="--i: 31; max-width: 700px;">
+      <div class="timeline">
+        <div class="timeline__item">
+          <div class="timeline__time">8:00 AM</div>
+          <div class="timeline__text"><strong>Morning briefing</strong> posted automatically</div>
+          <div class="timeline__detail">3 new emails, 2 meetings today, 1 overdue to-do from yesterday</div>
+        </div>
+        <div class="timeline__item">
+          <div class="timeline__time">9:15 AM</div>
+          <div class="timeline__text">You: <em>"prep me for the Acme call at 10"</em></div>
+          <div class="timeline__detail">Bot reads /memory/clients/acme-corp.md + recent emails → posts prep brief with context</div>
+        </div>
+        <div class="timeline__item">
+          <div class="timeline__time">9:45 AM</div>
+          <div class="timeline__text"><strong>Proactive alert:</strong> "Acme meeting in 15 min"</div>
+          <div class="timeline__detail">"Last time you discussed pricing — they wanted a proposal by this week."</div>
+        </div>
+        <div class="timeline__item">
+          <div class="timeline__time">10:30 AM</div>
+          <div class="timeline__text">You: <em>"update acme — they approved the $50k proposal, start date April 1"</em></div>
+          <div class="timeline__detail">Bot updates /memory/clients/acme-corp.md, adds onboarding to-dos to todos.md</div>
+        </div>
+        <div class="timeline__item">
+          <div class="timeline__time">2:00 PM</div>
+          <div class="timeline__text"><strong>Deadline watchdog:</strong> "Globex deliverable due tomorrow"</div>
+          <div class="timeline__detail">Status still shows "in progress" — nudges you to follow up</div>
+        </div>
+        <div class="timeline__item">
+          <div class="timeline__time">3:30 PM</div>
+          <div class="timeline__text">You: <em>"cross-reference this week's emails with Fireflies transcripts, deduplicate to-dos"</em></div>
+          <div class="timeline__detail">Bot calls Gmail MCP + Fireflies MCP, reasons over both, updates todos.md</div>
+        </div>
+        <div class="timeline__item">
+          <div class="timeline__time">4:00 PM <span class="tag tag--accent" style="margin-left: 8px;">Friday</span></div>
+          <div class="timeline__text"><strong>Weekly review</strong> posted automatically</div>
+          <div class="timeline__detail">Client activity summary, completed to-dos, pending items, decisions made this week</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <hr>
+
+  <!-- ═══════════════════════ FOOTER ═══════════════════════ -->
+  <div style="text-align: center; padding: 24px 0;">
+    <p style="font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); letter-spacing: 1px;">
+      CLAUDE CODE CHIEF-OF-STAFF &middot; DESIGN DOCUMENT &middot; MARCH 2026
+    </p>
+  </div>
+
+</div>
+
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+
+  const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'base',
+    themeVariables: {
+      primaryColor: isDark ? '#3d2a14' : '#fef3c7',
+      primaryBorderColor: isDark ? '#f59e0b' : '#b45309',
+      primaryTextColor: isDark ? '#fef3c7' : '#1c1917',
+      secondaryColor: isDark ? '#1a2e2b' : '#ccfbf1',
+      secondaryBorderColor: isDark ? '#2dd4bf' : '#0d9488',
+      secondaryTextColor: isDark ? '#ccfbf1' : '#1c1917',
+      tertiaryColor: isDark ? '#1e293b' : '#f1f5f9',
+      tertiaryBorderColor: isDark ? '#94a3b8' : '#475569',
+      tertiaryTextColor: isDark ? '#f1f5f9' : '#1e293b',
+      lineColor: isDark ? '#78716c' : '#a8a29e',
+      fontSize: '14px',
+      fontFamily: "'Bricolage Grotesque', system-ui, sans-serif",
+      noteBkgColor: isDark ? '#1e293b' : '#fefce8',
+      noteTextColor: isDark ? '#f1f5f9' : '#1e293b',
+      noteBorderColor: isDark ? '#fbbf24' : '#d97706',
+    }
+  });
+</script>
+
+<script>
+  // Theme toggle
+  function toggleTheme() {
+    var current = document.documentElement.getAttribute('data-theme');
+    document.documentElement.setAttribute('data-theme', current === 'light' ? 'dark' : 'light');
+  }
+
+  // Zoom controls
+  var INITIAL_ZOOM = 1.3;
+  function zoomDiagram(btn, factor) {
+    var wrap = btn.closest('.mermaid-wrap');
+    var target = wrap.querySelector('.mermaid');
+    var current = parseFloat(target.dataset.zoom || INITIAL_ZOOM);
+    var next = Math.min(Math.max(current * factor, 0.5), 5);
+    target.dataset.zoom = next;
+    target.style.zoom = next;
+  }
+  function resetZoom(btn) {
+    var wrap = btn.closest('.mermaid-wrap');
+    var target = wrap.querySelector('.mermaid');
+    target.dataset.zoom = INITIAL_ZOOM;
+    target.style.zoom = INITIAL_ZOOM;
+  }
+
+  // Pan and zoom on all mermaid-wraps
+  document.querySelectorAll('.mermaid-wrap').forEach(function(wrap) {
+    wrap.addEventListener('wheel', function(e) {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      var target = wrap.querySelector('.mermaid');
+      var current = parseFloat(target.dataset.zoom || INITIAL_ZOOM);
+      var factor = e.deltaY < 0 ? 1.1 : 0.9;
+      var next = Math.min(Math.max(current * factor, 0.5), 5);
+      target.dataset.zoom = next;
+      target.style.zoom = next;
+    }, { passive: false });
+
+    var startX, startY, scrollL, scrollT;
+    wrap.addEventListener('mousedown', function(e) {
+      if (e.target.closest('.zoom-controls')) return;
+      wrap.classList.add('is-panning');
+      startX = e.clientX;
+      startY = e.clientY;
+      scrollL = wrap.scrollLeft;
+      scrollT = wrap.scrollTop;
+    });
+    window.addEventListener('mousemove', function(e) {
+      if (!wrap.classList.contains('is-panning')) return;
+      wrap.scrollLeft = scrollL - (e.clientX - startX);
+      wrap.scrollTop = scrollT - (e.clientY - startY);
+    });
+    window.addEventListener('mouseup', function() {
+      wrap.classList.remove('is-panning');
+    });
+  });
+</script>
+
+</body>
+</html>

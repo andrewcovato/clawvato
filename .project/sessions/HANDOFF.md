@@ -1,139 +1,138 @@
 # Session Handoff
 
-> Last updated: 2026-03-24 | Session 25 | Phase 3 In Progress
+> Last updated: 2026-03-25 | Session 26 | Phase 3 In Progress
 
 ## Quick Resume
 
 ```
-Phase: 3 IN PROGRESS — Build the Nervous System
-Branch: cc-native-engine
-Build: Clean (both repos)
-Plugin: @andrewcovato/clawvato-memory v0.6.2 on GitHub Packages + Railway
-  - Sonnet extraction (upgraded from Haiku), tighter prompt
-  - sync command: auto-updates scripts on SessionStart
-Sidecar: Rebuilt — tiered sweeps + task poller + event feed
-  - Slack+FF hourly, Drive 6h, full backfill daily
-  - 228 active memories, 20 new from first sweep run
-  - Deleted pins/approval/reconciliation (-685 lines)
-NEXT: S26 — Pub/Sub webhooks (Gmail + Calendar real-time ingest)
-VISION: Brain Platform — multi-brain hierarchy, brain-powered apps (docs/DESIGN_BRAIN_PLATFORM.md)
+Phase: 3 IN PROGRESS — Brain Platform Migration
+Branch: cc-native-engine (clawvato), main (brain-platform)
+Build: Clean (both repos, 55/55 tests green on brain-platform)
+State: MID-MIGRATION — brain-platform deployed + cutover done, cleanup pending
+
+brain-platform repo: github.com/andrewcovato/brain-platform (private)
+  - Railway: brain-platform-production.up.railway.app
+  - 36 files, ~4,700 lines, 23 MCP tools
+  - 2 brains: primary (149 mems, 12 clusters), dev (96 mems, 4 clusters)
+  - Recursive concept-aware HDBSCAN (adaptive depth, composite embeddings)
+  - Sidecar code EXISTS but NOT running (still in clawvato)
+
+clawvato repo: NOT YET THINNED — ~7,500 lines to delete
+  - Old sidecar still running (sweeps → brain-platform /ingest)
+  - src/memory/ and src/sweeps/ still in codebase (dead code)
+  - MCP server name still "clawvato-memory" (backward compat)
+
+clawvato-memory: ZOMBIE — running on Railway, nothing points to it. Safe to stop.
+
+NEXT: Step 1 of migration plan — comms brain + wire sidecar into brain-platform
 ```
 
-## Session 25 — What Was Built
+## Session 26 — What Was Built
 
-### Observability Pipeline
-- Wired PostToolUse journal hook in project settings
-- Insights scratch pad (`/tmp/clawvato-insights.md`) — agent writes insights, journal hook merges on flush
-- Brief auto-update on flush — scratch pad or auto-generated from tool activity
-- Three-tier brief reliability: agent-written > auto-generated > SessionEnd tombstone
-- Flush interval 20→50 tool calls (fewer, richer batches)
+### Brain Platform (new repo: brain-platform)
+- Created repo from scratch, 36 TypeScript files, ~4,700 lines
+- **Engine**: 22 files ported from clawvato-memory with brain_id scoping on ALL queries
+  - db, log, session, utils, types (foundation)
+  - embed, reranker (ML models, $0 local)
+  - dedup (3-tier with brain_id scoping, entity parsing fix)
+  - cluster (MAJOR: recursive concept-aware HDBSCAN — see below)
+  - search, retrieve (7-stage pipeline), ingest (store + extraction)
+  - surface, context (briefs/handoffs — global, not brain-scoped)
+  - brain-config (YAML loader), prompt-generator (concepts → extraction prompt)
+  - consolidate, decay, reflect (per-brain scheduler jobs)
+  - feeds, triggers (skeletons for future)
+- **Connectors**: 7 files ported from clawvato/src/sweeps/
+  - Slack (298 lines), Gmail (200), Fireflies (140 + client 100), Drive (stub)
+  - Retry utility, connector types with brainId routing
+- **Adapters**: MCP (23 tools with brain_id), REST (skeleton)
+- **Sidecar**: poll-scheduler, webhook-server (skeleton), entrypoint
+- **Server**: index.ts (HTTP/stdio dual transport), scheduler (per-brain jobs)
+- **Config**: dev.brain.yaml (4 concepts), primary.brain.yaml (4 concepts)
 
-### Extraction Quality
-- Upgraded /ingest extraction from Haiku → Sonnet
-- Rewrote extraction prompt: explicit DO NOT EXTRACT list (file paths, tool usage, project structure)
-- Before: 6 facts from test input, ~75% noise. After: 2-3 focused facts.
-- Cost: ~$0.03/session (negligible for quality improvement)
+### Recursive Concept-Aware Clustering
+- Composite clustering embeddings: `[concept_type] entities: content`
+- Recursive HDBSCAN: adaptive depth per branch, stops when no sub-structure
+- Primary brain: 10 root clusters, 2 sub-clusters, max depth 1
+  - Coles (8) → C360 geo-testing (3) + measurement case study (3)
+  - Acorns, Roblox, Vail, MeasurementOS all properly separated
+- Dev brain: 4 flat clusters (sparse data stays flat naturally)
+- Cluster identity preservation across re-runs (centroid similarity matching)
+- Incremental tree assignment (walks root→leaf, marks dirty for rebalance)
+- Tree structure: parent_cluster_id, depth, generation, dirty columns
 
-### Plugin Distribution
-- Added `sync` command: fast, non-interactive, copies scripts + updates version
-- SessionStart hook runs `npx @andrewcovato/clawvato-memory@latest sync`
-- Replaces check-version.sh (actually updates, not just warns)
-- Comprehensive README: install, update pipeline, architecture, hooks, tools
-- Plugin v0.6.2 published
+### Smart Memory Classification
+- Analyzed 248 existing memories: 60% business intelligence, 40% technical
+- Classified: 149 → primary brain, 96 → dev brain (3 remaining are test artifacts)
+- Classification by source/domain/type/surface signals
+- Default brain_id changed from 'dev' to 'primary'
+- DB column default updated to match
 
-### Sidecar Rebuild (S25 core)
-- Sidecar becomes unified process: task poller + tiered sweeps + event feed
-- Tiered sweep intervals: Slack+FF hourly, Drive 6h, full backfill daily
-- Collectors run in-process — no CC session needed for sweeps
-- Content sent to plugin `/ingest` → Sonnet extracts facts
-- sweep:all-sources task cancelled — sweeps owned by sidecar timers
+### Deployment + Cutover
+- brain-platform deployed to Railway (same project as clawvato)
+- DB migration: brain_id, concept_type, metadata JSONB, origin_brain columns + indexes
+- Hierarchical clustering columns: parent_cluster_id, depth, generation, dirty
+- Cutover: CLAWVATO_MEMORY_URL + CLAWVATO_MEMORY_INTERNAL_URL → brain-platform
+- Local .mcp.json updated to point at brain-platform source
+- 55/55 live tests passing (18 test categories)
 
-### Task UX Overhaul
-- Deleted `channel-manager.ts` (314 lines) and `approval.ts` (48 lines)
-- Removed sync_tasks tool, pin reconciliation, Haiku summaries, reaction approval
-- Task tools are now DB-only — no Slack side effects
-- list_tasks output grouped by status, clean formatting
-- Approval via natural language ("approve [task]") not reactions
-- Event feed: task/sweep events posted to #clawvato-tasks chronologically
-- Net: +311 / -685 lines
-
-### Pub/Sub Webhook Spec
-- Full design doc: `docs/DESIGN_PUBSUB_WEBHOOKS.md`
-- Visual spec: `~/.agent/diagrams/pubsub-webhook-spec.html`
-- Gmail: Google Pub/Sub → sidecar `/webhooks/gmail` → fetch history → /ingest
-- Calendar: events.watch() → sidecar `/webhooks/calendar` → sync token → /ingest
-- Sidecar deploys as separate Railway service for public URL
-- Sweeps remain as daily backfill safety net
-
-### Sweep Verification
-- Production sidecar ran all 3 tiers within 30 min of deploy
-- 228 total memories (up from 208), 20 new from sweeps
-- 227 Slack channels discovered (8 public + 54 private + 165 mpim)
-- 20 active channels processed (cadence filter skips inactive)
-- High-water marks functioning — no duplicate processing
-
-### Brain Platform Vision (end of session)
-- Evolved through discussion: single brain → two brains → multi-brain hierarchy
-- Wrote docs/DESIGN_BRAIN_PLATFORM.md (776 lines) — comprehensive architecture
-- Brain = configurable intelligence unit (identity, inputs, processing, outputs, connections)
-- Four input patterns: webhook, poll, feed, passive — covers every source
-- brain.yaml config format for standardized brain setup
-- Multi-brain hierarchy: personal (comms) → dev (projects) → GBS (strategy)
-- Feeds flow up (filtered), drill-downs flow down (on-demand, ephemeral)
-- Brain stores intelligence + source pointers, NOT content. Source APIs store content.
-- Applications (newmail, kanban, CRM) are view layers: brain intelligence + source API content
-- Decay triggers source cleanup (archive stale emails, clean Slack channels)
-- Newmail use case: get_clusters("comms/email") → brain organizes, Gmail API provides content
-- Shared entity namespace across all brains enables cross-brain queries
-- Scaling: same codebase per brain, different config. Single user → team → org.
+### Testing
+- 55 live tests across 18 categories, all green
+- Tests cover: health, auth, ingest pipeline, brain isolation, schema migration,
+  clustering per-brain, dedup scoping, surface tools, embedding coverage,
+  hybrid search, schema integrity, scheduler guards, backward compatibility,
+  extraction quality, recursive clustering, concept-aware features,
+  get_clusters tree structure, incremental assignment
 
 ### Key Decisions
-1. Insights → scratch pad → journal flush (not explicit store_fact calls)
-2. Sonnet for extraction, Haiku was too noisy
-3. sync command replaces check-version.sh — actually updates
-4. Sidecar owns sweeps (not CC via Slack) — reliability proven
-5. Pins/approval deleted — event feed + natural language approval
-6. Agent scheduler stays agent-side (NOT in plugin) — confirmed as original design
-7. Three categories: brain maintenance (plugin), data collection (sidecar), user tasks (CC)
-8. Always bump plugin version on push — GitHub Packages won't publish duplicates
-9. Brain stores intelligence + pointers, source APIs store content (permanent principle)
-10. Multi-brain hierarchy with feeds up, drill-down down, shared entity namespace
-11. Newmail = brain clusters + Gmail API content (brain never replaces Gmail as storage)
-12. Decay as active curation — triggers source cleanup with graduated trust
+1. brain-platform is the core system, not a plugin. CC is one adapter.
+2. Logical brain separation (brain_id column, same DB) not separate services
+3. Default brain_id = 'primary' (not 'dev') — business intelligence is the majority
+4. Exclusive source ownership: each raw source has exactly one brain
+5. Three flow types: feeds UP, context DOWN, drill-downs (any direction, ephemeral)
+6. Concepts are per-brain YAML config → extraction prompts auto-generated
+7. Recursive HDBSCAN with adaptive depth (HDBSCAN decides when to stop)
+8. Composite clustering embeddings ([concept_type] entities: content)
+9. Cluster identity preservation via centroid similarity matching
+10. MCP server name stays "clawvato-memory" for backward compat (rename later)
+11. Stay in clawvato directory for sessions (project state lives here)
 
-## Immediate Next Steps
-1. S26 Phase A: Gmail Pub/Sub webhook (GCP setup + sidecar HTTP server)
-2. S26 Phase B: Calendar events.watch() webhook
-3. Deploy sidecar as separate Railway service
-4. S27: Louvain community detection + relationship extraction
-5. Merge cc-native-engine → main when S26 stable
+## Migration Plan — Remaining Steps
+
+### Step 1: Comms brain + sidecar in brain-platform (NEXT)
+- Write brains/comms.brain.yaml (commitment, follow_up, meeting_outcome, relationship_signal)
+- Wire sidecar into server/index.ts
+- Move connector auth env vars to brain-platform
+- Deploy, verify sweeps → comms brain
+
+### Step 2: Kill old sidecar in clawvato
+- Remove sweep logic from task-scheduler-standalone.ts, keep task poller + event feed
+
+### Step 3: Thin clawvato (~7,500 lines)
+- Delete src/memory/, src/sweeps/, drive-sync, file-extractor, fireflies/sync
+- Fix broken imports, remove config sections, remove unused deps
+
+### Step 4: npm package migration
+- Publish @andrewcovato/brain-platform, update SessionStart hooks
+
+### Step 5: Stop clawvato-memory + cleanup
+- Stop Railway service, archive repo, update docs
+
+### Step 6: Rename MCP server (optional, cosmetic)
 
 ## Files Created This Session
-- `docs/DESIGN_PUBSUB_WEBHOOKS.md` — tactical Pub/Sub webhook spec
-- `docs/DESIGN_BRAIN_PLATFORM.md` — strategic brain platform architecture (776 lines)
-- `~/.agent/diagrams/pubsub-webhook-spec.html` — visual Pub/Sub spec
-- `scripts/test-sweep.ts` (test utility)
+- brain-platform/ (entire repo — 36 TypeScript files)
+  - engine/ (22 files), connectors/ (7 files), adapters/ (3 files)
+  - sidecar/ (3 files), server/ (2 files), bin/ (empty, future)
+  - brains/dev.brain.yaml, brains/primary.brain.yaml
+  - tests/live-test.ts (55 tests)
+  - package.json, tsconfig.json, railway.toml, .gitignore
 
 ## Files Modified This Session
-- `src/cc-native/task-scheduler-standalone.ts` (complete rewrite)
-- `src/tasks/tools.ts` (complete rewrite)
-- `src/cli/start.ts` (major cleanup)
-- `src/slack/socket-mode.ts` (removed reaction/thread handlers)
-- `src/tasks/executor.ts` (removed channelManager)
-- `src/agent/hybrid.ts` (removed channelManager)
-- `src/agent/fast-path.ts` (removed sync_tasks)
-- `src/config.ts` (tiered sweep schema)
-- `config/default.json` (tiered sweep config)
-- `config/prompts/system.md` (removed pin references)
-- `scripts/journal-hook.sh` (insights + brief + interval)
-- `CLAUDE.md` (comprehensive updates)
+- clawvato/.mcp.json (point at brain-platform source)
+- clawvato/.project/sessions/* (handoff files)
+- ~/.claude/projects/.../memory/ (project memories updated)
 
-## Files Deleted This Session
-- `src/tasks/channel-manager.ts` (314 lines — pins)
-- `src/tasks/approval.ts` (48 lines — reaction approval)
-
-## Plugin Changes (clawvato-memory repo)
-- `server/handlers/ingest.ts` — Haiku → Sonnet, tighter extraction prompt
-- `bin/setup.ts` — added sync command, SessionStart hook updated
-- `README.md` — comprehensive documentation
-- `package.json` — v0.6.2
+## Design Docs
+- docs/DESIGN_BRAIN_PLATFORM.md — brain platform architecture (read, not modified)
+- docs/DESIGN_PUBSUB_WEBHOOKS.md — webhook spec (read, not modified)
+- ~/.claude/plans/cozy-inventing-candy.md — migration plan (created this session)

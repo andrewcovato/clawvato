@@ -4,7 +4,6 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getConfig } from '../config.js';
 import { logger } from '../logger.js';
-import { reembedAllMemories } from '../memory/embeddings.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 

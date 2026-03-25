@@ -1,37 +1,32 @@
-# Last Interactions — Session 25
+# Last Interactions — Session 26
 
-### Journal Hook + Insights Pipeline
-**User**: do we need to update the clawvato memory version right here, or because we're developing here it's the pure, sweet, sweet OG source?
-**Assistant**: Local .mcp.json points directly at source code. You're on the OG source — no version update needed.
-**Decision**: Local dev uses source, published package is for other projects.
+### Brain Platform Architecture Discussion
+**User**: I want to keep kicking the tires on the brain platform design. Gut check it with fresh context.
+**Assistant**: Deep assessment: /ingest contract is the best decision, intelligence-not-content principle is right, decay-as-curation is novel. Gaps: entity resolution unbuilt, HDBSCAN quality unvalidated, multi-brain split premature at current scale.
+**Decision**: Architecture is sound. Entity resolution and clustering spike needed before investing in hierarchy.
 
-### Insights Capture Gap
-**User**: the journal will pick up the "insights" right? can we test if it's doing that?
-**Assistant**: No — journal hook only captures PostToolUse events, not conversational text. Built insights scratch pad (/tmp/clawvato-insights.md), journal hook merges on flush.
-**Decision**: Insights → scratch pad → journal flush. NOT store_fact for routine insights.
+### Multi-Brain Motivation
+**User**: My email is thousands of messages with LOW signal to noise. I don't want to pollute the 228-mem curated brain with email noise.
+**Assistant**: This changes things — corpus pollution is a concrete problem. Proposed logical brain separation (brain_id column in same DB, not separate services). One process, one DB, but isolated clustering/reflection/decay per brain.
+**Decision**: Logical brain separation. brain_id column. Default brain changed from 'dev' to 'primary' after analyzing 60% of memories are business intelligence.
 
-### Extraction Quality
-**User**: are we being TOO verbose with what to store? i dunno the quality of the memories we're making
-**Assistant**: Audited: ~75% noise. Upgraded Haiku→Sonnet for /ingest extraction, rewrote prompt with explicit DO NOT EXTRACT list, interval 20→50.
-**Decision**: Sonnet > Haiku for extraction. Quality over volume.
+### Configurable Brain Concepts
+**User**: Is there a way to generalize concepts (commitments, etc.) rather than hardcode them? Also the dev brain is very different from comms.
+**Assistant**: Hybrid approach — concepts defined in brain.yaml per brain, extraction prompts generated from concept definitions. General facts still extracted alongside. Each brain has genuinely different understanding of the world.
+**Decision**: Concepts are per-brain YAML config. Extraction prompts auto-generated. Engine is generic, config makes it specific.
 
-### Plugin Propagation
-**User**: we need to address the update process NOW. I do NOT want straggler versions.
-**Assistant**: Built `sync` command. SessionStart runs `npx @andrewcovato/clawvato-memory@latest sync`. Wrote comprehensive README.
-**Decision**: sync replaces check-version.sh. Always bump version on push.
+### Channel Ownership + Flow Types
+**User**: Should channels be shared or exclusive per brain? And subordinate brains need strategic context from GBS.
+**Assistant**: Exclusive ownership — each raw source has one brain. Three flow types: feeds UP (raw concepts), context DOWN (synthesized digests), drill-downs (any direction, ephemeral).
+**Decision**: Comms owns all Slack/Gmail/Fireflies/Drive. Dev owns CC journals. Primary/GBS receives feeds.
 
-### Sidecar Rebuild
-**User**: I want a super clean, slack-friendly output. Scrap the pin stuff. Task channel = RSS feed. Sweep should be a back-end task.
-**Assistant**: Deleted channel-manager.ts + approval.ts (-685 lines). Rebuilt sidecar: tiered sweeps (Slack+FF 1h, Drive 6h, backfill 24h) in-process + event feed + simplified task tools.
-**Decision**: Three categories of work: brain maintenance (plugin), data collection (sidecar), user tasks (CC).
+### Recursive Clustering
+**User**: I did a spike in newmail and clustering was terrible — merged Acorns+Coles, duplicate clusters, noise.
+**Assistant**: Built recursive concept-aware HDBSCAN: composite embeddings ([concept_type] entities: content), adaptive depth per branch (HDBSCAN decides when to stop), cluster identity preservation across re-runs, incremental rebalance with dirty flags.
+**Decision**: Recursive + concept-aware clustering. Sparse data stays flat naturally.
 
-### Pub/Sub Webhook Spec
-**User**: one final thing: the pub/sub. can you spec this out?
-**Assistant**: Visual spec (HTML) + design doc. Gmail via Pub/Sub, Calendar via events.watch(), sidecar as separate Railway service.
-
-### Brain Platform Architecture
-**User**: what if we merge fireflies and slack into this as well. The email system can do de-duped to-do, CRM, rich email with context from slack and meetings.
-**Assistant**: Evolved through: two brains → single brain with domains → multi-brain hierarchy. Brain stores intelligence + source pointers, NOT content. Applications (newmail, kanban, CRM) are view layers on top.
-**User**: I want to plan this out right: concept of a "brain" with general scope and data inputs.
-**Assistant**: Wrote comprehensive DESIGN_BRAIN_PLATFORM.md (776 lines). Brain = identity + inputs + processing + outputs + connections. Four input patterns (webhook, poll, feed, passive). brain.yaml config. Multi-brain hierarchy with feeds up, drill-down down.
-**Decision**: Brain platform architecture. Source APIs store content, brain stores intelligence. Newmail = brain clusters + Gmail API content. Decay triggers source cleanup.
+### Cutover + Migration State
+**User**: Let's do the cutover! Then: we're in a messy mid-state, need a plan to finish migration.
+**Assistant**: Cutover done — clawvato now points to brain-platform. But sidecar still runs in clawvato, old npm package distributes hooks, comms brain doesn't exist yet. Plan: 6 steps to clean state.
+**Decision**: Stay in clawvato directory for sessions. Next: build comms brain + move sidecar to brain-platform, then thin clawvato.
+**Pending**: Step 1 of migration plan (comms brain + sidecar wiring), then steps 2-5 (thin clawvato, npm migration, cleanup).

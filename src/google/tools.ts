@@ -18,7 +18,6 @@
 import { google } from 'googleapis';
 import type Anthropic from '@anthropic-ai/sdk';
 import type { ToolHandlerResult } from '../mcp/slack/server.js';
-import { getFileContent } from './drive-sync.js';
 import { logger } from '../logger.js';
 import { scanForSecrets } from '../security/output-sanitizer.js';
 
@@ -1106,40 +1105,9 @@ export function createGoogleTools(
             return { content: metadata };
           }
 
-          // Read file content using the file extractor
-          const extracted = await getFileContent(drive, fileId, f.mimeType ?? '');
-
-          if (!extracted) {
-            return { content: `${metadata}\n\n[Content could not be extracted — unsupported format or file too large]` };
-          }
-
-          if (extracted.kind === 'text') {
-            return { content: `${metadata}\n\n--- Content ---\n\n${extracted.text}` };
-          }
-
-          if (extracted.kind === 'document') {
-            // PDF — return as Claude-native document block + metadata as text
-            return {
-              content: metadata,
-              contentBlocks: [
-                { type: 'document' as const, source: { type: 'base64' as const, media_type: extracted.mediaType, data: extracted.base64 } },
-                { type: 'text' as const, text: `File metadata:\n${metadata}\n\nAnalyze the document above.` },
-              ],
-            };
-          }
-
-          if (extracted.kind === 'image') {
-            // Image — return as Claude-native image block + metadata
-            return {
-              content: metadata,
-              contentBlocks: [
-                { type: 'image' as const, source: { type: 'base64' as const, media_type: extracted.mediaType, data: extracted.base64 } },
-                { type: 'text' as const, text: `File metadata:\n${metadata}\n\nDescribe the image above.` },
-              ],
-            };
-          }
-
-          return { content: metadata };
+          // Content extraction moved to brain-platform (Drive connector).
+          // CC-native uses gws CLI for Drive reads — this tool returns metadata only.
+          return { content: `${metadata}\n\n[Use gws CLI to read file content: gws drive read ${fileId}]` };
         } catch (error) {
           const msg = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
           return { content: `Drive error: ${msg}`, isError: true };
