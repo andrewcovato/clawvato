@@ -1,138 +1,136 @@
 # Session Handoff
 
-> Last updated: 2026-03-25 | Session 26 | Phase 3 In Progress
+> Last updated: 2026-03-25 | Session 27 | Phase 3 In Progress
 
 ## Quick Resume
 
 ```
-Phase: 3 IN PROGRESS — Brain Platform Migration
+Phase: 3 IN PROGRESS — Inter-Brain Intelligence
 Branch: cc-native-engine (clawvato), main (brain-platform)
 Build: Clean (both repos, 55/55 tests green on brain-platform)
-State: MID-MIGRATION — brain-platform deployed + cutover done, cleanup pending
+State: MIGRATION COMPLETE — feeds system live, historical backfill pending
 
-brain-platform repo: github.com/andrewcovato/brain-platform (private)
+brain-platform repo: github.com/andrewcovato/brain-platform
   - Railway: brain-platform-production.up.railway.app
-  - 36 files, ~4,700 lines, 23 MCP tools
-  - 2 brains: primary (149 mems, 12 clusters), dev (96 mems, 4 clusters)
-  - Recursive concept-aware HDBSCAN (adaptive depth, composite embeddings)
-  - Sidecar code EXISTS but NOT running (still in clawvato)
+  - 3 brains: primary (~185 mems), dev (~90 mems), comms (~50 mems, growing)
+  - Inter-brain feeds: 5 connections (raw + synthesized), 30-min sweep
+  - Sidecar: 3 connectors (Slack, Gmail, Fireflies), 15-min sweep frequency
+  - npm: @andrewcovato/brain-platform@1.1.0
 
-clawvato repo: NOT YET THINNED — ~7,500 lines to delete
-  - Old sidecar still running (sweeps → brain-platform /ingest)
-  - src/memory/ and src/sweeps/ still in codebase (dead code)
-  - MCP server name still "clawvato-memory" (backward compat)
+clawvato repo: THINNED — 9,822 lines deleted
+  - Thin agent: CC-native engine + task poller + event feed
+  - No memory/, sweeps/, hybrid agent code — all in brain-platform
+  - Hybrid agent DELETED (not just deprecated)
 
-clawvato-memory: ZOMBIE — running on Railway, nothing points to it. Safe to stop.
-
-NEXT: Step 1 of migration plan — comms brain + wire sidecar into brain-platform
+clawvato-memory: STOPPED on Railway. Nothing points to it. Archive candidate.
 ```
 
-## Session 26 — What Was Built
+## Session 27 — What Was Built
 
-### Brain Platform (new repo: brain-platform)
-- Created repo from scratch, 36 TypeScript files, ~4,700 lines
-- **Engine**: 22 files ported from clawvato-memory with brain_id scoping on ALL queries
-  - db, log, session, utils, types (foundation)
-  - embed, reranker (ML models, $0 local)
-  - dedup (3-tier with brain_id scoping, entity parsing fix)
-  - cluster (MAJOR: recursive concept-aware HDBSCAN — see below)
-  - search, retrieve (7-stage pipeline), ingest (store + extraction)
-  - surface, context (briefs/handoffs — global, not brain-scoped)
-  - brain-config (YAML loader), prompt-generator (concepts → extraction prompt)
-  - consolidate, decay, reflect (per-brain scheduler jobs)
-  - feeds, triggers (skeletons for future)
-- **Connectors**: 7 files ported from clawvato/src/sweeps/
-  - Slack (298 lines), Gmail (200), Fireflies (140 + client 100), Drive (stub)
-  - Retry utility, connector types with brainId routing
-- **Adapters**: MCP (23 tools with brain_id), REST (skeleton)
-- **Sidecar**: poll-scheduler, webhook-server (skeleton), entrypoint
-- **Server**: index.ts (HTTP/stdio dual transport), scheduler (per-brain jobs)
-- **Config**: dev.brain.yaml (4 concepts), primary.brain.yaml (4 concepts)
+### Migration Complete (Steps 1-5)
+1. **Comms brain + sidecar**: 3 connectors wired (Slack, Gmail, Fireflies), all routing to comms brain
+2. **Old sidecar stripped**: Task poller + event feed only (~130 lines, was ~350)
+3. **Clawvato thinned**: 9,822 lines deleted — memory, sweeps, hybrid agent, drive-sync, file-extractor, fireflies/sync, dead tests
+4. **npm package**: @andrewcovato/brain-platform@1.1.0 published, SessionStart hooks updated
+5. **clawvato-memory decommissioned**: Railway service stopped, all references updated
 
-### Recursive Concept-Aware Clustering
-- Composite clustering embeddings: `[concept_type] entities: content`
-- Recursive HDBSCAN: adaptive depth per branch, stops when no sub-structure
-- Primary brain: 10 root clusters, 2 sub-clusters, max depth 1
-  - Coles (8) → C360 geo-testing (3) + measurement case study (3)
-  - Acorns, Roblox, Vail, MeasurementOS all properly separated
-- Dev brain: 4 flat clusters (sparse data stays flat naturally)
-- Cluster identity preservation across re-runs (centroid similarity matching)
-- Incremental tree assignment (walks root→leaf, marks dirty for rebalance)
-- Tree structure: parent_cluster_id, depth, generation, dirty columns
+### Inter-Brain Feed System (Track R)
+- `engine/feeds.ts`: 280 lines — queryFeedableFacts, runFeedConnection (raw + synthesized), runFeedSweep, generateSynthesisPrompt
+- Raw mode: individual facts flow source→target through dedup with origin_brain tracking
+- Synthesized mode: Sonnet produces digest facts from source for target brain
+- Cycle prevention: facts with origin_brain=target excluded from queries
+- 5 feed connections configured across 3 brains
+- 30-min global sweep timer, per-connection intervals (1h raw, 6h synthesized)
+- MCP tools: run_feeds, get_feed_status
+- VERIFIED: comms→primary raw feed moved 17 facts, origin_brain tracked, 0 cycles
 
-### Smart Memory Classification
-- Analyzed 248 existing memories: 60% business intelligence, 40% technical
-- Classified: 149 → primary brain, 96 → dev brain (3 remaining are test artifacts)
-- Classification by source/domain/type/surface signals
-- Default brain_id changed from 'dev' to 'primary'
-- DB column default updated to match
+### Brain-Specific Extraction
+- `ingestConversation` now uses `generateExtractionPrompt(brain)` from brain-config
+- Comms brain concepts (commitment, follow_up, meeting_outcome, relationship_signal) used during extraction
+- Previously was using generic DEFAULT_EXTRACTION_PROMPT
 
-### Deployment + Cutover
-- brain-platform deployed to Railway (same project as clawvato)
-- DB migration: brain_id, concept_type, metadata JSONB, origin_brain columns + indexes
-- Hierarchical clustering columns: parent_cluster_id, depth, generation, dirty
-- Cutover: CLAWVATO_MEMORY_URL + CLAWVATO_MEMORY_INTERNAL_URL → brain-platform
-- Local .mcp.json updated to point at brain-platform source
-- 55/55 live tests passing (18 test categories)
+### 15-Minute Sweep Frequency
+- Slack + Gmail + Fireflies sweep every 15 minutes (was 1h Slack/FF, 24h Gmail)
 
-### Testing
-- 55 live tests across 18 categories, all green
-- Tests cover: health, auth, ingest pipeline, brain isolation, schema migration,
-  clustering per-brain, dedup scoping, surface tools, embedding coverage,
-  hybrid search, schema integrity, scheduler guards, backward compatibility,
-  extraction quality, recursive clustering, concept-aware features,
-  get_clusters tree structure, incremental assignment
+### 1-Week Test Backfill
+- Reset Gmail/Slack/Fireflies HWMs to 1 week ago
+- Comms brain grew from 21 → ~50 memories
+- Quality good: follow_ups, commitments, meeting_outcomes, relationship_signals all extracted
+- Identified problem: stale commitments (CVs for Coles already completed but stored as open)
+- Decision: don't do historical backfill until context-down feeds are working
+- HWMs reset back to present; live sweeps continue
+
+## Current State
+
+### Feed Connections (live)
+- comms→primary: raw (commitment, follow_up, meeting_outcome, 1h) — VERIFIED WORKING
+- comms→primary: synthesized (relationship_signal, 6h) — JSON parse error, needs prompt fix
+- primary→comms: synthesized (deal_status, commitment, 6h) — this is the critical context-down
+- primary→dev: raw (commitment, 7+ importance, 1h)
+- dev→primary: raw (project_milestone, 1h)
+
+### Known Issues
+1. Synthesized feed JSON parsing — Sonnet sometimes returns markdown instead of JSON
+2. Feed query checks both `concept_type` and `type` columns (extraction stores in `type` not `concept_type`)
+3. Railway deploys can get stuck behind long-running sweep processes — use dashboard restart
 
 ### Key Decisions
-1. brain-platform is the core system, not a plugin. CC is one adapter.
-2. Logical brain separation (brain_id column, same DB) not separate services
-3. Default brain_id = 'primary' (not 'dev') — business intelligence is the majority
-4. Exclusive source ownership: each raw source has exactly one brain
-5. Three flow types: feeds UP, context DOWN, drill-downs (any direction, ephemeral)
-6. Concepts are per-brain YAML config → extraction prompts auto-generated
-7. Recursive HDBSCAN with adaptive depth (HDBSCAN decides when to stop)
-8. Composite clustering embeddings ([concept_type] entities: content)
-9. Cluster identity preservation via centroid similarity matching
-10. MCP server name stays "clawvato-memory" for backward compat (rename later)
-11. Stay in clawvato directory for sessions (project state lives here)
+1. Unified feed model: raw + synthesized are the same mechanism with different config
+2. No automatic cross-brain retirement — dedup + consolidation handle conflicts
+3. Historical backfill blocked until context-down feeds verified working
+4. Per-entity brain architecture proposed (1 brain per client/project) — design next session
+5. 15-min polling sufficient — Gmail Pub/Sub webhook deprioritized
 
-## Migration Plan — Remaining Steps
+## Files Created/Modified This Session
 
-### Step 1: Comms brain + sidecar in brain-platform (NEXT)
-- Write brains/comms.brain.yaml (commitment, follow_up, meeting_outcome, relationship_signal)
-- Wire sidecar into server/index.ts
-- Move connector auth env vars to brain-platform
-- Deploy, verify sweeps → comms brain
+### brain-platform (new files)
+- brains/comms.brain.yaml (+ connections on all 3 brain configs)
+- sidecar/init-connectors.ts
+- engine/feeds.ts (full implementation, was skeleton)
+- scripts/{fetch-handoff,session-end-handoff,journal-hook,check-version}.sh
+- bin/setup.ts (CLI for npm package)
 
-### Step 2: Kill old sidecar in clawvato
-- Remove sweep logic from task-scheduler-standalone.ts, keep task poller + event feed
+### brain-platform (modified)
+- server/index.ts (sidecar wiring)
+- server/scheduler.ts (feed timer, non-blocking startup)
+- engine/ingest.ts (brain-specific extraction + origin_brain)
+- engine/brain-config.ts (unified FeedConnectionConfig)
+- adapters/mcp.ts (run_feeds, get_feed_status tools)
+- sidecar/poll-scheduler.ts (15-min frequency, gmail added to frequent tier)
+- package.json (v1.1.0, scripts/ in files)
 
-### Step 3: Thin clawvato (~7,500 lines)
-- Delete src/memory/, src/sweeps/, drive-sync, file-extractor, fireflies/sync
-- Fix broken imports, remove config sections, remove unused deps
+### clawvato (deleted ~9,800 lines)
+- DELETED: src/memory/ (7 files), src/sweeps/ (7 files), src/agent/ (6 files)
+- DELETED: src/tasks/executor.ts, src/google/drive-sync.ts, src/google/file-extractor.ts, src/fireflies/sync.ts
+- DELETED: tests/memory/ (5 files), tests/google/ (2 files)
+- Modified: src/cc-native/task-scheduler-standalone.ts (sweeps stripped)
+- Modified: src/cli/start.ts (cc-native only), src/cli/index.ts (engine flag removed)
+- Modified: src/db/index.ts, src/google/tools.ts (dead import removal)
+- Modified: .mcp.json (BRAIN_CONFIG_DIR added)
 
-### Step 4: npm package migration
-- Publish @andrewcovato/brain-platform, update SessionStart hooks
+### Settings updated
+- ~/.claude/projects/-Users-andrewcovato-dev-clawvato/settings.json (brain-platform URLs + package)
+- ~/.claude/projects/Users-andrewcovato-dev-newmail/settings*.json (same)
+- ~/.claude/.mcp.json (brain-platform source path)
 
-### Step 5: Stop clawvato-memory + cleanup
-- Stop Railway service, archive repo, update docs
+## Recent Interactions
+**User**: Let's finish the migration (Steps 1-5).
+**Assistant**: Executed all 5 steps. Comms brain live, sidecar wired, 9.8K lines deleted, npm published, old service stopped.
 
-### Step 6: Rename MCP server (optional, cosmetic)
+**User**: Can we back-populate 5 months of emails? What about using Claude CLI instead of Sonnet API?
+**Assistant**: ~$5 worst case for Sonnet. Not worth CLI side-quest. Started 1-week test.
 
-## Files Created This Session
-- brain-platform/ (entire repo — 36 TypeScript files)
-  - engine/ (22 files), connectors/ (7 files), adapters/ (3 files)
-  - sidecar/ (3 files), server/ (2 files), bin/ (empty, future)
-  - brains/dev.brain.yaml, brains/primary.brain.yaml
-  - tests/live-test.ts (55 tests)
-  - package.json, tsconfig.json, railway.toml, .gitignore
+**User**: Stale commitments problem — CVs for Coles stored as open but already done. Context-down needed.
+**Assistant**: Proposed options. User chose: do it right, build context-down first.
 
-## Files Modified This Session
-- clawvato/.mcp.json (point at brain-platform source)
-- clawvato/.project/sessions/* (handoff files)
-- ~/.claude/projects/.../memory/ (project memories updated)
+**User**: This isn't just for tasks — it's for everything. Build it generically.
+**Assistant**: Designed inter-brain feed system. Unified raw + synthesized modes. Built, deployed, verified.
 
-## Design Docs
-- docs/DESIGN_BRAIN_PLATFORM.md — brain platform architecture (read, not modified)
-- docs/DESIGN_PUBSUB_WEBHOOKS.md — webhook spec (read, not modified)
-- ~/.claude/plans/cozy-inventing-candy.md — migration plan (created this session)
+**User**: Per-entity brains (1 per client/project) — all channels, deeper filtering.
+**Assistant**: Noted for next session design. Fundamental shift from source-owned to entity-owned brains.
+
+## Next Steps
+1. Fix synthesized feed JSON parsing
+2. Verify primary→comms context-down feed (the one that resolves stale commitments)
+3. Design per-entity brain architecture
+4. Historical backfill once context-down is verified

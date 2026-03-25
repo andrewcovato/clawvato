@@ -1,32 +1,42 @@
-# Last Interactions — Session 26
+# Last Interactions — Session 27
 
-### Brain Platform Architecture Discussion
-**User**: I want to keep kicking the tires on the brain platform design. Gut check it with fresh context.
-**Assistant**: Deep assessment: /ingest contract is the best decision, intelligence-not-content principle is right, decay-as-curation is novel. Gaps: entity resolution unbuilt, HDBSCAN quality unvalidated, multi-brain split premature at current scale.
-**Decision**: Architecture is sound. Entity resolution and clustering spike needed before investing in hierarchy.
+### Migration Execution (Steps 1-5)
+**User**: Show me the full migration steps. Let's go!
+**Assistant**: Executed all 5 steps in sequence:
+1. Comms brain + sidecar in brain-platform (3 connectors, 3 brains live, 55/55 tests)
+2. Stripped sweeps from clawvato sidecar (task poller + event feed only)
+3. Deleted ~9,800 lines from clawvato (memory, sweeps, hybrid agent, drive-sync, file-extractor)
+4. Published @andrewcovato/brain-platform@1.1.0, updated all settings.json files
+5. Stopped clawvato-memory Railway service
 
-### Multi-Brain Motivation
-**User**: My email is thousands of messages with LOW signal to noise. I don't want to pollute the 228-mem curated brain with email noise.
-**Assistant**: This changes things — corpus pollution is a concrete problem. Proposed logical brain separation (brain_id column in same DB, not separate services). One process, one DB, but isolated clustering/reflection/decay per brain.
-**Decision**: Logical brain separation. brain_id column. Default brain changed from 'dev' to 'primary' after analyzing 60% of memories are business intelligence.
+### Historical Backfill Discussion
+**User**: I want to back-populate emails, Slack, and Fireflies from Nov 2025. Thousands of threads.
+**Assistant**: ~$5 Sonnet cost for 2,500 emails. Not worth CLI side-quest. Started 1-week test sweep.
+**Result**: Comms brain grew 21→50 memories. Quality good. But identified stale commitment problem.
 
-### Configurable Brain Concepts
-**User**: Is there a way to generalize concepts (commitments, etc.) rather than hardcode them? Also the dev brain is very different from comms.
-**Assistant**: Hybrid approach — concepts defined in brain.yaml per brain, extraction prompts generated from concept definitions. General facts still extracted alongside. Each brain has genuinely different understanding of the world.
-**Decision**: Concepts are per-brain YAML config. Extraction prompts auto-generated. Engine is generic, config makes it specific.
+### Context-Down Problem
+**User**: Some stuff has been completed and is orphaned as "still needs to be done." CVs for Coles is done — the session that did it wasn't connected to memory.
+**Assistant**: This is the cross-brain stitching gap. Without context-down, action-oriented concepts rot.
+**User**: This isn't just for tasks. Build it generically.
+**Assistant**: Designed unified feed system. Same mechanism for feeds UP and context DOWN.
+**Decision**: Build inter-brain feeds generically before doing historical backfill.
 
-### Channel Ownership + Flow Types
-**User**: Should channels be shared or exclusive per brain? And subordinate brains need strategic context from GBS.
-**Assistant**: Exclusive ownership — each raw source has one brain. Three flow types: feeds UP (raw concepts), context DOWN (synthesized digests), drill-downs (any direction, ephemeral).
-**Decision**: Comms owns all Slack/Gmail/Fireflies/Drive. Dev owns CC journals. Primary/GBS receives feeds.
+### Inter-Brain Feed System
+**User**: Let's plan it and build it.
+**Assistant**: Planned and implemented:
+- engine/feeds.ts: raw + synthesized modes, cycle prevention, origin tracking
+- 5 feed connections across 3 brains configured in YAML
+- Scheduler wired with 30-min sweep timer
+- MCP tools: run_feeds, get_feed_status
+**Verified**: comms→primary raw feed moved 17 facts. origin_brain tracked. 0 cycles.
+**Issue**: Synthesized feed has JSON parsing error (Sonnet returns markdown).
 
-### Recursive Clustering
-**User**: I did a spike in newmail and clustering was terrible — merged Acorns+Coles, duplicate clusters, noise.
-**Assistant**: Built recursive concept-aware HDBSCAN: composite embeddings ([concept_type] entities: content), adaptive depth per branch (HDBSCAN decides when to stop), cluster identity preservation across re-runs, incremental rebalance with dirty flags.
-**Decision**: Recursive + concept-aware clustering. Sparse data stays flat naturally.
+### Per-Entity Brain Architecture
+**User**: Having one brain per client/project/department. Every brain has all channel connectors but does deeper filtering.
+**Assistant**: Major architectural shift — source-owned → entity-owned brains. Noted for design next session.
+**Decision**: Table for fresh session.
 
-### Cutover + Migration State
-**User**: Let's do the cutover! Then: we're in a messy mid-state, need a plan to finish migration.
-**Assistant**: Cutover done — clawvato now points to brain-platform. But sidecar still runs in clawvato, old npm package distributes hooks, comms brain doesn't exist yet. Plan: 6 steps to clean state.
-**Decision**: Stay in clawvato directory for sessions. Next: build comms brain + move sidecar to brain-platform, then thin clawvato.
-**Pending**: Step 1 of migration plan (comms brain + sidecar wiring), then steps 2-5 (thin clawvato, npm migration, cleanup).
+### TurboQuant Discussion
+**User**: Shared Google Research TurboQuant paper + MLX implementation branch.
+**Assistant**: Most applicable concept: polar coordinate vector compression for embedding storage at scale. Not actionable yet — watch for pgvector-compatible packaging.
+**Decision**: Tabled. Scaling problem we don't have yet.
