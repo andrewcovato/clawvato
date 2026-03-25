@@ -48,10 +48,10 @@
   },
   "metrics": {
     "testFiles": 23,
-    "memoriesStored": "156 active (post-cleanup)",
-    "memoryClusters": 10,
-    "embeddingCoverage": "99%",
-    "reflections": 5,
+    "memoriesStored": "228 active",
+    "memoryClusters": "10+",
+    "embeddingCoverage": "100%",
+    "reflections": 9,
     "pluginVersion": "0.6.2",
     "pluginTools": 18,
     "pluginModels": 2,
@@ -202,7 +202,8 @@
     "docs/DESIGN_PHASE2_PROACTIVE_INTELLIGENCE.md",
     "docs/DESIGN_S10_MEMORY_EXCELLENCE.md",
     "docs/DESIGN_SMART_PLUGIN_MIGRATION.md",
-    "docs/DESIGN_PUBSUB_WEBHOOKS.md"
+    "docs/DESIGN_PUBSUB_WEBHOOKS.md",
+    "docs/DESIGN_BRAIN_PLATFORM.md"
   ],
   "lastUpdated": "2026-03-24"
 }

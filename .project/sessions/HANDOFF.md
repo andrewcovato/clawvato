@@ -16,6 +16,7 @@ Sidecar: Rebuilt — tiered sweeps + task poller + event feed
   - 228 active memories, 20 new from first sweep run
   - Deleted pins/approval/reconciliation (-685 lines)
 NEXT: S26 — Pub/Sub webhooks (Gmail + Calendar real-time ingest)
+VISION: Brain Platform — multi-brain hierarchy, brain-powered apps (docs/DESIGN_BRAIN_PLATFORM.md)
 ```
 
 ## Session 25 — What Was Built
@@ -71,7 +72,22 @@ NEXT: S26 — Pub/Sub webhooks (Gmail + Calendar real-time ingest)
 - 20 active channels processed (cadence filter skips inactive)
 - High-water marks functioning — no duplicate processing
 
-## Key Decisions
+### Brain Platform Vision (end of session)
+- Evolved through discussion: single brain → two brains → multi-brain hierarchy
+- Wrote docs/DESIGN_BRAIN_PLATFORM.md (776 lines) — comprehensive architecture
+- Brain = configurable intelligence unit (identity, inputs, processing, outputs, connections)
+- Four input patterns: webhook, poll, feed, passive — covers every source
+- brain.yaml config format for standardized brain setup
+- Multi-brain hierarchy: personal (comms) → dev (projects) → GBS (strategy)
+- Feeds flow up (filtered), drill-downs flow down (on-demand, ephemeral)
+- Brain stores intelligence + source pointers, NOT content. Source APIs store content.
+- Applications (newmail, kanban, CRM) are view layers: brain intelligence + source API content
+- Decay triggers source cleanup (archive stale emails, clean Slack channels)
+- Newmail use case: get_clusters("comms/email") → brain organizes, Gmail API provides content
+- Shared entity namespace across all brains enables cross-brain queries
+- Scaling: same codebase per brain, different config. Single user → team → org.
+
+### Key Decisions
 1. Insights → scratch pad → journal flush (not explicit store_fact calls)
 2. Sonnet for extraction, Haiku was too noisy
 3. sync command replaces check-version.sh — actually updates
@@ -80,6 +96,10 @@ NEXT: S26 — Pub/Sub webhooks (Gmail + Calendar real-time ingest)
 6. Agent scheduler stays agent-side (NOT in plugin) — confirmed as original design
 7. Three categories: brain maintenance (plugin), data collection (sidecar), user tasks (CC)
 8. Always bump plugin version on push — GitHub Packages won't publish duplicates
+9. Brain stores intelligence + pointers, source APIs store content (permanent principle)
+10. Multi-brain hierarchy with feeds up, drill-down down, shared entity namespace
+11. Newmail = brain clusters + Gmail API content (brain never replaces Gmail as storage)
+12. Decay as active curation — triggers source cleanup with graduated trust
 
 ## Immediate Next Steps
 1. S26 Phase A: Gmail Pub/Sub webhook (GCP setup + sidecar HTTP server)
@@ -89,8 +109,9 @@ NEXT: S26 — Pub/Sub webhooks (Gmail + Calendar real-time ingest)
 5. Merge cc-native-engine → main when S26 stable
 
 ## Files Created This Session
-- `docs/DESIGN_PUBSUB_WEBHOOKS.md`
-- `~/.agent/diagrams/pubsub-webhook-spec.html`
+- `docs/DESIGN_PUBSUB_WEBHOOKS.md` — tactical Pub/Sub webhook spec
+- `docs/DESIGN_BRAIN_PLATFORM.md` — strategic brain platform architecture (776 lines)
+- `~/.agent/diagrams/pubsub-webhook-spec.html` — visual Pub/Sub spec
 - `scripts/test-sweep.ts` (test utility)
 
 ## Files Modified This Session
