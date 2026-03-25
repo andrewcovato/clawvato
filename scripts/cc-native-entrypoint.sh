@@ -169,24 +169,40 @@ while true; do
     # CC's TUI (ink) inserts ANSI cursor-movement codes between characters.
     # Raw output looks like: [1Ctrust[1Cthis[1Cfolder
     # Use -re (regex) to match through the ANSI noise.
-    # Match on "folder" alone — unique enough and less likely to be split.
-    # Only watch for prompts during the first 30s of startup.
-    # After that, CC is running normally and we don't want to
-    # accidentally match "folder" in regular output.
-    set timeout 30
+    #
+    # Two prompts may appear in sequence:
+    # 1. Trust prompt: "Is this a project you created or one you trust?"
+    # 2. Dev channels prompt: "Loading development channels" warning
+    # Both have option 1 pre-selected — just send Enter.
+    #
+    # We loop with exp_continue to catch both prompts within the timeout window.
+    set timeout 60
 
     expect {
       -re "trust.*folder|folder.*trust" {
-        # Trust prompt — option 1 is pre-selected, just send Enter
+        # Trust prompt — option 1 is pre-selected, send Enter
         sleep 1
         send "\r"
-        # Don't exp_continue — trust prompt only appears once
+        exp_continue
+      }
+      -re "local.*development|development.*channels" {
+        # Dev channels warning — option 1 is pre-selected, send Enter
+        sleep 1
+        send "\r"
+        exp_continue
       }
       -re "Y/n" {
         send "Y\r"
+        exp_continue
+      }
+      -re "Enter to confirm" {
+        # Generic confirmation prompt — send Enter
+        sleep 1
+        send "\r"
+        exp_continue
       }
       timeout {
-        # No prompts in 30s — CC is past startup
+        # No more prompts — CC is past startup
       }
     }
 
