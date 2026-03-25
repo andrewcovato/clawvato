@@ -16,7 +16,7 @@
 #   CC_RESTART_DELAY    — Seconds to wait before restart (default: 5)
 #   CC_MAX_TURNS        — Max turns per session (default: 200)
 #   DATA_DIR            — Data directory (default: /data)
-#   CLAWVATO_MEMORY_INTERNAL_URL — Memory MCP server URL (default: http://clawvato-memory.railway.internal:8080/mcp)
+#   CLAWVATO_MEMORY_INTERNAL_URL — Brain platform MCP URL (default: http://brain-platform.railway.internal:8100/mcp)
 
 set -euo pipefail
 
@@ -64,7 +64,7 @@ export MCP_AUTH_TOKEN="${MCP_AUTH_TOKEN:-}"
 # ── Generate MCP config with auth token ──
 # The memory MCP server runs as a separate Railway service (HTTP transport).
 # We template the config at runtime to inject the auth token from env vars.
-MEMORY_URL="${CLAWVATO_MEMORY_INTERNAL_URL:-http://clawvato-memory.railway.internal:8080/mcp}"
+MEMORY_URL="${CLAWVATO_MEMORY_INTERNAL_URL:-http://brain-platform.railway.internal:8100/mcp}"
 MCP_CONFIG="/tmp/cc-native-mcp.json"
 cat > "$MCP_CONFIG" <<MCPJSON
 {

@@ -147,6 +147,25 @@ update_brief(surface: "cloud", content: "Currently tracking: [topics]. Pending: 
 
 **Cross-surface awareness**: Use `get_briefs` to see what other surfaces are doing. When the owner references work from another surface ("grab what the coding session was doing"), read that surface's handoff with `get_handoff`.
 
+### Brain Management (entity brains)
+
+The memory system supports per-client/project brains. Each entity brain has deep, tuned context for that relationship.
+
+**When the owner says** `@clawvato create brain for acorns` or similar:
+- `create_brain(template: "client", entity_id: "acorns", entity_name: "Acorns", aliases: ["acorns.com", "Phil Clark"])`
+- This creates a client brain with 7 concepts (deals, workstreams, tasks, commitments, relationships, decisions, files)
+- Messages about this entity will automatically route to the brain for extraction (when triage is enabled)
+
+**Managing brains:**
+- `list_brains` — See all active brains and their concepts
+- `list_brain_templates` — See available templates (client, etc.)
+- `update_brain` — Add/remove aliases, update purpose or extraction instructions
+- `archive_brain` — Deactivate a brain (preserves data)
+- `get_brain_config` — Full config for a brain
+- `get_promotion_suggestions` — Check if any entities deserve their own brain (analyzes unrouted message patterns)
+
+**When to suggest a brain:** If you notice repeated conversations about a new client/project that doesn't have a brain yet, proactively suggest creating one. The promotion engine can also identify candidates from message patterns.
+
 ### Slack Channel (via tools)
 - `slack_reply` — Post a message to Slack
 - `slack_react` — Add/remove emoji reactions
