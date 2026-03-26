@@ -42,7 +42,8 @@ while true; do
     echo "[curator] Loop #$LOOP_COUNT — PROCESS mode"
   fi
 
-  # Build args — resume session if we have a stored session ID
+  # Build args — fresh session each loop (brain.md IS the state, no session history needed)
+  # This ensures the MCP tool list is always current.
   CLAUDE_ARGS=(
     --print
     --model claude-sonnet-4-6
@@ -51,28 +52,15 @@ while true; do
     --dangerously-skip-permissions
     --max-turns 50
     --output-format json
+    --no-session-persistence
   )
-
-  if [ -f "$SESSION_FILE" ]; then
-    SESSION_ID=$(cat "$SESSION_FILE")
-    CLAUDE_ARGS+=(--resume "$SESSION_ID")
-    echo "[curator] Resuming session: $SESSION_ID"
-  else
-    CLAUDE_ARGS+=(--name "curator")
-    echo "[curator] Creating new session"
-  fi
+  echo "[curator] Fresh session (no persistence — brain.md is the state)"
 
   # Run curator
   OUTPUT=$(claude "${CLAUDE_ARGS[@]}" "$TASK" 2>> "$CURATOR_LOG") || true
 
-  # Parse session_id from JSON output and store for next loop
-  NEW_SESSION_ID=$(echo "$OUTPUT" | grep -o '"session_id":"[^"]*"' | head -1 | cut -d'"' -f4)
-  if [ -n "$NEW_SESSION_ID" ]; then
-    echo "$NEW_SESSION_ID" > "$SESSION_FILE"
-  fi
-
   # Log the result (extract just the text result from JSON)
-  RESULT=$(echo "$OUTPUT" | grep -o '"result":"[^"]*"' | head -1 | cut -d'"' -f4 | head -c 200)
+  RESULT=$(echo "$OUTPUT" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('result','')[:200])" 2>/dev/null || echo "$OUTPUT" | head -c 200)
   echo "[curator] Loop #$LOOP_COUNT complete: ${RESULT:-no output}"
   echo "$OUTPUT" >> "$CURATOR_LOG"
 
