@@ -20,7 +20,7 @@ Meanwhile, when an LLM (Opus) read the Acorns brain, it **immediately** identifi
 
 1. **Brains are dumb storage** — CRUD, embeddings, search, dedup. No routing, no extraction, no classification intelligence.
 2. **Agents are the intelligence** — Opus does categorization, extraction, quality control. One prompt to classify > 500 lines of routing code.
-3. **Don't rebuild what's natively available** — CC CLI with `--print --session` is a persistent, stateful agent runtime for $0 on Max plan.
+3. **Don't rebuild what's natively available** — CC CLI with `--print` is a persistent, stateful agent runtime for $0 on Max plan.
 4. **Correctness above all** — out-of-date counts as incorrect. Three layers of freshness guarantee current data.
 5. **Materialized views over live queries** — `brain.md` files give agents instant, complete context without API calls or token-budgeted retrieval.
 6. **Build for the future** — LLM-agnostic by design. CC CLI today, any API tomorrow.
@@ -34,7 +34,7 @@ Meanwhile, when an LLM (Opus) read the Acorns brain, it **immediately** identifi
 │  Clawvato (CoS)          Curator              Entity    │
 │  ┌──────────────┐   ┌──────────────┐    ┌────────────┐ │
 │  │ Slack Channel │   │ --print      │    │ --print    │ │
-│  │ Always-on     │   │ --session    │    │ --session  │ │
+│  │ Always-on     │   │ --resume    │    │ --resume  │ │
 │  │ Interactive   │   │ curator      │    │ agent-X    │ │
 │  │ Broad context │   │ Always-on    │    │ On-demand  │ │
 │  │ Routes tasks  │   │ Files facts  │    │ Deep on X  │ │
@@ -101,12 +101,12 @@ A dedicated CC instance whose sole job is data quality and organization. No user
 4. **Periodic audit** — sweep each brain, retire stale facts, move misrouted ones, flag duplicates. The same judgment an LLM applies naturally when reading a list of facts ("this doesn't belong here").
 5. **Ambient entity detection** — identify entities that appear everywhere (owner name, company name) and note them so they don't skew any future heuristics.
 
-**Runtime:** CC CLI with `--print --session curator --model sonnet`. Sonnet for routine ingestion (structured extraction at high throughput, separate rate limit pool). Opus for periodic audits where deep reasoning matters. Always-on via a simple loop with source API access:
+**Runtime:** CC CLI with `--print curator --model sonnet`. Sonnet for routine ingestion (structured extraction at high throughput, separate rate limit pool). Opus for periodic audits where deep reasoning matters. Always-on via a simple loop with source API access:
 
 ```bash
 # Routine ingestion (Sonnet — high throughput, lower cost on rate limits)
 while true; do
-  claude --print --session curator --model sonnet \
+  claude --print curator --model sonnet \
     --allowedTools "mcp__brain-platform__*,Bash,Read,Write" \
     "Check inbox for new pointers. For each pending item: read the FULL \
      source content (entire email thread, complete transcript, full conversation). \
@@ -117,7 +117,7 @@ done
 
 # Periodic audit (Opus — deep reasoning for quality review)
 # Runs daily or on-demand
-claude --print --session curator-audit \
+claude --print curator-audit \
   --allowedTools "mcp__brain-platform__*,Read,Write" \
   "Audit all brains: review facts for correctness, staleness, misrouting. \
    Retire outdated facts, move misrouted ones, flag duplicates. \
@@ -144,17 +144,17 @@ One per client/initiative/department. Deep context on their domain, thin on ever
 - Process domain-specific tasks
 - Flag issues to CoS via mailbox (e.g., "Vail SOW hasn't progressed in 2 weeks")
 
-**Runtime:** CC CLI with `--print --session agent-{brain_id}`. Activated by the supervisor when a mailbox message arrives:
+**Runtime:** CC CLI with `--print agent-{brain_id}`. Activated by the supervisor when a mailbox message arrives:
 
 ```bash
-claude --print --session agent-acorns \
+claude --print agent-acorns \
   --allowedTools "mcp__brain-platform__*,Read" \
   "You are the Acorns specialist agent. Read brain-states/acorns.brain.md \
    for current state. Message from CoS: 'What's Phil's latest on Phase 2?'"
 ```
 
 **Lifecycle:**
-- Session persists via `--session` (CC stores conversation as JSONL)
+- Session persists via `--resume` (CC stores conversation as JSONL)
 - Auto-compaction handles context pressure — old conversation fades, brain.md is always fresh
 - No handoff protocol needed — the brain IS the persistence. The .md file IS the handoff.
 
@@ -401,7 +401,7 @@ A lightweight Node.js process that manages the agent pool. Not an LLM — just o
 4. **Query-time freshness** — before routing a task to an entity agent, check if its brain has pending inbox items
 5. **Health monitoring** — track agent response times, restart if stuck
 
-**Implementation:** ~200-300 lines of Node.js. Uses `child_process.execFile` for `claude --print --session`. Listens to Postgres NOTIFY channels. Simple state: which agents exist, which are currently processing, queue of pending messages.
+**Implementation:** ~200-300 lines of Node.js. Uses `child_process.execFile` for `claude --print`. Listens to Postgres NOTIFY channels. Simple state: which agents exist, which are currently processing, queue of pending messages.
 
 ```
 Supervisor loop:
@@ -409,7 +409,7 @@ Supervisor loop:
   2. On notification → route to agent:
      a. Check inbox for pending content for this brain
      b. If pending → wake curator first, wait for processing
-     c. Invoke: claude --print --session {agent-id} "{message}"
+     c. Invoke: claude --print {agent-id} "{message}"
      d. Capture response → send_message back to requester
   3. On timer (60s) → check for any unprocessed inbox/mailbox items
 ```

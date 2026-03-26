@@ -42,24 +42,67 @@ const messageQueue: Array<{ toAgent: string; messageId: string; payload: Record<
 
 const sql = postgres(DATABASE_URL, { max: 3 });
 
+// ── Session Persistence ──
+
+/**
+ * Get the stored CC session ID for an agent, or null if no session exists.
+ * Session IDs are stored in agent_state keyed by `agent-session:{agentName}`.
+ */
+async function getAgentSessionId(agentName: string): Promise<string | null> {
+  const key = `agent-session:${agentName}`;
+  const [row] = await sql`
+    SELECT value FROM agent_state WHERE key = ${key} AND status = 'active'
+  ` as unknown as Array<{ value: string }>;
+  return row?.value ?? null;
+}
+
+/**
+ * Store a CC session ID for an agent.
+ */
+async function setAgentSessionId(agentName: string, sessionId: string): Promise<void> {
+  const key = `agent-session:${agentName}`;
+  await sql`
+    INSERT INTO agent_state (key, value, status, updated_at)
+    VALUES (${key}, ${sessionId}, 'active', NOW())
+    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+  `;
+  console.log(`[supervisor] Stored session ID for ${agentName}: ${sessionId}`);
+}
+
 // ── Agent Execution ──
 
 /**
- * Invoke a CC agent via --print --session.
- * Returns the agent's response text.
+ * Invoke a CC agent via --print with session resuming.
+ *
+ * Pattern:
+ * 1. First run: no --resume, uses --name for labeling, --output-format json to capture session_id
+ * 2. Parse session_id from JSON output, store in DB
+ * 3. Subsequent runs: --resume <uuid> continues the same session
+ *
+ * Returns the agent's text response.
  */
 async function invokeAgent(
   sessionName: string,
   prompt: string,
   model = 'claude-opus-4-6',
 ): Promise<string> {
+  const sessionId = await getAgentSessionId(sessionName);
+
   const args = [
     '--print',
-    '--session', sessionName,
     '--model', model,
     '--dangerously-skip-permissions',
     '--max-turns', '30',
+    '--output-format', 'json',
   ];
+
+  if (sessionId) {
+    // Resume existing session
+    args.push('--resume', sessionId);
+  } else {
+    // New session — name it for discoverability
+    args.push('--name', sessionName);
+  }
 
   // Add MCP config if it exists
   if (existsSync(MCP_CONFIG)) {
@@ -76,6 +119,7 @@ async function invokeAgent(
   try {
     const { stdout, stderr } = await execFileAsync('claude', args, {
       timeout: 300_000, // 5 minute timeout per agent invocation
+      maxBuffer: 10 * 1024 * 1024, // 10MB — agent responses can be large
       env: {
         ...process.env,
         HOME: process.env.HOME ?? '/home/clawvato',
@@ -86,10 +130,35 @@ async function invokeAgent(
       console.error(`[supervisor] Agent ${sessionName} stderr: ${stderr.slice(0, 200)}`);
     }
 
-    return stdout.trim();
+    // Parse JSON output to get session_id and result
+    let result = stdout.trim();
+    let newSessionId: string | null = null;
+
+    try {
+      const parsed = JSON.parse(result);
+      newSessionId = parsed.session_id ?? null;
+      result = parsed.result ?? result;
+    } catch {
+      // Not JSON — use raw output (fallback if --output-format json not supported)
+    }
+
+    // Store session ID for future resumption
+    if (newSessionId && newSessionId !== sessionId) {
+      await setAgentSessionId(sessionName, newSessionId);
+    }
+
+    return result;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[supervisor] Agent ${sessionName} failed: ${msg}`);
+
+    // If resume fails (stale session), clear the stored ID and retry without it
+    if (sessionId && msg.includes('session')) {
+      console.log(`[supervisor] Clearing stale session for ${sessionName}, will create new on next invoke`);
+      const key = `agent-session:${sessionName}`;
+      await sql`DELETE FROM agent_state WHERE key = ${key}`.catch(() => {});
+    }
+
     return `Agent error: ${msg}`;
   }
 }
