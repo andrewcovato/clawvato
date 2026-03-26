@@ -46,7 +46,7 @@
     "deployMethod": "brain-platform: railway up (manual). clawvato: GitHub auto-deploy from cc-native-engine branch.",
     "maxPlan": "Claude Max subscription — CC-native engine costs $0",
     "brainPlatform": "github.com/andrewcovato/brain-platform — core intelligence on Railway. brain-platform-production.up.railway.app",
-    "npmPackage": "@andrewcovato/brain-platform@1.1.0 on GitHub Packages",
+    "npmPackage": "@andrewcovato/brain-platform@1.4.0 on GitHub Packages (unpublished — publish pending)",
     "brainPlatformAuth": "Bearer token via MCP_AUTH_TOKEN env var",
     "brainPlatformModels": "nomic-embed-text-v1.5 (embeddings, 384d), ms-marco-MiniLM-L-6-v2 (reranking), HDBSCAN (recursive concept-aware clustering)",
     "brains": {
@@ -64,27 +64,29 @@
   },
   "metrics": {
     "clawvatoLinesDeleted": 9822,
-    "brainPlatformTests": 55,
-    "memoriesStored": "~325 active (185 primary + 90 dev + 50 comms)",
-    "memoryClusters": "16+ (12 primary + 4 dev, comms growing)",
+    "brainPlatformTests": 53,
+    "memoriesStored": "~325+ active (185 primary + 90 dev + 50 comms + client brains backfilling)",
+    "memoryClusters": "16+ (12 primary + 4 dev, comms + client brains growing)",
     "embeddingCoverage": "100%",
-    "brainPlatformVersion": "1.1.0",
-    "brainPlatformTools": 25,
+    "brainPlatformVersion": "1.4.0",
+    "brainPlatformTools": 41,
     "brainPlatformModels": 2,
-    "brainConfigs": 3,
+    "brainConfigs": 7,
     "feedConnections": 5
   },
   "currentSprint": {
-    "id": "S27",
-    "name": "Inter-Brain Intelligence + Historical Backfill",
+    "id": "S28",
+    "name": "Per-Entity Brain Intelligence + Backfill",
     "goals": [
-      "Inter-brain feed system — generic knowledge sharing (DONE)",
-      "Fix synthesized feed JSON parsing (prompt tweak)",
-      "Historical backfill — 5 months of email/Slack/Fireflies into comms brain",
-      "Per-entity brain architecture design (client/project brains)",
-      "Gmail Pub/Sub webhook (optional — 15-min polling may suffice)"
+      "Per-entity brain architecture — DONE (6 milestones, 41→53 tests)",
+      "Entity intelligence (status model, entity routing, corrections) — DONE",
+      "Cleanup (rename, agent SDK, security reviews) — DONE",
+      "Create client brains (Acorns, GYG, Vail, Ad Platforms) — DONE",
+      "Historical backfill Nov 2025→present — RUNNING",
+      "Verify triage routing + client brain populations — NEXT SESSION",
+      "Test correction engine end-to-end — NEXT SESSION"
     ],
-    "progress": "40% — feed system built + deployed, backfill blocked on context-down verification"
+    "progress": "85% — architecture built, backfill running, verification next"
   },
   "completedSprints": {
     "S10": {
@@ -156,9 +158,9 @@
     }
   },
   "lastSession": {
-    "number": 27,
+    "number": 28,
     "date": "2026-03-25",
-    "type": "Migration complete + inter-brain feeds + comms brain live",
+    "type": "Per-entity brain architecture + entity intelligence + cleanup + backfill",
     "keyDecisions": [
       "Unified feed model: raw + synthesized modes, same code path",
       "Cycle prevention via origin_brain exclusion in feed queries",
@@ -171,10 +173,10 @@
     ]
   },
   "immediateBacklog": [
-    { "id": "SYNTH-FEED-FIX", "title": "Fix synthesized feed JSON parsing (Sonnet returns markdown)", "status": "next" },
-    { "id": "BACKFILL-TEST", "title": "Test context-down with primary→comms feed, then run 1-week backfill", "status": "blocked", "blockedBy": "SYNTH-FEED-FIX" },
-    { "id": "FULL-BACKFILL", "title": "Historical backfill: Nov 2025–present for email/Slack/Fireflies", "status": "blocked", "blockedBy": "BACKFILL-TEST" },
-    { "id": "ENTITY-BRAIN-DESIGN", "title": "Design per-entity brain architecture (client/project brains)", "status": "next" }
+    { "id": "VERIFY-BACKFILL", "title": "Check backfill progress — how many facts per client brain? Triage routing working?", "status": "next" },
+    { "id": "TEST-CORRECTIONS", "title": "Test correction engine end-to-end (entity transition, fact correction)", "status": "next" },
+    { "id": "CHECK-PROMOTIONS", "title": "Check promotion engine — any entities emerging from froth?", "status": "next" },
+    { "id": "PUBLISH-NPM", "title": "Publish @andrewcovato/brain-platform@1.4.0 to GitHub Packages", "status": "next" }
   ],
   "backlog": [
     { "id": "ENTITY-RESOLUTION", "priority": "high", "title": "Entity resolution system (Phil Clark = Phil = phil@acorns.com)" },

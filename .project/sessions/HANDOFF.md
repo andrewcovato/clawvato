@@ -1,136 +1,105 @@
 # Session Handoff
 
-> Last updated: 2026-03-25 | Session 27 | Phase 3 In Progress
+> Last updated: 2026-03-26 | Session 29 | Agent Architecture v2
 
 ## Quick Resume
 
 ```
-Phase: 3 IN PROGRESS — Inter-Brain Intelligence
+Phase: 3 IN PROGRESS — Agent Architecture v2 (dumb brains, smart agents)
 Branch: cc-native-engine (clawvato), main (brain-platform)
-Build: Clean (both repos, 55/55 tests green on brain-platform)
-State: MIGRATION COMPLETE — feeds system live, historical backfill pending
+Build: Clean (both repos compile, 61 tests green on brain-platform)
+State: INFRASTRUCTURE COMPLETE — mailbox, inbox, brain-state all built and tested
 
-brain-platform repo: github.com/andrewcovato/brain-platform
-  - Railway: brain-platform-production.up.railway.app
-  - 3 brains: primary (~185 mems), dev (~90 mems), comms (~50 mems, growing)
-  - Inter-brain feeds: 5 connections (raw + synthesized), 30-min sweep
-  - Sidecar: 3 connectors (Slack, Gmail, Fireflies), 15-min sweep frequency
-  - npm: @andrewcovato/brain-platform@1.1.0
+brain-platform v1.5.0:
+  - Mailbox (agent_messages) + inbox tables with NOTIFY triggers
+  - Brain state generator (brain.md + business-state.md materialized views)
+  - 11 new MCP tools (mailbox, inbox, brain-state)
+  - Deleted: entity-router.ts, triage.ts (routing now handled by agents)
+  - 61 tests, all passing
 
-clawvato repo: THINNED — 9,822 lines deleted
-  - Thin agent: CC-native engine + task poller + event feed
-  - No memory/, sweeps/, hybrid agent code — all in brain-platform
-  - Hybrid agent DELETED (not just deprecated)
-
-clawvato-memory: STOPPED on Railway. Nothing points to it. Archive candidate.
+clawvato:
+  - Agent supervisor (LISTEN/NOTIFY → route to CC --print --session agents)
+  - Curator loop (Sonnet, always-on, --print --session)
+  - System prompts for curator + entity agents
+  - Entrypoint updated with curator + supervisor startup
 ```
 
-## Session 27 — What Was Built
+## Session 29 — What Was Built
 
-### Migration Complete (Steps 1-5)
-1. **Comms brain + sidecar**: 3 connectors wired (Slack, Gmail, Fireflies), all routing to comms brain
-2. **Old sidecar stripped**: Task poller + event feed only (~130 lines, was ~350)
-3. **Clawvato thinned**: 9,822 lines deleted — memory, sweeps, hybrid agent, drive-sync, file-extractor, fireflies/sync, dead tests
-4. **npm package**: @andrewcovato/brain-platform@1.1.0 published, SessionStart hooks updated
-5. **clawvato-memory decommissioned**: Railway service stopped, all references updated
+### Architecture Pivot
+- Diagnosed backfill failure: entity routing put all 496 facts in Acorns, 0 in other brains
+- Root cause: "Andrew Covato" entity dominated scoring
+- Designed Agent Architecture v2: dumb brains + smart CC CLI agents
+- Full design doc: docs/DESIGN_AGENT_ARCHITECTURE_V2.md
 
-### Inter-Brain Feed System (Track R)
-- `engine/feeds.ts`: 280 lines — queryFeedableFacts, runFeedConnection (raw + synthesized), runFeedSweep, generateSynthesisPrompt
-- Raw mode: individual facts flow source→target through dedup with origin_brain tracking
-- Synthesized mode: Sonnet produces digest facts from source for target brain
-- Cycle prevention: facts with origin_brain=target excluded from queries
-- 5 feed connections configured across 3 brains
-- 30-min global sweep timer, per-connection intervals (1h raw, 6h synthesized)
-- MCP tools: run_feeds, get_feed_status
-- VERIFIED: comms→primary raw feed moved 17 facts, origin_brain tracked, 0 cycles
+### Brain-Platform Infrastructure (Phase 1)
+1. **Mailbox system**: engine/mailbox.ts — inbox + agent_messages tables, CRUD, NOTIFY triggers
+2. **Brain state generator**: engine/brain-state.ts — per-brain .md files + business-state.md rollup
+3. **MCP tools**: 11 new tools — send_message, get_messages, mark_message_done, reply_to_message, add_to_inbox, get_pending_inbox, mark_inbox_processed, mark_inbox_failed, get_brain_state, get_business_state, regenerate_brain_states
+4. **NOTIFY triggers**: brain_updated on memories table (triggers brain.md regeneration), agent_mail on agent_messages
+5. **Deleted**: entity-router.ts, triage.ts, and their tests
+6. **Simplified**: poll-scheduler.ts (discovery-only, no triage), config.ts (removed entityRouting)
 
-### Brain-Specific Extraction
-- `ingestConversation` now uses `generateExtractionPrompt(brain)` from brain-config
-- Comms brain concepts (commitment, follow_up, meeting_outcome, relationship_signal) used during extraction
-- Previously was using generic DEFAULT_EXTRACTION_PROMPT
-
-### 15-Minute Sweep Frequency
-- Slack + Gmail + Fireflies sweep every 15 minutes (was 1h Slack/FF, 24h Gmail)
-
-### 1-Week Test Backfill
-- Reset Gmail/Slack/Fireflies HWMs to 1 week ago
-- Comms brain grew from 21 → ~50 memories
-- Quality good: follow_ups, commitments, meeting_outcomes, relationship_signals all extracted
-- Identified problem: stale commitments (CVs for Coles already completed but stored as open)
-- Decision: don't do historical backfill until context-down feeds are working
-- HWMs reset back to present; live sweeps continue
+### Clawvato Agent Layer (Phase 2)
+7. **Agent supervisor**: src/cc-native/agent-supervisor.ts — LISTEN/NOTIFY message router, invokes CC --print --session
+8. **Curator loop**: scripts/curator-loop.sh — Sonnet, always-on, processes inbox, audits brains
+9. **System prompts**: curator-system.md, entity-agent-system.md
+10. **Entrypoint**: updated to start curator + supervisor as background processes
 
 ## Current State
 
-### Feed Connections (live)
-- comms→primary: raw (commitment, follow_up, meeting_outcome, 1h) — VERIFIED WORKING
-- comms→primary: synthesized (relationship_signal, 6h) — JSON parse error, needs prompt fix
-- primary→comms: synthesized (deal_status, commitment, 6h) — this is the critical context-down
-- primary→dev: raw (commitment, 7+ importance, 1h)
-- dev→primary: raw (project_milestone, 1h)
+### What Works
+- Mailbox: send/receive messages between agents ✓ (11 tests)
+- Inbox: content discovery pointers, processing lifecycle ✓
+- Brain state: .md file generation from DB facts ✓ (8 tests)
+- NOTIFY: triggers fire on fact changes, debounced regeneration ✓
+- All 61 brain-platform tests pass ✓
+- Both repos compile clean ✓
+
+### What's Not Yet Tested End-to-End
+1. Curator processing real inbox items (needs deployment or local run with CLI)
+2. Agent supervisor routing real messages to CC --print
+3. Brain.md regeneration via NOTIFY in production (tested in unit tests)
+4. Full flow: content → inbox → curator → store_fact → brain.md → entity agent reads
 
 ### Known Issues
-1. Synthesized feed JSON parsing — Sonnet sometimes returns markdown instead of JSON
-2. Feed query checks both `concept_type` and `type` columns (extraction stores in `type` not `concept_type`)
-3. Railway deploys can get stuck behind long-running sweep processes — use dashboard restart
-
-### Key Decisions
-1. Unified feed model: raw + synthesized are the same mechanism with different config
-2. No automatic cross-brain retirement — dedup + consolidation handle conflicts
-3. Historical backfill blocked until context-down feeds verified working
-4. Per-entity brain architecture proposed (1 brain per client/project) — design next session
-5. 15-min polling sufficient — Gmail Pub/Sub webhook deprioritized
-
-## Files Created/Modified This Session
-
-### brain-platform (new files)
-- brains/comms.brain.yaml (+ connections on all 3 brain configs)
-- sidecar/init-connectors.ts
-- engine/feeds.ts (full implementation, was skeleton)
-- scripts/{fetch-handoff,session-end-handoff,journal-hook,check-version}.sh
-- bin/setup.ts (CLI for npm package)
-
-### brain-platform (modified)
-- server/index.ts (sidecar wiring)
-- server/scheduler.ts (feed timer, non-blocking startup)
-- engine/ingest.ts (brain-specific extraction + origin_brain)
-- engine/brain-config.ts (unified FeedConnectionConfig)
-- adapters/mcp.ts (run_feeds, get_feed_status tools)
-- sidecar/poll-scheduler.ts (15-min frequency, gmail added to frequent tier)
-- package.json (v1.1.0, scripts/ in files)
-
-### clawvato (deleted ~9,800 lines)
-- DELETED: src/memory/ (7 files), src/sweeps/ (7 files), src/agent/ (6 files)
-- DELETED: src/tasks/executor.ts, src/google/drive-sync.ts, src/google/file-extractor.ts, src/fireflies/sync.ts
-- DELETED: tests/memory/ (5 files), tests/google/ (2 files)
-- Modified: src/cc-native/task-scheduler-standalone.ts (sweeps stripped)
-- Modified: src/cli/start.ts (cc-native only), src/cli/index.ts (engine flag removed)
-- Modified: src/db/index.ts, src/google/tools.ts (dead import removal)
-- Modified: .mcp.json (BRAIN_CONFIG_DIR added)
-
-### Settings updated
-- ~/.claude/projects/-Users-andrewcovato-dev-clawvato/settings.json (brain-platform URLs + package)
-- ~/.claude/projects/Users-andrewcovato-dev-newmail/settings*.json (same)
-- ~/.claude/.mcp.json (brain-platform source path)
-
-## Recent Interactions
-**User**: Let's finish the migration (Steps 1-5).
-**Assistant**: Executed all 5 steps. Comms brain live, sidecar wired, 9.8K lines deleted, npm published, old service stopped.
-
-**User**: Can we back-populate 5 months of emails? What about using Claude CLI instead of Sonnet API?
-**Assistant**: ~$5 worst case for Sonnet. Not worth CLI side-quest. Started 1-week test.
-
-**User**: Stale commitments problem — CVs for Coles stored as open but already done. Context-down needed.
-**Assistant**: Proposed options. User chose: do it right, build context-down first.
-
-**User**: This isn't just for tasks — it's for everything. Build it generically.
-**Assistant**: Designed inter-brain feed system. Unified raw + synthesized modes. Built, deployed, verified.
-
-**User**: Per-entity brains (1 per client/project) — all channels, deeper filtering.
-**Assistant**: Noted for next session design. Fundamental shift from source-owned to entity-owned brains.
+1. Acorns brain still has 496 misrouted facts — needs cleanup (curator audit job will handle this)
+2. GYG/Vail/Ad Platforms brains still empty — need re-backfill with curator
+3. business-state.md truncates purpose text at 80 chars (cosmetic)
+4. brain.md for dev brain is 76K chars (~20K tokens) — may need pruning for large brains
 
 ## Next Steps
-1. Fix synthesized feed JSON parsing
-2. Verify primary→comms context-down feed (the one that resolves stale commitments)
-3. Design per-entity brain architecture
-4. Historical backfill once context-down is verified
+1. **Push brain-platform to main** → auto-deploy to Railway
+2. **Push clawvato to cc-native-engine** → auto-deploy to Railway
+3. **Test curator end-to-end** — verify it processes inbox items and files facts correctly
+4. **Clean up Acorns brain** — run curator audit to retire misrouted facts
+5. **Re-backfill** with curator doing the extraction (not the old triage pipeline)
+6. **Test entity agent** — CoS sends message via mailbox, entity agent responds
+7. **Wire up webhooks** (Phase 5 in design doc) — Gmail Pub/Sub, Calendar watches
+
+## Files Created/Modified
+
+### brain-platform
+- engine/mailbox.ts (NEW) — inbox + agent_messages + NOTIFY
+- engine/brain-state.ts (NEW) — brain.md + business-state.md generation
+- adapters/mcp.ts (MODIFIED) — 11 new tools, deprecated triage refs
+- server/index.ts (MODIFIED) — schema migrations, brain state listener
+- sidecar/poll-scheduler.ts (MODIFIED) — discovery-only, no triage
+- engine/config.ts (MODIFIED) — removed entityRouting
+- engine/brain-config.ts (MODIFIED) — removed refreshEntityList
+- config/default.json (MODIFIED) — removed entityRouting, triage disabled
+- connectors/types.ts (MODIFIED) — added contentIds to CollectorResult
+- tests/mailbox.test.ts (NEW) — 11 tests
+- tests/brain-state.test.ts (NEW) — 8 tests
+- engine/entity-router.ts (DELETED)
+- engine/triage.ts (DELETED)
+- tests/entity-router.test.ts (DELETED)
+- tests/triage.test.ts (DELETED)
+
+### clawvato
+- src/cc-native/agent-supervisor.ts (NEW) — message routing
+- scripts/curator-loop.sh (NEW) — always-on curator
+- config/prompts/curator-system.md (NEW) — curator instructions
+- config/prompts/entity-agent-system.md (NEW) — entity agent template
+- scripts/cc-native-entrypoint.sh (MODIFIED) — starts curator + supervisor
+- docs/DESIGN_AGENT_ARCHITECTURE_V2.md (NEW) — full design document

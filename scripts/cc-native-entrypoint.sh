@@ -98,6 +98,30 @@ echo "[supervisor] MCP config written to $MCP_CONFIG"
 # Brain-platform handles extraction server-side via its own ANTHROPIC_API_KEY.
 unset ANTHROPIC_API_KEY 2>/dev/null || true
 
+# ── Generate curator MCP config (same brain-platform, no slack-channel) ──
+CURATOR_MCP_CONFIG="/tmp/curator-mcp.json"
+cat > "$CURATOR_MCP_CONFIG" <<CURATORMCP
+{
+  "mcpServers": {
+    "brain-platform": {
+      "type": "http",
+      "url": "${MEMORY_URL}",
+      "headers": {
+        "Authorization": "Bearer ${MCP_AUTH_TOKEN}",
+        "Accept": "application/json, text/event-stream",
+        "Content-Type": "application/json"
+      }
+    }
+  }
+}
+CURATORMCP
+chmod 600 "$CURATOR_MCP_CONFIG"
+echo "[supervisor] Curator MCP config written to $CURATOR_MCP_CONFIG"
+
+# ── Ensure brain-states directory exists ──
+export BRAIN_STATES_DIR="${DATA_DIR}/brain-states"
+mkdir -p "$BRAIN_STATES_DIR"
+
 # ── Start task scheduler in background ──
 # The scheduler polls for due tasks and posts to Slack.
 # CC picks them up as channel events.
@@ -106,11 +130,25 @@ npx tsx src/cc-native/task-scheduler-standalone.ts &
 SCHEDULER_PID=$!
 echo "[supervisor] Task scheduler PID: $SCHEDULER_PID"
 
+# ── Start curator agent in background ──
+echo "[supervisor] Starting curator agent"
+export CURATOR_MCP_CONFIG
+bash scripts/curator-loop.sh &
+CURATOR_PID=$!
+echo "[supervisor] Curator PID: $CURATOR_PID"
+
+# ── Start agent supervisor in background ──
+echo "[supervisor] Starting agent supervisor"
+export SUPERVISOR_MCP_CONFIG="$CURATOR_MCP_CONFIG"
+npx tsx src/cc-native/agent-supervisor.ts &
+SUPERVISOR_PID=$!
+echo "[supervisor] Agent supervisor PID: $SUPERVISOR_PID"
+
 # ── Cleanup on exit ──
 cleanup() {
   echo "[supervisor] Shutting down..."
-  kill "$SCHEDULER_PID" 2>/dev/null || true
-  rm -f "$MCP_CONFIG"
+  kill "$SCHEDULER_PID" "$CURATOR_PID" "$SUPERVISOR_PID" 2>/dev/null || true
+  rm -f "$MCP_CONFIG" "$CURATOR_MCP_CONFIG"
   exit 0
 }
 trap cleanup SIGTERM SIGINT
