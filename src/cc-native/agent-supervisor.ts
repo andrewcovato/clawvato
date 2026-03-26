@@ -219,15 +219,11 @@ async function processMessage(
     // Invoke the agent
     const response = await invokeAgent(toAgent, prompt);
 
-    // Send response back via mailbox
+    // Mark original as done — agent handles replying via reply_to_message MCP tool
+    // Do NOT create a response message here — that causes infinite loops
     await sql`
       UPDATE agent_messages SET status = 'done', processed_at = NOW()
-      WHERE id = ${messageId}
-    `;
-
-    await sql`
-      INSERT INTO agent_messages (from_agent, to_agent, message_type, payload, parent_id)
-      VALUES (${toAgent}, ${fromAgent}, 'response', ${sql.json({ result: response })}, ${messageId})
+      WHERE id = ${messageId} AND status = 'pending'
     `;
 
     console.log(`[supervisor] Agent ${toAgent} completed message ${messageId} (${response.length} chars)`);
@@ -267,12 +263,16 @@ function getBrainStateFile(agentId: string): string | null {
 async function pollMessages(): Promise<void> {
   if (activeAgents.size >= MAX_CONCURRENT) return;
 
+  // Only process 'task' messages TO entity agents (agent-*).
+  // Skip: responses (delivered, not re-processed), notifications (informational),
+  // messages to curator/supervisor (handled by their own loops),
+  // messages to clawvato (CoS reads its own mailbox via MCP tools).
   const messages = await sql`
     SELECT id, from_agent, to_agent, message_type, payload
     FROM agent_messages
     WHERE status = 'pending'
-      AND to_agent != 'curator'
-      AND to_agent != 'supervisor'
+      AND message_type = 'task'
+      AND to_agent LIKE 'agent-%'
     ORDER BY created_at ASC
     LIMIT ${MAX_CONCURRENT - activeAgents.size}
   ` as unknown as Array<{
@@ -319,13 +319,15 @@ async function start(): Promise<void> {
     const [toAgent, messageId] = payload.split(':');
     if (!toAgent || !messageId) return;
 
-    // Skip curator and supervisor messages (handled by their own loops)
-    if (toAgent === 'curator' || toAgent === 'supervisor') return;
+    // Only route task messages to entity agents (agent-*)
+    // Skip: curator, supervisor, clawvato (they read their own mailboxes)
+    // Skip: responses, notifications (not actionable by supervisor)
+    if (!toAgent.startsWith('agent-')) return;
 
-    // Fetch full message
+    // Fetch full message — only tasks
     const [msg] = await sql`
       SELECT id, from_agent, to_agent, message_type, payload
-      FROM agent_messages WHERE id = ${messageId} AND status = 'pending'
+      FROM agent_messages WHERE id = ${messageId} AND status = 'pending' AND message_type = 'task'
     ` as unknown as Array<{
       id: string;
       from_agent: string;
