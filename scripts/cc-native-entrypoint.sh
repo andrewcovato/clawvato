@@ -2,7 +2,7 @@
 # CC-Native Engine — Supervisor Entrypoint
 #
 # Runs Claude Code in a restart loop with the Slack Channel MCP server.
-# Memory is provided by the clawvato-memory HTTP MCP server (separate Railway service).
+# Memory is provided by the brain-platform HTTP MCP server (separate Railway service).
 # When CC exits (idle timeout, crash, planned reset), waits briefly and restarts.
 #
 # Environment variables (required):
@@ -69,7 +69,7 @@ MCP_CONFIG="/tmp/cc-native-mcp.json"
 cat > "$MCP_CONFIG" <<MCPJSON
 {
   "mcpServers": {
-    "clawvato-memory": {
+    "brain-platform": {
       "type": "http",
       "url": "${MEMORY_URL}",
       "headers": {
@@ -91,7 +91,7 @@ MCPJSON
 chmod 600 "$MCP_CONFIG"
 echo "[supervisor] MCP config written to $MCP_CONFIG"
 
-# API key is used by the plugin (clawvato-memory) for extraction, dedup, and reflection.
+# API key is used by brain-platform for extraction, dedup, and reflection.
 # Agent-side extraction is retired — journaling hook sends to plugin's /ingest endpoint.
 # Save key to file for any hooks that still need it (legacy compatibility).
 if [ -n "${ANTHROPIC_API_KEY:-}" ]; then

@@ -53,8 +53,8 @@ SUMMARY=$(echo "$INPUT" | node -e "
       } else if (name === 'Bash') {
         summary = 'Bash: ' + (input.command || '').slice(0, 200);
         if (response) summary += '\\nOutput: ' + response.slice(0, 300);
-      } else if (name.startsWith('mcp__clawvato-memory__')) {
-        summary = name.replace('mcp__clawvato-memory__', 'memory:') + ' ' + JSON.stringify(input).slice(0, 300);
+      } else if (name.startsWith('mcp__brain-platform__') || name.startsWith('mcp__clawvato-memory__')) {
+        summary = name.replace('mcp__brain-platform__', 'memory:').replace('mcp__clawvato-memory__', 'memory:') + ' ' + JSON.stringify(input).slice(0, 300);
         if (response) summary += '\\nResult: ' + response.slice(0, 300);
       } else {
         summary = name + ': ' + JSON.stringify(input).slice(0, 200);
@@ -106,7 +106,7 @@ if [ "$JOURNAL_SIZE" -lt 100 ]; then
 fi
 
 # Determine plugin URL and auth
-PLUGIN_URL="${CLAWVATO_MEMORY_URL:-https://clawvato-memory-production.up.railway.app}"
+PLUGIN_URL="${CLAWVATO_MEMORY_URL:-https://brain-platform-production.up.railway.app}"
 AUTH_TOKEN="${MCP_AUTH_TOKEN}"
 
 if [ -z "$AUTH_TOKEN" ]; then

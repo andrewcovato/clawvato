@@ -10,7 +10,7 @@
 
 set -euo pipefail
 
-MEMORY_URL="${CLAWVATO_MEMORY_URL:-https://clawvato-memory-production.up.railway.app}"
+MEMORY_URL="${CLAWVATO_MEMORY_URL:-https://brain-platform-production.up.railway.app}"
 AUTH_TOKEN="${MCP_AUTH_TOKEN:-}"
 SURFACE="${CLAWVATO_SURFACE:-local}"
 

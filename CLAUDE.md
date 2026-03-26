@@ -1,7 +1,7 @@
 # CLAUDE.md — Clawvato Project Guide
 
 ## Project Overview
-Clawvato is a business operating system for solo technical founders — a memory-powered AI agent across Slack, email, calendar, Drive, meetings, and Claude Code. Deployed on Railway using a **CC-native architecture**: Claude Code runs as the core engine via Channels, with a **smart memory plugin** (clawvato-memory) serving as the intelligent brain. The plugin handles embeddings, hybrid search, cross-encoder reranking, write-time dedup, semantic clustering, background consolidation/reflection, and conversation journaling. The agent is a thin executor; the brain is agent-agnostic. A legacy hybrid architecture exists on the `main` branch as a fallback.
+Clawvato is a business operating system for solo technical founders — a memory-powered AI agent across Slack, email, calendar, Drive, meetings, and Claude Code. Deployed on Railway using a **CC-native architecture**: Claude Code runs as the core engine via Channels, with a **smart memory plugin** (brain-platform) serving as the intelligent brain. The plugin handles embeddings, hybrid search, cross-encoder reranking, write-time dedup, semantic clustering, background consolidation/reflection, and conversation journaling. The agent is a thin executor; the brain is agent-agnostic. A legacy hybrid architecture exists on the `main` branch as a fallback.
 
 ## Quick Reference
 
@@ -47,12 +47,12 @@ Session lifecycle:
 
 Switch engines: `ENGINE=cc-native` (active) or `ENGINE=hybrid` (fallback on `main`).
 
-### Smart Plugin Brain (`clawvato-memory`)
+### Smart Plugin Brain (`brain-platform`)
 
-The memory plugin is the intelligent core — not a thin gateway. It handles all memory intelligence server-side. Deployed from github.com/andrewcovato/clawvato-memory (auto-deploy from main to Railway).
+The memory plugin is the intelligent core — not a thin gateway. It handles all memory intelligence server-side. Deployed from github.com/andrewcovato/brain-platform (auto-deploy from main to Railway).
 
 ```
-clawvato-memory/server/
+brain-platform/server/
   index.ts          — HTTP/MCP server + /ingest REST endpoint
   db.ts             — Postgres connection
   log.ts            — stderr logging
@@ -255,7 +255,7 @@ Training wheels were removed in Session 16 because they were blocking internal t
 ## Session Handoff Protocol
 
 ### Surface-Scoped Working Context
-This project uses surface-scoped working context via the `clawvato-memory` MCP plugin. Your surface is `local` (coding sessions). The cloud Slack surface is `cloud`.
+This project uses surface-scoped working context via the `brain-platform` MCP plugin. Your surface is `local` (coding sessions). The cloud Slack surface is `cloud`.
 
 **On startup**: Call `get_handoff(surface: "local")` and `get_briefs()` to resume. If the handoff contains `recent_interactions`, replay them to restore conversational continuity.
 
@@ -341,7 +341,7 @@ The deep path spawns `claude --print --verbose --output-format stream-json` and 
 - Tool names mapped to descriptions: "Searching Gmail...", "Reading meeting transcript..."
 
 ### Memory Plugin (Smart Brain)
-Memory is served by the `clawvato-memory` HTTP MCP plugin deployed on Railway. All CC instances (local, cloud, deep-path subprocess) connect via URL + bearer token. Config is generated at runtime by the entrypoint script or via `.claude/settings.local.json`.
+Memory is served by the `brain-platform` HTTP MCP plugin deployed on Railway. All CC instances (local, cloud, deep-path subprocess) connect via URL + bearer token. Config is generated at runtime by the entrypoint script or via `.claude/settings.local.json`.
 
 The plugin is the intelligent core — it handles embeddings (nomic-embed-text-v1.5, 384d Matryoshka), hybrid search (tsvector + pgvector + RRF), cross-encoder reranking (ms-marco-MiniLM-L-6-v2, local, $0), write-time dedup (3-tier: heuristic → cross-encoder → Haiku), entity-hop traversal, cluster expansion (HDBSCAN), soft-signal boosting, and background maintenance (consolidation, reflection, clustering, decay). Agent-side memory code (`src/memory/*`) is retained for hybrid fallback and local dev but is NOT used in CC-native production.
 
@@ -467,8 +467,8 @@ Design docs:
 3. Add `Bash(your-cli:*)` to `--allowedTools` in `deep-path.ts`
 
 ### Adding a memory MCP tool
-1. Add the tool to the `clawvato-memory` plugin (separate repo: github.com/andrewcovato/clawvato-memory)
-2. Add to `--allowedTools` in `deep-path.ts` as `mcp__clawvato-memory__tool_name`
+1. Add the tool to the `brain-platform` plugin (separate repo: github.com/andrewcovato/brain-platform)
+2. Add to `--allowedTools` in `deep-path.ts` as `mcp__brain-platform__tool_name`
 3. Plugin auto-deploys from main to Railway
 
 ## Slack Interaction Principles
@@ -489,7 +489,7 @@ Cancel                       → remove 🧠, ✅ on cancel message
 Stream-json events parsed in real-time → progress updates posted to Slack:
 - `Bash(gws gmail...)` → "Searching Gmail..."
 - `Bash(npx tsx tools/fireflies.ts...)` → "Searching meeting transcripts..."
-- `mcp__clawvato-memory__store_fact` → "Saving to memory..."
+- `mcp__brain-platform__store_fact` → "Saving to memory..."
 
 ### Interrupt During Deep Path
 Owner can cancel by sending "stop", "cancel", "abort", "nvm", etc. Polled every 2s. Kills SDK subprocess immediately.
@@ -523,7 +523,7 @@ DATA_DIR=/data             — Persistent volume (Claude CLI auth + gws config o
 # Agent (this repo)
 railway up --detach
 
-# Plugin (clawvato-memory repo) — auto-deploys from main push
+# Plugin (brain-platform repo) — auto-deploys from main push
 ```
 
 ### One-Time Auth Setup

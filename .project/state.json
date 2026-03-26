@@ -39,7 +39,7 @@
     "cloud": "Railway (Growth By Science workspace)",
     "railwayProject": "99ecf42e-5142-442c-a79a-2f6fd0864ecf",
     "railwayServices": ["clawvato (thin agent — task poller + event feed)", "brain-platform (core intelligence + sidecar + feeds)", "Postgres (managed DB)"],
-    "decommissioned": ["clawvato-memory (stopped 2026-03-25)"],
+    "decommissioned": ["brain-platform (old: clawvato-memory) (stopped 2026-03-25)"],
     "database": "Railway managed Postgres (automatic backups, pgvector, tsvector)",
     "taskChannel": "C0AN5J0LCP3 (#clawvato-tasks)",
     "dataVolume": "/data (Claude CLI auth + gws config)",
@@ -123,12 +123,12 @@
       "completedDate": "2026-03-25",
       "workstreams": [
         "brain-platform repo (36 files, ~4,700 lines), recursive concept-aware HDBSCAN",
-        "Deploy to Railway + cutover from clawvato-memory",
+        "Deploy to Railway + cutover from brain-platform (old: clawvato-memory)",
         "Comms brain + sidecar wiring (3 connectors: Slack, Gmail, Fireflies)",
         "Kill old sidecar — task poller only in clawvato",
         "Thin clawvato — 9,822 lines deleted (memory, sweeps, hybrid agent, drive-sync)",
         "npm package: @andrewcovato/brain-platform@1.1.0 published",
-        "Decommission clawvato-memory Railway service",
+        "Decommission brain-platform (old: clawvato-memory) Railway service",
         "Inter-brain feed system: raw + synthesized modes, cycle prevention, 5 connections",
         "Brain-specific extraction prompts wired into ingest pipeline"
       ]
@@ -180,11 +180,12 @@
     { "id": "ENTITY-RESOLUTION", "priority": "high", "title": "Entity resolution system (Phil Clark = Phil = phil@acorns.com)" },
     { "id": "GMAIL-WEBHOOK", "priority": "medium", "title": "Gmail Pub/Sub webhook (may not need if 15-min polling suffices)" },
     { "id": "CALENDAR-WEBHOOK", "priority": "medium", "title": "Calendar events.watch() webhook" },
-    { "id": "MCP-RENAME", "priority": "low", "title": "Rename MCP server from 'clawvato-memory' to 'brain'" },
+    { "id": "MCP-RENAME", "priority": "low", "title": "Rename MCP server from 'brain-platform (old: clawvato-memory)' to 'brain'" },
     { "id": "PERF-OPTIMIZATION", "priority": "medium", "title": "Performance optimization pass" },
     { "id": "GITHUB-PHASE1", "priority": "medium", "title": "Track G Phase 1: read-only GitHub access" },
     { "id": "FINANCE-001", "priority": "low", "title": "Finance integration" },
-    { "id": "TURBO-QUANT", "priority": "low", "title": "Investigate TurboQuant for vector compression at scale" }
+    { "id": "TURBO-QUANT", "priority": "low", "title": "Investigate TurboQuant for vector compression at scale" },
+    { "id": "SESSION-MAILBOX", "priority": "medium", "title": "Inter-session mailbox — send_message/get_messages MCP tools for direct session-to-session communication via brain-platform. Enables local↔cloud↔cowork real-time coordination." }
   ],
   "thingsNotToRedo": [
     "DON'T REBUILD WHAT COMES NATIVELY WITH CLAUDE CODE",

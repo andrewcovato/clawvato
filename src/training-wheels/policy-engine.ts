@@ -62,7 +62,7 @@ const READ_ACTIONS: RegExp[] = [
   // Internal agent state — not external writes, safe to auto-approve
   /^update_working_context$/i,
   /^store_fact$/i,
-  /^mcp__(?:memory|clawvato-memory)__/i,
+  /^mcp__(?:memory|clawvato-memory|brain-platform)__/i,
   // Memory management — internal agent state
   /^delete_memory$/i,
   // Task queue management — internal agent state

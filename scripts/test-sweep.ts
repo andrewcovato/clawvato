@@ -114,7 +114,7 @@ for (const collector of collectors) {
 
     // Test /ingest if there's content
     if (result.contentChunks.length > 0 && result.itemsNew > 0) {
-      const pluginUrl = process.env.CLAWVATO_MEMORY_URL ?? 'https://clawvato-memory-production.up.railway.app';
+      const pluginUrl = process.env.CLAWVATO_MEMORY_URL ?? 'https://brain-platform-production.up.railway.app';
       const authToken = process.env.MCP_AUTH_TOKEN ?? '';
 
       if (authToken) {
