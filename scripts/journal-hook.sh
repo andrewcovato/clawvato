@@ -51,8 +51,8 @@ SUMMARY=$(echo "$INPUT" | node -e "
       if (name === 'Edit' || name === 'Write') {
         summary = name + ': ' + (input.file_path || 'unknown file');
       } else if (name === 'Bash') {
+        // Only log the command, NOT the output — output may contain secrets
         summary = 'Bash: ' + (input.command || '').slice(0, 200);
-        if (response) summary += '\\nOutput: ' + response.slice(0, 300);
       } else if (name.startsWith('mcp__brain-platform__') || name.startsWith('mcp__clawvato-memory__')) {
         summary = name.replace('mcp__brain-platform__', 'memory:').replace('mcp__clawvato-memory__', 'memory:') + ' ' + JSON.stringify(input).slice(0, 300);
         if (response) summary += '\\nResult: ' + response.slice(0, 300);

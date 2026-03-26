@@ -63,8 +63,8 @@ const READ_ACTIONS: RegExp[] = [
   /^update_working_context$/i,
   /^store_fact$/i,
   /^mcp__(?:memory|clawvato-memory|brain-platform)__/i,
-  // Memory management — internal agent state
-  /^delete_memory$/i,
+  // Memory retirement — soft-delete via valid_until (not destructive)
+  /^retire_memory$/i,
   // Task queue management — internal agent state
   /^(?:list|create|update|delete|sync)_task/i,
 ];

@@ -66,6 +66,8 @@ export MCP_AUTH_TOKEN="${MCP_AUTH_TOKEN:-}"
 # We template the config at runtime to inject the auth token from env vars.
 MEMORY_URL="${CLAWVATO_MEMORY_INTERNAL_URL:-http://brain-platform.railway.internal:8100/mcp}"
 MCP_CONFIG="/tmp/cc-native-mcp.json"
+OLD_UMASK=$(umask)
+umask 077
 cat > "$MCP_CONFIG" <<MCPJSON
 {
   "mcpServers": {
@@ -88,20 +90,12 @@ cat > "$MCP_CONFIG" <<MCPJSON
   }
 }
 MCPJSON
-chmod 600 "$MCP_CONFIG"
+umask "$OLD_UMASK"
+chmod 600 "$MCP_CONFIG"  # defense-in-depth
 echo "[supervisor] MCP config written to $MCP_CONFIG"
 
-# API key is used by brain-platform for extraction, dedup, and reflection.
-# Agent-side extraction is retired — journaling hook sends to plugin's /ingest endpoint.
-# Save key to file for any hooks that still need it (legacy compatibility).
-if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
-  OLD_UMASK=$(umask)
-  umask 077
-  echo "$ANTHROPIC_API_KEY" > /tmp/.extraction-api-key
-  umask "$OLD_UMASK"
-fi
-
-# Do NOT export ANTHROPIC_API_KEY — force CC to use Max plan OAuth
+# Do NOT export ANTHROPIC_API_KEY — force CC to use Max plan OAuth.
+# Brain-platform handles extraction server-side via its own ANTHROPIC_API_KEY.
 unset ANTHROPIC_API_KEY 2>/dev/null || true
 
 # ── Start task scheduler in background ──
@@ -116,7 +110,7 @@ echo "[supervisor] Task scheduler PID: $SCHEDULER_PID"
 cleanup() {
   echo "[supervisor] Shutting down..."
   kill "$SCHEDULER_PID" 2>/dev/null || true
-  rm -f "$MCP_CONFIG" /tmp/.extraction-api-key
+  rm -f "$MCP_CONFIG"
   exit 0
 }
 trap cleanup SIGTERM SIGINT

@@ -281,10 +281,14 @@ async function flushBatch(key: string): Promise<void> {
   if (!batch) return;
   pendingBatches.delete(key);
 
-  // Combine messages
-  const combinedText = batch.messages
-    .map(m => m.text)
-    .join('\n');
+  // Combine messages with trust boundary
+  // Owner messages are trusted instructions; all others are untrusted data.
+  // This is a code-enforced boundary, not prompt-dependent.
+  const isOwner = OWNER_SLACK_USER_ID && batch.userId === OWNER_SLACK_USER_ID;
+  const rawText = batch.messages.map(m => m.text).join('\n');
+  const combinedText = isOwner
+    ? rawText
+    : `<untrusted-user-message from="${batch.userId}">\n${rawText}\n</untrusted-user-message>`;
 
   // Resolve channel name
   let channelName = batch.channel;
