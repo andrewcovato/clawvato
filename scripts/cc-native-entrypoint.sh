@@ -73,7 +73,9 @@ cat > "$MCP_CONFIG" <<MCPJSON
       "type": "http",
       "url": "${MEMORY_URL}",
       "headers": {
-        "Authorization": "Bearer ${MCP_AUTH_TOKEN}"
+        "Authorization": "Bearer ${MCP_AUTH_TOKEN}",
+        "Accept": "application/json, text/event-stream",
+        "Content-Type": "application/json"
       }
     },
     "slack-channel": {
