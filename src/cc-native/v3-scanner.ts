@@ -15,6 +15,9 @@ const TASK_CHANNEL_ID = process.env.TASK_CHANNEL_ID ?? '';
 
 const log = (msg: string) => process.stderr.write(`[v3-scanner] ${msg}\n`);
 
+// Track last successful scan per workstream (in-memory; resets on restart → 7d backfill)
+const lastScanTimes = new Map<string, Date>();
+
 // ── MCP Client ────────────────────────────────────────────
 
 async function callMcp(toolName: string, args: Record<string, unknown> = {}): Promise<string> {
@@ -66,7 +69,14 @@ async function scanWorkstream(workstreamId: string): Promise<void> {
     return;
   }
 
+  // Determine scan window based on last scan time
+  const lastScan = lastScanTimes.get(workstreamId);
+  const scanWindow = lastScan
+    ? `after:${lastScan.toISOString().split('T')[0]}`
+    : 'newer_than:7d'; // First scan: 7 days back
+
   const prompt = `You are scanning for updates related to a business workstream.
+Scan window: ${lastScan ? `since ${lastScan.toISOString()}` : 'last 7 days (initial scan)'}
 
 ${GLOBAL_DEFINITIONS}
 
@@ -76,8 +86,8 @@ INSTRUCTIONS:
 You have Bash access. Use these tools to search sources:
 
 GMAIL: Use gws CLI to search and read emails. Search BOTH inbox AND sent mail.
-  Search inbox:  gws gmail users messages list --params '{"userId":"me","q":"QUERY newer_than:1d","maxResults":20}' --format json
-  Search sent:   gws gmail users messages list --params '{"userId":"me","q":"in:sent QUERY newer_than:1d","maxResults":20}' --format json
+  Search inbox:  gws gmail users messages list --params '{"userId":"me","q":"QUERY ${scanWindow}","maxResults":20}' --format json
+  Search sent:   gws gmail users messages list --params '{"userId":"me","q":"in:sent QUERY ${scanWindow}","maxResults":20}' --format json
   Read thread:   gws gmail users threads get --params '{"userId":"me","id":"THREAD_ID","format":"full"}' --format json
   Use the people, domains, entity names, and shorthand above to craft your queries.
   Cast a wide net — check by domain, by person, by entity name.
@@ -93,18 +103,28 @@ SLACK: If Slack channels are listed in artifacts, search them.
 FIREFLIES: Use the fireflies CLI if available:
   npx tsx tools/fireflies.ts search "QUERY"
 
-4. For everything you find:
+4. IMPORTANT — TEMPORAL RECONCILIATION:
+   You are reading emails, Slack messages, and meeting transcripts that may span days.
+   Information evolves over time. A meeting on Monday may set a deadline, an email on
+   Tuesday may change it, and a Slack message on Wednesday may confirm the change.
+
+   ALWAYS use the MOST RECENT information as the source of truth. When you find
+   conflicting information across sources, check the timestamps and use the latest.
+   The final state is what matters — not intermediate states.
+
+5. For everything you find:
    a. BEFORE creating any new item, check the OPEN ITEMS list above carefully.
       - If an identical or near-identical item already exists in the same state → DO NOT create a duplicate. Skip it entirely.
       - If something has changed, progressed, or new evidence exists for an existing item → propose an ALTERATION (not a new item). E.g., a due date changed, the item was completed, new context emerged.
+      - If a meeting set a deadline but a later email changed it → the item should reflect the EMAIL's date, not the meeting's.
    b. Only create genuinely NEW todos, commitments, and follow-ups that don't already exist in any form.
    c. For existing items with new evidence, propose alterations:
       Alterations: "complete" (done), "cancel" (no longer relevant), "update" (change title/priority/date)
-      Include the existing item's ID and cite specific evidence.
+      Include the existing item's ID and cite specific evidence with timestamps.
    d. Extract new people: name, entity_id (if they belong to a known entity), role, email.
    e. Note anything that changes the state of play for the brief.
 
-5. For each item, specify which workstream it belongs to.
+6. For each item, specify which workstream it belongs to.
 
 Return ONLY valid JSON (no markdown fences) with this structure:
 {
@@ -128,10 +148,13 @@ Return ONLY valid JSON (no markdown fences) with this structure:
 If nothing new was found, return empty arrays and empty string.`;
 
   try {
+    const scanStart = new Date();
     const result = await invokeClaude(prompt, workstreamId);
     await processResults(workstreamId, result);
+    lastScanTimes.set(workstreamId, scanStart);
   } catch (err) {
     log(`  Error scanning ${workstreamId}: ${err}`);
+    // Don't update lastScanTime on failure — retry same window next cycle
   }
 }
 
@@ -153,7 +176,8 @@ You have Bash access. Search sources using:
   Gmail (sent):  gws gmail users messages list --params '{"userId":"me","q":"in:sent QUERY newer_than:1d","maxResults":20}' --format json
   Gmail thread:  gws gmail users threads get --params '{"userId":"me","id":"THREAD_ID","format":"full"}' --format json
 
-- Search Gmail (BOTH inbox and sent), Slack, and Fireflies for recent activity related to this workstream
+- Search Gmail (BOTH inbox and sent), Slack, and Fireflies for recent activity
+- When multiple sources discuss the same topic, use the MOST RECENT timestamp as truth
 - Write 2-3 paragraphs summarizing the latest state of affairs
 ${mode === 'update' ? `- Maintain continuity from the current brief shown above — carry forward anything still relevant
 - If something is no longer relevant, note it as [RESOLVED: brief description]
