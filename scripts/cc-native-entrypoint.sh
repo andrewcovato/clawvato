@@ -64,7 +64,9 @@ export MCP_AUTH_TOKEN="${MCP_AUTH_TOKEN:-}"
 # ── Generate MCP config with auth token ──
 # The memory MCP server runs as a separate Railway service (HTTP transport).
 # We template the config at runtime to inject the auth token from env vars.
-MEMORY_URL="${CLAWVATO_MEMORY_INTERNAL_URL:-http://brain-platform.railway.internal:8100/mcp}"
+# CoS uses StreamableHTTP MCP protocol → /mcp endpoint
+# Scanner uses legacy JSON → /api/tool (via CLAWVATO_MEMORY_INTERNAL_URL)
+MEMORY_URL="${CLAWVATO_MCP_URL:-http://brain-platform.railway.internal:8100/mcp}"
 MCP_CONFIG="/tmp/cc-native-mcp.json"
 OLD_UMASK=$(umask)
 umask 077
