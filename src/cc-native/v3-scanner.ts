@@ -87,13 +87,15 @@ async function checkForNewContent(workstreamId: string, scanWindow: string): Pro
   try {
     const domainsText = await callMcp('get_workstream_domains', { workstream_id: workstreamId });
     if (domainsText !== 'No domains tracked.') {
-      const domains = domainsText.split(', ').filter(Boolean);
+      // Filter out the owner's domain — it matches ALL email and causes false positives
+      const ownerDomain = (process.env.GOOGLE_AGENT_EMAIL ?? '').split('@')[1];
+      const domains = domainsText.split(', ').filter(d => d && d !== ownerDomain);
       if (domains.length > 0) {
         const domainQuery = domains.map(d => `from:${d} OR to:${d}`).join(' OR ');
         const query = `(${domainQuery}) ${scanWindow}`;
         const { stdout } = await execFileAsync('gws', [
           'gmail', 'users', 'messages', 'list',
-          '--params', JSON.stringify({ userId: 'me', q: query, maxResults: 50 }),
+          '--params', JSON.stringify({ userId: 'me', q: query, maxResults: 10 }),
           '--format', 'json',
         ], { timeout: 15_000, env: process.env });
 
@@ -175,7 +177,9 @@ async function scanWorkstream(workstreamId: string): Promise<void> {
     return;
   }
 
-  const scanWindow = `after:${lastScan.toISOString().split('T')[0]}`;
+  // Gmail `after:` only supports date granularity (not time), so use epoch seconds
+  // which Gmail DOES support for precise filtering
+  const scanWindow = `after:${Math.floor(lastScan.getTime() / 1000)}`;
 
   // Lightweight check — skip expensive LLM call if no new content on any channel
   const contentCheck = await checkForNewContent(workstreamId, scanWindow);
@@ -202,13 +206,11 @@ INSTRUCTIONS:
 You have Bash access. New content was detected on: ${activeSources.join(', ')}.
 ONLY search the sources listed above — skip sources with no new content.
 
-${activeSources.includes('gmail') ? `GMAIL: ${gmailThreadIds.length} new thread(s) detected. Read ONLY these specific threads:
-${gmailThreadIds.map(id => `  gws gmail users threads get --params '{"userId":"me","id":"${id}","format":"full"}' --format json`).join('\n')}
-Do NOT search for additional threads — only read the ones listed above.` : '(Gmail: no new content — skip)'}
-  Read thread:   gws gmail users threads get --params '{"userId":"me","id":"THREAD_ID","format":"full"}' --format json
-  Use the people, domains, entity names, and shorthand above to craft your queries.
-  Cast a wide net — check by domain, by person, by entity name.
-  Read full threads for anything you find.
+${activeSources.includes('gmail') ? `GMAIL: ${gmailThreadIds.slice(0, 5).length} new thread(s) detected (capped at 5). Read ONLY these specific threads:
+${gmailThreadIds.slice(0, 5).map(id => `  gws gmail users threads get --params '{"userId":"me","id":"${id}","format":"metadata","metadataHeaders":["From","To","Subject","Date"]}' --format json`).join('\n')}
+For any thread that looks relevant based on metadata, read the BODY with:
+  gws gmail users threads get --params '{"userId":"me","id":"THREAD_ID","format":"minimal"}' --format json
+Do NOT search for additional threads. Do NOT use format:"full" (too large). Only read the threads listed above.` : '(Gmail: no new content — skip)'}
 
   IMPORTANT: Sent mail reveals:
   - Commitments YOU made ("I'll send that by Friday")
