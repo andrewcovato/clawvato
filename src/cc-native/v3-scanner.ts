@@ -754,15 +754,32 @@ async function main(): Promise<void> {
   // Start reaction poller for proposed alterations
   startReactionPoller();
 
-  // Run initial commitment scan after 30s delay
-  setTimeout(() => runCommitmentCycle(), 30_000);
+  // Sequential loop — wait for each cycle to finish before scheduling the next
+  // Prevents overlapping cycles that caused duplicate scans
+  async function commitmentLoop(): Promise<void> {
+    await new Promise(r => setTimeout(r, 30_000)); // initial delay
+    while (true) {
+      await runCommitmentCycle();
+      await new Promise(r => setTimeout(r, COMMITMENT_INTERVAL_MS));
+    }
+  }
 
-  // Schedule recurring cycles
-  setInterval(() => runCommitmentCycle(), COMMITMENT_INTERVAL_MS);
-  setInterval(() => runBriefCycle(), BRIEF_INTERVAL_MS);
+  async function briefLoop(): Promise<void> {
+    await new Promise(r => setTimeout(r, BRIEF_INTERVAL_MS)); // first brief after 1h
+    while (true) {
+      await runBriefCycle();
+      await new Promise(r => setTimeout(r, BRIEF_INTERVAL_MS));
+    }
+  }
+
+  // Task polling is lightweight (no LLM) — setInterval is fine
   setInterval(() => runScheduledTasks(), TASK_POLL_INTERVAL_MS);
 
-  log(`Scanner active: commitments every 5m, briefs every 1h, tasks every 60s`);
+  // Start loops (non-blocking — they run forever)
+  commitmentLoop().catch(err => log(`Commitment loop fatal: ${err}`));
+  briefLoop().catch(err => log(`Brief loop fatal: ${err}`));
+
+  log(`Scanner active: commitments every ${COMMITMENT_INTERVAL_MS / 60000}m (sequential), briefs every 1h, tasks every 60s`);
 
   // Keep process alive
   process.on('SIGTERM', () => { log('Shutting down...'); process.exit(0); });
