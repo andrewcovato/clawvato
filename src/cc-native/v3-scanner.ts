@@ -340,6 +340,12 @@ Return plain text, one item per paragraph. If nothing found, return "Nothing new
 
 // ── Claude Invocation ─────────────────────────────────────
 
+// Running totals for session-level monitoring
+let sessionTotalCost = 0;
+let sessionTotalInputTokens = 0;
+let sessionTotalOutputTokens = 0;
+let sessionInvocations = 0;
+
 async function invokeClaude(prompt: string, label: string): Promise<string> {
   log(`  Invoking claude --print for ${label}...`);
   const startTime = Date.now();
@@ -347,7 +353,7 @@ async function invokeClaude(prompt: string, label: string): Promise<string> {
   const { stdout } = await execFileAsync('claude', [
     '--print',
     '--model', 'opus',
-    '--output-format', 'text',
+    '--output-format', 'json',
     '--allowedTools', 'Bash,Read,Grep,Glob,WebSearch',
     '--dangerously-skip-permissions',
     '-p', prompt,
@@ -363,8 +369,37 @@ async function invokeClaude(prompt: string, label: string): Promise<string> {
   });
 
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-  log(`  ${label} completed in ${elapsed}s (${stdout.length} chars)`);
-  return stdout;
+
+  // Parse JSON envelope for token usage + result text
+  try {
+    const envelope = JSON.parse(stdout);
+    const cost = envelope.total_cost_usd ?? 0;
+    const input = (envelope.usage?.input_tokens ?? 0) +
+                  (envelope.usage?.cache_creation_input_tokens ?? 0) +
+                  (envelope.usage?.cache_read_input_tokens ?? 0);
+    const output = envelope.usage?.output_tokens ?? 0;
+    const turns = envelope.num_turns ?? 0;
+
+    sessionTotalCost += cost;
+    sessionTotalInputTokens += input;
+    sessionTotalOutputTokens += output;
+    sessionInvocations++;
+
+    log(`  ${label} completed in ${elapsed}s | $${cost.toFixed(4)} | ${input} in / ${output} out | ${turns} turns`);
+    log(`  Session totals: $${sessionTotalCost.toFixed(4)} | ${sessionInvocations} calls | ${sessionTotalInputTokens} in / ${sessionTotalOutputTokens} out`);
+
+    // Post to monitoring channel
+    const MONITOR_CHANNEL = 'C0APG26FLRJ';
+    await postToSlack(MONITOR_CHANNEL,
+      `\`${label}\` — ${elapsed}s | $${cost.toFixed(4)} | ${input} in / ${output} out | session: $${sessionTotalCost.toFixed(4)} (${sessionInvocations} calls)`
+    ).catch(() => {}); // fire-and-forget
+
+    return envelope.result ?? '';
+  } catch {
+    // Fallback if JSON parsing fails — return raw stdout
+    log(`  ${label} completed in ${elapsed}s (${stdout.length} chars, failed to parse usage)`);
+    return stdout;
+  }
 }
 
 // ── Slack Posting ─────────────────────────────────────────
