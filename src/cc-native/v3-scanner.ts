@@ -61,34 +61,43 @@ Examples: "Haven't replied to Daisy about the RFP (outbound)", "Phil hasn't resp
 
 interface ContentCheckResult {
   hasNew: boolean;
-  sources: string[]; // which sources had new content: 'gmail', 'slack', 'fireflies'
+  sources: string[];           // which sources had new content
+  gmailThreadIds: string[];    // specific new thread IDs to read
+  slackChannels: string[];     // channels with new messages
 }
 
 async function checkForNewContent(workstreamId: string, scanWindow: string): Promise<ContentCheckResult> {
   const sources: string[] = [];
+  const gmailThreadIds: string[] = [];
+  const slackChannels: string[] = [];
 
-  // 1. Check Gmail — any new messages for this workstream's domains?
+  // 1. Check Gmail — find specific new threads for this workstream's domains
   try {
     const domainsText = await callMcp('get_workstream_domains', { workstream_id: workstreamId });
     if (domainsText !== 'No domains tracked.') {
       const domains = domainsText.split(', ').filter(Boolean);
       if (domains.length > 0) {
-        // Check inbox + sent across all domains
         const domainQuery = domains.map(d => `from:${d} OR to:${d}`).join(' OR ');
         const query = `(${domainQuery}) ${scanWindow}`;
         const { stdout } = await execFileAsync('gws', [
           'gmail', 'users', 'messages', 'list',
-          '--params', JSON.stringify({ userId: 'me', q: query, maxResults: 1 }),
+          '--params', JSON.stringify({ userId: 'me', q: query, maxResults: 50 }),
           '--format', 'json',
         ], { timeout: 15_000, env: process.env });
 
         const result = JSON.parse(stdout);
         if (Array.isArray(result.messages) && result.messages.length > 0) {
+          // Dedupe by threadId — one entry per thread
+          const threadSet = new Set<string>();
+          for (const msg of result.messages) {
+            if (msg.threadId) threadSet.add(msg.threadId);
+          }
+          gmailThreadIds.push(...threadSet);
           sources.push('gmail');
         }
       }
     }
-  } catch { /* fail open on error — will check other sources */ }
+  } catch { /* fail open */ }
 
   // 2. Check Slack — any new messages in workstream's channels?
   try {
@@ -113,8 +122,8 @@ async function checkForNewContent(workstreamId: string, scanWindow: string): Pro
             });
             const data = await response.json() as { ok: boolean; messages?: unknown[] };
             if (data.ok && data.messages && data.messages.length > 0) {
-              sources.push('slack');
-              break; // One channel with activity is enough
+              slackChannels.push(channelId);
+              if (!sources.includes('slack')) sources.push('slack');
             }
           } catch { /* skip this channel */ }
         }
@@ -128,10 +137,10 @@ async function checkForNewContent(workstreamId: string, scanWindow: string): Pro
   if (sources.length === 0) {
     log(`  ${workstreamId}: no new content on any channel, skipping`);
   } else {
-    log(`  ${workstreamId}: new content on ${sources.join(', ')}`);
+    log(`  ${workstreamId}: new content on ${sources.join(', ')} (${gmailThreadIds.length} threads, ${slackChannels.length} channels)`);
   }
 
-  return { hasNew: sources.length > 0, sources };
+  return { hasNew: sources.length > 0, sources, gmailThreadIds, slackChannels };
 }
 
 async function scanWorkstream(workstreamId: string): Promise<void> {
@@ -148,6 +157,7 @@ async function scanWorkstream(workstreamId: string): Promise<void> {
   if (!contentCheck.hasNew) return;
 
   const activeSources = contentCheck.sources;
+  const { gmailThreadIds, slackChannels: activeSlackChannels } = contentCheck;
 
   // Get full context via MCP
   const contextText = await callMcp('get_workstream_context', { workstream_id: workstreamId });
@@ -167,9 +177,9 @@ INSTRUCTIONS:
 You have Bash access. New content was detected on: ${activeSources.join(', ')}.
 ONLY search the sources listed above — skip sources with no new content.
 
-${activeSources.includes('gmail') ? `GMAIL: Use gws CLI to search and read emails. Search BOTH inbox AND sent mail.
-  Search inbox:  gws gmail users messages list --params '{"userId":"me","q":"QUERY ${scanWindow}","maxResults":20}' --format json
-  Search sent:   gws gmail users messages list --params '{"userId":"me","q":"in:sent QUERY ${scanWindow}","maxResults":20}' --format json` : '(Gmail: no new content — skip)'}
+${activeSources.includes('gmail') ? `GMAIL: ${gmailThreadIds.length} new thread(s) detected. Read ONLY these specific threads:
+${gmailThreadIds.map(id => `  gws gmail users threads get --params '{"userId":"me","id":"${id}","format":"full"}' --format json`).join('\n')}
+Do NOT search for additional threads — only read the ones listed above.` : '(Gmail: no new content — skip)'}
   Read thread:   gws gmail users threads get --params '{"userId":"me","id":"THREAD_ID","format":"full"}' --format json
   Use the people, domains, entity names, and shorthand above to craft your queries.
   Cast a wide net — check by domain, by person, by entity name.
@@ -180,7 +190,7 @@ ${activeSources.includes('gmail') ? `GMAIL: Use gws CLI to search and read email
   - Follow-ups YOU completed (replied to someone → mark inbound follow-up done)
   - Todo status changes (you sent the doc → todo is done)
 
-${activeSources.includes('slack') ? 'SLACK: New messages detected in Slack channels listed in artifacts. Search them.' : '(Slack: no new content — skip)'}
+${activeSources.includes('slack') ? `SLACK: New messages in ${activeSlackChannels.length} channel(s): ${activeSlackChannels.join(', ')}. Read recent history from ONLY these channels.` : '(Slack: no new content — skip)'}
 
 ${activeSources.includes('fireflies') ? 'FIREFLIES: New transcripts detected. Use: npx tsx tools/fireflies.ts search "QUERY"' : '(Fireflies: no new content — skip)'}
 
