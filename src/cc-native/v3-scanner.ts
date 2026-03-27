@@ -360,39 +360,184 @@ Return ONLY the brief text. No JSON, no markdown fences, no preamble.`;
   }
 }
 
-// ── Catchall Scan ─────────────────────────────────────────
+// ── Catchall Scan (two-phase: metadata triage → deep read) ──
+
+const CATCHALL_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 
 async function scanCatchall(): Promise<void> {
   log('Running catchall scan...');
 
-  const workstreamList = await callMcp('list_workstreams', { status: 'active' });
+  // Get last catchall scan time
+  let lastCatchall: Date | null = null;
+  try {
+    lastCatchall = await getLastScanTime('_catchall');
+  } catch { /* first run */ }
 
-  const prompt = `You have access to all the owner's email, Slack, and meeting sources.
-The following workstreams are already being tracked:
+  if (!lastCatchall) {
+    log('  Catchall: no scan history — seeding baseline, skipping this cycle');
+    await setLastScanTime('_catchall', new Date()).catch(() => {});
+    return;
+  }
+
+  const epochSeconds = Math.floor(lastCatchall.getTime() / 1000);
+
+  // Collect all tracked domains across workstreams so we can EXCLUDE them
+  const workstreamList = await callMcp('list_workstreams', { status: 'active' });
+  const wsIds: string[] = [];
+  for (const line of workstreamList.split('\n')) {
+    const match = line.match(/\(([^)]+)\) — /);
+    if (match && match[1] !== '_catchall') wsIds.push(match[1]);
+  }
+
+  const allDomains = new Set<string>();
+  for (const wsId of wsIds) {
+    try {
+      const domainsText = await callMcp('get_workstream_domains', { workstream_id: wsId });
+      if (domainsText !== 'No domains tracked.') {
+        for (const d of domainsText.split(', ')) allDomains.add(d.trim());
+      }
+    } catch { /* skip */ }
+  }
+
+  // Phase 1: Metadata-only scan — list recent emails NOT from tracked domains
+  // Build exclusion query: -from:domain1 -from:domain2 ...
+  const ownerDomain = (process.env.GOOGLE_AGENT_EMAIL ?? '').split('@')[1];
+  const excludeDomains = [...allDomains];
+  if (ownerDomain) excludeDomains.push(ownerDomain);
+  const exclusions = excludeDomains.map(d => `-from:${d}`).join(' ');
+
+  let metadataLines: string[] = [];
+  const threadIds: string[] = [];
+  try {
+    const query = `${exclusions} after:${epochSeconds}`;
+    const { stdout } = await execFileAsync('gws', [
+      'gmail', 'users', 'messages', 'list',
+      '--params', JSON.stringify({ userId: 'me', q: query, maxResults: 20 }),
+      '--format', 'json',
+    ], { timeout: 15_000, env: process.env });
+
+    const result = JSON.parse(stdout);
+    if (!Array.isArray(result.messages) || result.messages.length === 0) {
+      log('  Catchall: no untracked emails since last scan');
+      await setLastScanTime('_catchall', new Date()).catch(() => {});
+      return;
+    }
+
+    // Dedupe by thread, get metadata for each
+    const threadSet = new Set<string>();
+    const msgIds: string[] = [];
+    for (const msg of result.messages) {
+      if (msg.threadId && !threadSet.has(msg.threadId)) {
+        threadSet.add(msg.threadId);
+        msgIds.push(msg.id);
+        threadIds.push(msg.threadId);
+      }
+    }
+
+    // Fetch metadata (subject, from, date) for each message
+    for (const msgId of msgIds.slice(0, 15)) {
+      try {
+        const { stdout: metaOut } = await execFileAsync('gws', [
+          'gmail', 'users', 'messages', 'get',
+          '--params', JSON.stringify({
+            userId: 'me', id: msgId,
+            format: 'metadata',
+            metadataHeaders: ['From', 'To', 'Subject', 'Date'],
+          }),
+          '--format', 'json',
+        ], { timeout: 10_000, env: process.env });
+
+        const meta = JSON.parse(metaOut);
+        const headers = meta.payload?.headers ?? [];
+        const get = (name: string) => headers.find((h: any) => h.name === name)?.value ?? '';
+        metadataLines.push(`- From: ${get('From')} | Subject: ${get('Subject')} | Date: ${get('Date')} | ThreadID: ${meta.threadId}`);
+      } catch { /* skip */ }
+    }
+  } catch (err) {
+    log(`  Catchall metadata fetch error: ${err}`);
+    return;
+  }
+
+  if (metadataLines.length === 0) {
+    log('  Catchall: no untracked emails');
+    await setLastScanTime('_catchall', new Date()).catch(() => {});
+    return;
+  }
+
+  log(`  Catchall: ${metadataLines.length} untracked emails found, triaging...`);
+
+  // Phase 2: LLM triage on metadata only — which threads are worth a deep read?
+  const triagePrompt = `You are triaging emails that don't belong to any tracked workstream.
+
+Active workstreams:
 ${workstreamList}
 
-Your job: find anything IMPORTANT that isn't covered by those workstreams.
-Look for:
-- Emails from unknown senders that seem business-relevant (not newsletters, not spam)
-- Slack messages in channels not associated with any workstream
-- Anything that looks like a commitment, deadline, or follow-up that doesn't clearly belong
+These emails arrived since the last scan and are NOT from any tracked domain:
+${metadataLines.join('\n')}
 
-For each item found, surface it with:
-- A one-line summary
-- Why it might be important
-- A suggested workstream (existing or new) to route it to
+For each email, classify as:
+- IMPORTANT: Cold inbound lead, new business opportunity, partnership inquiry, vendor proposal, legal notice, anything with urgency or business value
+- SKIP: Newsletter, marketing, automated notification, social media alert, subscription receipt, spam
 
-Return plain text, one item per paragraph. If nothing found, return "Nothing new on the radar."`;
+Return ONLY a JSON array of objects for IMPORTANT emails:
+[{"threadId": "...", "reason": "one-line why this matters", "suggested_workstream": "existing-id or 'new: Name'"}]
+
+If nothing is important, return: []`;
 
   try {
-    const result = await invokeClaude(prompt, 'catchall');
-    if (result && result.trim().length > 10) {
-      await callMcp('update_brief', { workstream_id: '_catchall', content: result.trim() });
-      log(`  Catchall brief updated (${result.length} chars)`);
+    const triageResult = await invokeClaude(triagePrompt, 'catchall-triage');
+
+    let flagged: { threadId: string; reason: string; suggested_workstream: string }[] = [];
+    try {
+      let jsonStr = triageResult.trim();
+      if (jsonStr.startsWith('```')) jsonStr = jsonStr.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
+      flagged = JSON.parse(jsonStr);
+    } catch {
+      log(`  Catchall triage: failed to parse response`);
+      await setLastScanTime('_catchall', new Date()).catch(() => {});
+      return;
+    }
+
+    if (!Array.isArray(flagged) || flagged.length === 0) {
+      log('  Catchall: nothing important in triage');
+      await setLastScanTime('_catchall', new Date()).catch(() => {});
+      return;
+    }
+
+    log(`  Catchall: ${flagged.length} important thread(s) flagged, deep reading...`);
+
+    // Phase 3: Deep read only the flagged threads with Opus
+    const deepPrompt = `You are reading emails that were flagged as potentially important — they don't belong to any tracked workstream.
+
+Active workstreams:
+${workstreamList}
+
+Flagged threads to read in full:
+${flagged.map(f => `  ThreadID: ${f.threadId} — ${f.reason}
+  Read: gws gmail users threads get --params '{"userId":"me","id":"${f.threadId}","format":"full"}' --format json`).join('\n\n')}
+
+Read each thread. For each one, determine:
+1. Is this genuinely important? (the triage may have been wrong)
+2. Should it be routed to an existing workstream, or does it warrant a new one?
+3. Are there any todos, commitments, or follow-ups?
+
+Return plain text: one paragraph per important thread with:
+- Who it's from and what they want
+- Why it matters
+- Suggested action (route to workstream X, create new workstream, reply needed, etc.)
+
+If nothing is actually important after reading, return "Nothing new on the radar."`;
+
+    const deepResult = await invokeClaude(deepPrompt, 'catchall-deep');
+    if (deepResult && deepResult.trim().length > 10) {
+      await callMcp('update_brief', { workstream_id: '_catchall', content: deepResult.trim() });
+      log(`  Catchall brief updated (${deepResult.length} chars)`);
     }
   } catch (err) {
     log(`  Catchall scan error: ${err}`);
   }
+
+  await setLastScanTime('_catchall', new Date()).catch(() => {});
 }
 
 // ── Claude Invocation ─────────────────────────────────────
@@ -638,13 +783,6 @@ async function runCommitmentCycle(): Promise<void> {
     for (const wsId of workstreams) {
       await scanWorkstream(wsId);
     }
-    // Only run catchall if at least one workstream had new content this cycle
-    // (if sources are active, there may be untracked activity too)
-    if (workstreamsWithChanges.size > 0) {
-      await scanCatchall();
-    } else {
-      log('Catchall: skipping — no new content on any workstream this cycle');
-    }
 
     log('Commitment cycle complete');
   } catch (err) {
@@ -816,14 +954,23 @@ async function main(): Promise<void> {
     }
   }
 
+  async function catchallLoop(): Promise<void> {
+    await new Promise(r => setTimeout(r, 60_000)); // first catchall after 1 min
+    while (true) {
+      await scanCatchall();
+      await new Promise(r => setTimeout(r, CATCHALL_INTERVAL_MS));
+    }
+  }
+
   // Task polling is lightweight (no LLM) — setInterval is fine
   setInterval(() => runScheduledTasks(), TASK_POLL_INTERVAL_MS);
 
   // Start loops (non-blocking — they run forever)
   commitmentLoop().catch(err => log(`Commitment loop fatal: ${err}`));
   briefLoop().catch(err => log(`Brief loop fatal: ${err}`));
+  catchallLoop().catch(err => log(`Catchall loop fatal: ${err}`));
 
-  log(`Scanner active: commitments every ${COMMITMENT_INTERVAL_MS / 60000}m (sequential), briefs every 1h, tasks every 60s`);
+  log(`Scanner active: commitments every ${COMMITMENT_INTERVAL_MS / 60000}m, briefs every 1h, catchall every 30m, tasks every 60s`);
 
   // Keep process alive
   process.on('SIGTERM', () => { log('Shutting down...'); process.exit(0); });
