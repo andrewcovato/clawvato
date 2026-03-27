@@ -10,6 +10,8 @@ const execFileAsync = promisify(execFile);
 
 const MEMORY_URL = process.env.CLAWVATO_MEMORY_INTERNAL_URL ?? 'http://brain-platform.railway.internal:8100/mcp';
 const AUTH_TOKEN = process.env.MCP_AUTH_TOKEN ?? '';
+const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN ?? '';
+const TASK_CHANNEL_ID = process.env.TASK_CHANNEL_ID ?? '';
 
 const log = (msg: string) => process.stderr.write(`[v3-scanner] ${msg}\n`);
 
@@ -93,8 +95,9 @@ FIREFLIES: Use the fireflies CLI if available:
 
 4. For everything you find:
    a. Extract NEW todos, commitments, and follow-ups (use the type definitions above).
-   b. Check EXISTING open items: are any now done? resolved? overtaken by events?
-      If yes, note the item ID and that it should be completed.
+   b. Check EXISTING open items against new evidence. For each change, propose an alteration
+      with a reason (what evidence you found). Do NOT silently complete items.
+      Alterations: "complete" (done), "cancel" (no longer relevant), "update" (change title/priority/date)
    c. Extract new people: name, entity_id (if they belong to a known entity), role, email.
    d. Note anything that changes the state of play for the brief.
 
@@ -108,7 +111,11 @@ Return ONLY valid JSON (no markdown fences) with this structure:
       "direction": "outbound|inbound|null", "source": "email|meeting|slack",
       "source_ref": "thread id or url or null" }
   ],
-  "completed_todo_ids": [],
+  "proposed_alterations": [
+    { "todo_id": "existing-todo-uuid", "action": "complete|cancel|update",
+      "reason": "Why — cite the specific evidence (email subject, date, sender)",
+      "updates": {} }
+  ],
   "new_people": [
     { "full_name": "...", "entity_id": "...", "role": "...", "email": "..." }
   ],
@@ -229,6 +236,87 @@ async function invokeClaude(prompt: string, label: string): Promise<string> {
   return stdout;
 }
 
+// ── Slack Posting ─────────────────────────────────────────
+
+async function postToSlack(channel: string, text: string, threadTs?: string): Promise<string | null> {
+  if (!SLACK_BOT_TOKEN || !channel) {
+    log('  Slack not configured — skipping post');
+    return null;
+  }
+
+  try {
+    const body: Record<string, string> = { channel, text };
+    if (threadTs) body.thread_ts = threadTs;
+
+    const response = await fetch('https://slack.com/api/chat.postMessage', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${SLACK_BOT_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+
+    const data = await response.json() as { ok: boolean; ts?: string; error?: string };
+    if (!data.ok) {
+      log(`  Slack post failed: ${data.error}`);
+      return null;
+    }
+    return data.ts ?? null;
+  } catch (err) {
+    log(`  Slack post error: ${err}`);
+    return null;
+  }
+}
+
+// ── Proposed Alterations (persisted in brain-platform DB) ──
+
+async function postProposedAlteration(alteration: { todo_id: string; action: string; reason: string; updates?: Record<string, unknown> }): Promise<void> {
+  // Create the alteration in the DB (supersedes any existing one for this todo)
+  const result = await callMcp('propose_alteration', {
+    todo_id: alteration.todo_id,
+    action: alteration.action,
+    reason: alteration.reason,
+    updates: alteration.updates,
+  });
+  log(`  Proposed alteration: ${result}`);
+
+  // Post to Slack for owner visibility
+  const actionEmoji = alteration.action === 'complete' ? '✅' : alteration.action === 'cancel' ? '🚫' : '✏️';
+  const actionLabel = alteration.action === 'complete' ? 'Mark done' : alteration.action === 'cancel' ? 'Cancel' : 'Update';
+
+  const text = `${actionEmoji} *Proposed: ${actionLabel}*\n${alteration.reason}\n\n_React ✅ to accept, or reply in thread to propose something else._`;
+
+  const ts = await postToSlack(TASK_CHANNEL_ID, text);
+  if (ts) {
+    log(`  Posted to Slack: ${alteration.action} ${alteration.todo_id.slice(0, 8)}`);
+    // TODO: update the alteration record with slack_ts for reaction tracking
+  }
+}
+
+// ── Reaction Listener ─────────────────────────────────────
+
+let reactionPollerStarted = false;
+
+function startReactionPoller(): void {
+  if (reactionPollerStarted || !SLACK_BOT_TOKEN || !TASK_CHANNEL_ID) return;
+  reactionPollerStarted = true;
+
+  // Poll for reactions every 30s on pending alterations
+  setInterval(async () => {
+    const pendingText = await callMcp('get_pending_alterations', {});
+    if (pendingText === 'No pending alterations.') return;
+
+    // TODO: parse pending alterations, check their slack_ts for reactions
+    // For now, alterations are accepted via CoS ("accept alteration X") or
+    // the accept_alteration MCP tool. Slack reaction polling can be added
+    // once the alteration records store slack_ts.
+
+  }, 30_000);
+
+  log('Reaction poller started (30s interval)');
+}
+
 // ── Result Processing ─────────────────────────────────────
 
 async function processResults(workstreamId: string, rawResult: string): Promise<void> {
@@ -244,9 +332,9 @@ async function processResults(workstreamId: string, rawResult: string): Promise<
     return;
   }
 
-  let newTodos = 0, completed = 0, newPeople = 0;
+  let newTodos = 0, proposedAlts = 0, newPeople = 0;
 
-  // New todos
+  // New todos — these are added immediately (new discoveries)
   if (Array.isArray(result.new_todos)) {
     for (const item of result.new_todos) {
       try {
@@ -268,19 +356,19 @@ async function processResults(workstreamId: string, rawResult: string): Promise<
     }
   }
 
-  // Completed todos
-  if (Array.isArray(result.completed_todo_ids)) {
-    for (const id of result.completed_todo_ids) {
+  // Proposed alterations — posted to Slack for confirmation, NOT applied immediately
+  if (Array.isArray(result.proposed_alterations)) {
+    for (const alt of result.proposed_alterations) {
       try {
-        await callMcp('complete_todo', { id });
-        completed++;
+        await postProposedAlteration(alt);
+        proposedAlts++;
       } catch (err) {
-        log(`  Failed to complete todo ${id}: ${err}`);
+        log(`  Failed to post alteration: ${err}`);
       }
     }
   }
 
-  // New people
+  // New people — added immediately
   if (Array.isArray(result.new_people)) {
     for (const person of result.new_people) {
       try {
@@ -298,7 +386,7 @@ async function processResults(workstreamId: string, rawResult: string): Promise<
     }
   }
 
-  log(`  ${workstreamId}: +${newTodos} todos, ${completed} completed, +${newPeople} people`);
+  log(`  ${workstreamId}: +${newTodos} todos, ${proposedAlts} proposed alterations, +${newPeople} people`);
 }
 
 // ── Main Cron Loop ────────────────────────────────────────
