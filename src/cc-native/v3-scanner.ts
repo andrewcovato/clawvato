@@ -63,14 +63,19 @@ ${GLOBAL_DEFINITIONS}
 ${contextText}
 
 INSTRUCTIONS:
-1. Search Gmail for anything related to this workstream since yesterday.
-   Use the people, domains, entity names, and shorthand above to craft your queries.
-   Cast a wide net — check by domain, by person, by entity name.
-   Read full threads for anything you find.
+You have Bash access. Use these tools to search sources:
 
-2. Check any Slack channels listed in artifacts.
+GMAIL: Use gws CLI to search and read emails.
+  gws gmail users messages list --params '{"userId":"me","q":"QUERY newer_than:1d","maxResults":20}' --format json
+  gws gmail users threads get --params '{"userId":"me","id":"THREAD_ID","format":"full"}' --format json
+  Use the people, domains, entity names, and shorthand above to craft your queries.
+  Cast a wide net — check by domain, by person, by entity name.
+  Read full threads for anything you find.
 
-3. Search Fireflies for meetings with any of the known people.
+SLACK: If Slack channels are listed in artifacts, search them.
+
+FIREFLIES: Use the fireflies CLI if available:
+  npx tsx tools/fireflies.ts search "QUERY"
 
 4. For everything you find:
    a. Extract NEW todos, commitments, and follow-ups (use the type definitions above).
@@ -119,6 +124,10 @@ async function updateBrief(workstreamId: string, mode: 'update' | 'refresh' = 'u
 ${contextText}
 
 INSTRUCTIONS:
+You have Bash access. Search sources using:
+  Gmail: gws gmail users messages list --params '{"userId":"me","q":"QUERY newer_than:1d","maxResults":20}' --format json
+  Gmail thread: gws gmail users threads get --params '{"userId":"me","id":"THREAD_ID","format":"full"}' --format json
+
 - Search Gmail, Slack, and Fireflies for recent activity related to this workstream
 - Write 2-3 paragraphs summarizing the latest state of affairs
 ${mode === 'update' ? `- Maintain continuity from the current brief shown above — carry forward anything still relevant
@@ -186,13 +195,16 @@ async function invokeClaude(prompt: string, label: string): Promise<string> {
     '--print',
     '--model', 'sonnet',
     '--output-format', 'text',
+    '--allowedTools', 'Bash,Read,Grep,Glob,WebSearch',
+    '--dangerously-skip-permissions',
     '-p', prompt,
   ], {
     timeout: 300_000, // 5 min
     maxBuffer: 10 * 1024 * 1024,
     env: {
       ...process.env,
-      // Prevent MCP config inheritance that could cause loops
+      // Prevent MCP config inheritance — scanner uses Bash tools (gws CLI, etc.)
+      // not the CoS's Slack channel MCP
       CLAUDE_MCP_CONFIG: '',
     },
   });
