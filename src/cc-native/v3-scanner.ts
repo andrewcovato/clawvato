@@ -18,6 +18,9 @@ const log = (msg: string) => process.stderr.write(`[v3-scanner] ${msg}\n`);
 // Track last successful scan per workstream (in-memory; resets on restart → 7d backfill)
 const lastScanTimes = new Map<string, Date>();
 
+// Track which workstreams had new content since last brief cycle
+const workstreamsWithChanges = new Set<string>();
+
 // ── MCP Client ────────────────────────────────────────────
 
 async function callMcp(toolName: string, args: Record<string, unknown> = {}): Promise<string> {
@@ -243,6 +246,7 @@ If nothing new was found, return empty arrays and empty string.`;
     const result = await invokeClaude(prompt, workstreamId);
     await processResults(workstreamId, result);
     lastScanTimes.set(workstreamId, scanStart);
+    workstreamsWithChanges.add(workstreamId); // Flag for brief update
   } catch (err) {
     log(`  Error scanning ${workstreamId}: ${err}`);
     // Don't update lastScanTime on failure — retry same window next cycle
@@ -541,10 +545,17 @@ async function runCommitmentCycle(): Promise<void> {
 
 async function runBriefCycle(): Promise<void> {
   try {
-    const workstreams = await getActiveWorkstreams();
-    log(`Brief cycle: updating ${workstreams.length} workstreams...`);
+    if (workstreamsWithChanges.size === 0) {
+      log('Brief cycle: no workstreams with changes, skipping');
+      return;
+    }
 
-    for (const wsId of workstreams) {
+    const toUpdate = [...workstreamsWithChanges];
+    workstreamsWithChanges.clear();
+
+    log(`Brief cycle: updating ${toUpdate.length} workstreams with changes...`);
+
+    for (const wsId of toUpdate) {
       await updateBrief(wsId);
     }
 
