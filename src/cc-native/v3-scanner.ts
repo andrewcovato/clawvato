@@ -39,9 +39,17 @@ async function callMcp(toolName: string, args: Record<string, unknown> = {}): Pr
 const GLOBAL_DEFINITIONS = `
 ## Item Type Definitions
 
-**TODO**: A task that needs to be done. Something to build, write, send, create, prepare, review, or complete.
-**COMMITMENT**: A promise made to an external party with an expectation of delivery. Has a recipient, deliverable, and ideally a deadline. Missing one damages trust.
-**FOLLOW_UP**: A communication that needs chasing. Direction: outbound (I owe them a response) or inbound (they owe me a response).
+**TODO**: An internal task that needs to be done. Something to build, write, send, create, prepare, review, or complete. No external party is waiting on this — it's your own work.
+Examples: "Review the MOS strategy doc", "Complete the Aperiam voting", "Grant Phil access to the Google Doc"
+
+**COMMITMENT**: A promise made to an external party. Someone OUTSIDE your team is counting on this being delivered. It's like a high-priority todo because there's an external stakeholder aware of the commitment and reputational weight if you miss it. Has a recipient (who you promised), a deliverable (what you promised), and ideally a deadline.
+Examples: "Send API specs to Phil by March 28", "Confirm no additional MSA comments to Glenton", "Deliver scope doc to Jono by end of week"
+NOT a commitment: Calendar events, scheduled meetings, recurring syncs. A meeting is just a meeting — unless you promised to bring/deliver something TO that meeting.
+
+**FOLLOW_UP**: A communication that needs chasing — either you owe someone a response, or someone owes you one. Directional:
+- OUTBOUND: You need to reply, reach out, or circle back. You're the bottleneck.
+- INBOUND: They owe you a response. You're waiting.
+Examples: "Haven't replied to Daisy about the RFP (outbound)", "Phil hasn't responded to scope doc (inbound)"
 `;
 
 // ── Commitment Scan ───────────────────────────────────────
@@ -65,12 +73,18 @@ ${contextText}
 INSTRUCTIONS:
 You have Bash access. Use these tools to search sources:
 
-GMAIL: Use gws CLI to search and read emails.
-  gws gmail users messages list --params '{"userId":"me","q":"QUERY newer_than:1d","maxResults":20}' --format json
-  gws gmail users threads get --params '{"userId":"me","id":"THREAD_ID","format":"full"}' --format json
+GMAIL: Use gws CLI to search and read emails. Search BOTH inbox AND sent mail.
+  Search inbox:  gws gmail users messages list --params '{"userId":"me","q":"QUERY newer_than:1d","maxResults":20}' --format json
+  Search sent:   gws gmail users messages list --params '{"userId":"me","q":"in:sent QUERY newer_than:1d","maxResults":20}' --format json
+  Read thread:   gws gmail users threads get --params '{"userId":"me","id":"THREAD_ID","format":"full"}' --format json
   Use the people, domains, entity names, and shorthand above to craft your queries.
   Cast a wide net — check by domain, by person, by entity name.
   Read full threads for anything you find.
+
+  IMPORTANT: Sent mail reveals:
+  - Commitments YOU made ("I'll send that by Friday")
+  - Follow-ups YOU completed (replied to someone → mark inbound follow-up done)
+  - Todo status changes (you sent the doc → todo is done)
 
 SLACK: If Slack channels are listed in artifacts, search them.
 
@@ -125,10 +139,11 @@ ${contextText}
 
 INSTRUCTIONS:
 You have Bash access. Search sources using:
-  Gmail: gws gmail users messages list --params '{"userId":"me","q":"QUERY newer_than:1d","maxResults":20}' --format json
-  Gmail thread: gws gmail users threads get --params '{"userId":"me","id":"THREAD_ID","format":"full"}' --format json
+  Gmail (inbox): gws gmail users messages list --params '{"userId":"me","q":"QUERY newer_than:1d","maxResults":20}' --format json
+  Gmail (sent):  gws gmail users messages list --params '{"userId":"me","q":"in:sent QUERY newer_than:1d","maxResults":20}' --format json
+  Gmail thread:  gws gmail users threads get --params '{"userId":"me","id":"THREAD_ID","format":"full"}' --format json
 
-- Search Gmail, Slack, and Fireflies for recent activity related to this workstream
+- Search Gmail (BOTH inbox and sent), Slack, and Fireflies for recent activity related to this workstream
 - Write 2-3 paragraphs summarizing the latest state of affairs
 ${mode === 'update' ? `- Maintain continuity from the current brief shown above — carry forward anything still relevant
 - If something is no longer relevant, note it as [RESOLVED: brief description]
