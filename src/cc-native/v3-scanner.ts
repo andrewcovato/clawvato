@@ -8,7 +8,7 @@ import { promisify } from 'util';
 
 const execFileAsync = promisify(execFile);
 
-const MEMORY_URL = process.env.CLAWVATO_MEMORY_INTERNAL_URL ?? 'http://brain-platform.railway.internal:8100/mcp';
+const MEMORY_URL = process.env.CLAWVATO_MEMORY_INTERNAL_URL ?? 'http://brain-platform.railway.internal:8100/api/tool';
 const AUTH_TOKEN = process.env.MCP_AUTH_TOKEN ?? '';
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN ?? '';
 const TASK_CHANNEL_ID = process.env.TASK_CHANNEL_ID ?? '';
