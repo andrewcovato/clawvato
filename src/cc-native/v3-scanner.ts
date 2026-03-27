@@ -362,6 +362,8 @@ async function invokeClaude(prompt: string, label: string): Promise<string> {
     maxBuffer: 10 * 1024 * 1024,
     env: {
       ...process.env,
+      // Strip API key so claude CLI uses OAuth/Max plan ($0) instead of API billing
+      ANTHROPIC_API_KEY: '',
       // Prevent MCP config inheritance — scanner uses Bash tools (gws CLI, etc.)
       // not the CoS's Slack channel MCP
       CLAUDE_MCP_CONFIG: '',
