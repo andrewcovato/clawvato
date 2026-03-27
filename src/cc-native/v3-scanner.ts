@@ -15,8 +15,17 @@ const TASK_CHANNEL_ID = process.env.TASK_CHANNEL_ID ?? '';
 
 const log = (msg: string) => process.stderr.write(`[v3-scanner] ${msg}\n`);
 
-// Track last successful scan per workstream (in-memory; resets on restart → 7d backfill)
-const lastScanTimes = new Map<string, Date>();
+// Last scan times are persisted in brain-platform's cron_state table via MCP
+// No more in-memory map that resets on every deploy
+
+async function getLastScanTime(workstreamId: string): Promise<Date | null> {
+  const result = await callMcp('get_last_scan', { workstream_id: workstreamId, job_type: 'commitment_scan' });
+  return result === 'never' ? null : new Date(result);
+}
+
+async function setLastScanTime(workstreamId: string, time: Date): Promise<void> {
+  await callMcp('set_last_scan', { workstream_id: workstreamId, job_type: 'commitment_scan', timestamp: time.toISOString() });
+}
 
 // Track which workstreams had new content since last brief cycle
 const workstreamsWithChanges = new Set<string>();
@@ -112,7 +121,7 @@ async function checkForNewContent(workstreamId: string, scanWindow: string): Pro
         for (const match of channelMatches) {
           const channelId = match.replace('slack://', '');
           try {
-            const lastScan = lastScanTimes.get(workstreamId);
+            const lastScan = await getLastScanTime(workstreamId);
             const oldest = lastScan ? String(lastScan.getTime() / 1000) : String((Date.now() - 7 * 86400000) / 1000);
 
             const response = await fetch('https://slack.com/api/conversations.history', {
@@ -149,8 +158,8 @@ async function checkForNewContent(workstreamId: string, scanWindow: string): Pro
 async function scanWorkstream(workstreamId: string): Promise<void> {
   log(`Scanning ${workstreamId}...`);
 
-  // Determine scan window based on last scan time
-  const lastScan = lastScanTimes.get(workstreamId);
+  // Determine scan window based on last scan time (persisted in DB)
+  const lastScan = await getLastScanTime(workstreamId);
   const scanWindow = lastScan
     ? `after:${lastScan.toISOString().split('T')[0]}`
     : 'newer_than:7d'; // First scan: 7 days back
@@ -245,7 +254,7 @@ If nothing new was found, return empty arrays and empty string.`;
     const scanStart = new Date();
     const result = await invokeClaude(prompt, workstreamId);
     await processResults(workstreamId, result);
-    lastScanTimes.set(workstreamId, scanStart);
+    await setLastScanTime(workstreamId, scanStart);
     workstreamsWithChanges.add(workstreamId); // Flag for brief update
   } catch (err) {
     log(`  Error scanning ${workstreamId}: ${err}`);
@@ -535,7 +544,13 @@ async function runCommitmentCycle(): Promise<void> {
     for (const wsId of workstreams) {
       await scanWorkstream(wsId);
     }
-    await scanCatchall();
+    // Only run catchall if at least one workstream had new content this cycle
+    // (if sources are active, there may be untracked activity too)
+    if (workstreamsWithChanges.size > 0) {
+      await scanCatchall();
+    } else {
+      log('Catchall: skipping — no new content on any workstream this cycle');
+    }
 
     log('Commitment cycle complete');
   } catch (err) {
