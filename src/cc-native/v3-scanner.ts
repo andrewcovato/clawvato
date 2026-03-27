@@ -333,7 +333,7 @@ async function invokeClaude(prompt: string, label: string): Promise<string> {
 
   const { stdout } = await execFileAsync('claude', [
     '--print',
-    '--model', 'sonnet',
+    '--model', 'opus',
     '--output-format', 'text',
     '--allowedTools', 'Bash,Read,Grep,Glob,WebSearch',
     '--dangerously-skip-permissions',
