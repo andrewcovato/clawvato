@@ -59,33 +59,79 @@ Examples: "Haven't replied to Daisy about the RFP (outbound)", "Phil hasn't resp
 
 // ── Commitment Scan ───────────────────────────────────────
 
-async function checkForNewContent(workstreamId: string, scanWindow: string): Promise<boolean> {
-  // Lightweight check: any new Gmail messages for this workstream's domains/people?
-  // Uses gws CLI directly — no LLM needed
+interface ContentCheckResult {
+  hasNew: boolean;
+  sources: string[]; // which sources had new content: 'gmail', 'slack', 'fireflies'
+}
+
+async function checkForNewContent(workstreamId: string, scanWindow: string): Promise<ContentCheckResult> {
+  const sources: string[] = [];
+
+  // 1. Check Gmail — any new messages for this workstream's domains?
   try {
     const domainsText = await callMcp('get_workstream_domains', { workstream_id: workstreamId });
-    if (domainsText === 'No domains tracked.') return true; // Can't check, assume yes
+    if (domainsText !== 'No domains tracked.') {
+      const domains = domainsText.split(', ').filter(Boolean);
+      if (domains.length > 0) {
+        // Check inbox + sent across all domains
+        const domainQuery = domains.map(d => `from:${d} OR to:${d}`).join(' OR ');
+        const query = `(${domainQuery}) ${scanWindow}`;
+        const { stdout } = await execFileAsync('gws', [
+          'gmail', 'users', 'messages', 'list',
+          '--params', JSON.stringify({ userId: 'me', q: query, maxResults: 1 }),
+          '--format', 'json',
+        ], { timeout: 15_000, env: process.env });
 
-    const domains = domainsText.split(', ').filter(Boolean);
-    if (domains.length === 0) return true;
-
-    // Build a quick Gmail query from first domain
-    const query = `from:${domains[0]} OR to:${domains[0]} ${scanWindow}`;
-    const { stdout } = await execFileAsync('gws', [
-      'gmail', 'users', 'messages', 'list',
-      '--params', JSON.stringify({ userId: 'me', q: query, maxResults: 1 }),
-      '--format', 'json',
-    ], { timeout: 15_000, env: process.env });
-
-    const result = JSON.parse(stdout);
-    const hasMessages = Array.isArray(result.messages) && result.messages.length > 0;
-    if (!hasMessages) {
-      log(`  ${workstreamId}: no new content since last scan, skipping`);
+        const result = JSON.parse(stdout);
+        if (Array.isArray(result.messages) && result.messages.length > 0) {
+          sources.push('gmail');
+        }
+      }
     }
-    return hasMessages;
-  } catch {
-    return true; // On error, assume there's content (fail open)
+  } catch { /* fail open on error — will check other sources */ }
+
+  // 2. Check Slack — any new messages in workstream's channels?
+  try {
+    const artifactsText = await callMcp('get_artifacts', { workstream_id: workstreamId, type: 'slack_channel' });
+    if (artifactsText !== 'No artifacts.') {
+      // Extract channel IDs from artifact URLs (slack://C0XXXXX)
+      const channelMatches = artifactsText.match(/slack:\/\/(\w+)/g);
+      if (channelMatches) {
+        for (const match of channelMatches) {
+          const channelId = match.replace('slack://', '');
+          try {
+            const lastScan = lastScanTimes.get(workstreamId);
+            const oldest = lastScan ? String(lastScan.getTime() / 1000) : String((Date.now() - 7 * 86400000) / 1000);
+
+            const response = await fetch('https://slack.com/api/conversations.history', {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${SLACK_BOT_TOKEN}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ channel: channelId, oldest, limit: 1 }),
+            });
+            const data = await response.json() as { ok: boolean; messages?: unknown[] };
+            if (data.ok && data.messages && data.messages.length > 0) {
+              sources.push('slack');
+              break; // One channel with activity is enough
+            }
+          } catch { /* skip this channel */ }
+        }
+      }
+    }
+  } catch { /* fail open */ }
+
+  // 3. Check Fireflies — any new transcripts with workstream's people?
+  // TODO: lightweight Fireflies check (skip for now — less frequent than email/Slack)
+
+  if (sources.length === 0) {
+    log(`  ${workstreamId}: no new content on any channel, skipping`);
+  } else {
+    log(`  ${workstreamId}: new content on ${sources.join(', ')}`);
   }
+
+  return { hasNew: sources.length > 0, sources };
 }
 
 async function scanWorkstream(workstreamId: string): Promise<void> {
@@ -97,9 +143,11 @@ async function scanWorkstream(workstreamId: string): Promise<void> {
     ? `after:${lastScan.toISOString().split('T')[0]}`
     : 'newer_than:7d'; // First scan: 7 days back
 
-  // Lightweight check — skip expensive LLM call if no new content
-  const hasNew = await checkForNewContent(workstreamId, scanWindow);
-  if (!hasNew) return;
+  // Lightweight check — skip expensive LLM call if no new content on any channel
+  const contentCheck = await checkForNewContent(workstreamId, scanWindow);
+  if (!contentCheck.hasNew) return;
+
+  const activeSources = contentCheck.sources;
 
   // Get full context via MCP
   const contextText = await callMcp('get_workstream_context', { workstream_id: workstreamId });
@@ -116,11 +164,12 @@ ${GLOBAL_DEFINITIONS}
 ${contextText}
 
 INSTRUCTIONS:
-You have Bash access. Use these tools to search sources:
+You have Bash access. New content was detected on: ${activeSources.join(', ')}.
+ONLY search the sources listed above — skip sources with no new content.
 
-GMAIL: Use gws CLI to search and read emails. Search BOTH inbox AND sent mail.
+${activeSources.includes('gmail') ? `GMAIL: Use gws CLI to search and read emails. Search BOTH inbox AND sent mail.
   Search inbox:  gws gmail users messages list --params '{"userId":"me","q":"QUERY ${scanWindow}","maxResults":20}' --format json
-  Search sent:   gws gmail users messages list --params '{"userId":"me","q":"in:sent QUERY ${scanWindow}","maxResults":20}' --format json
+  Search sent:   gws gmail users messages list --params '{"userId":"me","q":"in:sent QUERY ${scanWindow}","maxResults":20}' --format json` : '(Gmail: no new content — skip)'}
   Read thread:   gws gmail users threads get --params '{"userId":"me","id":"THREAD_ID","format":"full"}' --format json
   Use the people, domains, entity names, and shorthand above to craft your queries.
   Cast a wide net — check by domain, by person, by entity name.
@@ -131,10 +180,9 @@ GMAIL: Use gws CLI to search and read emails. Search BOTH inbox AND sent mail.
   - Follow-ups YOU completed (replied to someone → mark inbound follow-up done)
   - Todo status changes (you sent the doc → todo is done)
 
-SLACK: If Slack channels are listed in artifacts, search them.
+${activeSources.includes('slack') ? 'SLACK: New messages detected in Slack channels listed in artifacts. Search them.' : '(Slack: no new content — skip)'}
 
-FIREFLIES: Use the fireflies CLI if available:
-  npx tsx tools/fireflies.ts search "QUERY"
+${activeSources.includes('fireflies') ? 'FIREFLIES: New transcripts detected. Use: npx tsx tools/fireflies.ts search "QUERY"' : '(Fireflies: no new content — skip)'}
 
 4. IMPORTANT — TEMPORAL RECONCILIATION:
    You are reading emails, Slack messages, and meeting transcripts that may span days.
@@ -451,8 +499,8 @@ async function processResults(workstreamId: string, rawResult: string): Promise<
 
 // ── Main Cron Loop ────────────────────────────────────────
 
-const COMMITMENT_INTERVAL_MS = 60 * 60 * 1000;   // 1 hour (was 5 min — too aggressive)
-const BRIEF_INTERVAL_MS = 4 * 60 * 60 * 1000;    // 4 hours (was 1 hour)
+const COMMITMENT_INTERVAL_MS = 5 * 60 * 1000;    // 5 minutes — lightweight check skips if no new content
+const BRIEF_INTERVAL_MS = 60 * 60 * 1000;        // 1 hour
 
 async function getActiveWorkstreams(): Promise<string[]> {
   const text = await callMcp('list_workstreams', { status: 'active' });
