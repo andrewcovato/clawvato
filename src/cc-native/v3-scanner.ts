@@ -59,8 +59,47 @@ Examples: "Haven't replied to Daisy about the RFP (outbound)", "Phil hasn't resp
 
 // ── Commitment Scan ───────────────────────────────────────
 
+async function checkForNewContent(workstreamId: string, scanWindow: string): Promise<boolean> {
+  // Lightweight check: any new Gmail messages for this workstream's domains/people?
+  // Uses gws CLI directly — no LLM needed
+  try {
+    const domainsText = await callMcp('get_workstream_domains', { workstream_id: workstreamId });
+    if (domainsText === 'No domains tracked.') return true; // Can't check, assume yes
+
+    const domains = domainsText.split(', ').filter(Boolean);
+    if (domains.length === 0) return true;
+
+    // Build a quick Gmail query from first domain
+    const query = `from:${domains[0]} OR to:${domains[0]} ${scanWindow}`;
+    const { stdout } = await execFileAsync('gws', [
+      'gmail', 'users', 'messages', 'list',
+      '--params', JSON.stringify({ userId: 'me', q: query, maxResults: 1 }),
+      '--format', 'json',
+    ], { timeout: 15_000, env: process.env });
+
+    const result = JSON.parse(stdout);
+    const hasMessages = Array.isArray(result.messages) && result.messages.length > 0;
+    if (!hasMessages) {
+      log(`  ${workstreamId}: no new content since last scan, skipping`);
+    }
+    return hasMessages;
+  } catch {
+    return true; // On error, assume there's content (fail open)
+  }
+}
+
 async function scanWorkstream(workstreamId: string): Promise<void> {
   log(`Scanning ${workstreamId}...`);
+
+  // Determine scan window based on last scan time
+  const lastScan = lastScanTimes.get(workstreamId);
+  const scanWindow = lastScan
+    ? `after:${lastScan.toISOString().split('T')[0]}`
+    : 'newer_than:7d'; // First scan: 7 days back
+
+  // Lightweight check — skip expensive LLM call if no new content
+  const hasNew = await checkForNewContent(workstreamId, scanWindow);
+  if (!hasNew) return;
 
   // Get full context via MCP
   const contextText = await callMcp('get_workstream_context', { workstream_id: workstreamId });
@@ -68,12 +107,6 @@ async function scanWorkstream(workstreamId: string): Promise<void> {
     log(`  Workstream ${workstreamId} not found, skipping`);
     return;
   }
-
-  // Determine scan window based on last scan time
-  const lastScan = lastScanTimes.get(workstreamId);
-  const scanWindow = lastScan
-    ? `after:${lastScan.toISOString().split('T')[0]}`
-    : 'newer_than:7d'; // First scan: 7 days back
 
   const prompt = `You are scanning for updates related to a business workstream.
 Scan window: ${lastScan ? `since ${lastScan.toISOString()}` : 'last 7 days (initial scan)'}
