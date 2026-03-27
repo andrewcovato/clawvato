@@ -94,12 +94,15 @@ FIREFLIES: Use the fireflies CLI if available:
   npx tsx tools/fireflies.ts search "QUERY"
 
 4. For everything you find:
-   a. Extract NEW todos, commitments, and follow-ups (use the type definitions above).
-   b. Check EXISTING open items against new evidence. For each change, propose an alteration
-      with a reason (what evidence you found). Do NOT silently complete items.
+   a. BEFORE creating any new item, check the OPEN ITEMS list above carefully.
+      - If an identical or near-identical item already exists in the same state → DO NOT create a duplicate. Skip it entirely.
+      - If something has changed, progressed, or new evidence exists for an existing item → propose an ALTERATION (not a new item). E.g., a due date changed, the item was completed, new context emerged.
+   b. Only create genuinely NEW todos, commitments, and follow-ups that don't already exist in any form.
+   c. For existing items with new evidence, propose alterations:
       Alterations: "complete" (done), "cancel" (no longer relevant), "update" (change title/priority/date)
-   c. Extract new people: name, entity_id (if they belong to a known entity), role, email.
-   d. Note anything that changes the state of play for the brief.
+      Include the existing item's ID and cite specific evidence.
+   d. Extract new people: name, entity_id (if they belong to a known entity), role, email.
+   e. Note anything that changes the state of play for the brief.
 
 5. For each item, specify which workstream it belongs to.
 
