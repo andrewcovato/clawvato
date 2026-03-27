@@ -418,8 +418,8 @@ async function processResults(workstreamId: string, rawResult: string): Promise<
 
 // ── Main Cron Loop ────────────────────────────────────────
 
-const COMMITMENT_INTERVAL_MS = 5 * 60 * 1000;   // 5 minutes
-const BRIEF_INTERVAL_MS = 60 * 60 * 1000;        // 1 hour
+const COMMITMENT_INTERVAL_MS = 60 * 60 * 1000;   // 1 hour (was 5 min — too aggressive)
+const BRIEF_INTERVAL_MS = 4 * 60 * 60 * 1000;    // 4 hours (was 1 hour)
 
 async function getActiveWorkstreams(): Promise<string[]> {
   const text = await callMcp('list_workstreams', { status: 'active' });
