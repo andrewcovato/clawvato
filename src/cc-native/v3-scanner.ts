@@ -463,6 +463,112 @@ async function runBriefCycle(): Promise<void> {
   }
 }
 
+// ── Scheduled Task Executor ───────────────────────────────
+
+const TASK_POLL_INTERVAL_MS = 60 * 1000; // Check every 60s for due tasks
+
+async function runScheduledTasks(): Promise<void> {
+  try {
+    // Get due tasks from brain-platform
+    const dueText = await callMcp('list_scheduled_tasks', { status: 'active' });
+    if (dueText === 'No scheduled tasks.') return;
+
+    // Parse tasks — look for ones where next_run is in the past
+    const now = new Date();
+    const lines = dueText.split('\n').filter((l: string) => l.startsWith('- [active]'));
+
+    for (const line of lines) {
+      // Extract next run time and ID
+      const nextMatch = line.match(/next: (\S+)/);
+      const idMatch = line.match(/\(([0-9a-f-]{36})\)/);
+      const titleMatch = line.match(/\*\*(.+?)\*\*/);
+
+      if (!nextMatch || !idMatch || !titleMatch) continue;
+
+      const nextRun = new Date(nextMatch[1]);
+      const taskId = idMatch[1];
+      const title = titleMatch[1];
+
+      if (nextRun > now) continue; // Not due yet
+
+      log(`Executing scheduled task: ${title} (${taskId})`);
+
+      // Extract instruction — we need to fetch it via a separate call
+      // For now, use the title as the instruction hint
+      // TODO: add get_scheduled_task(id) MCP tool for full details
+      try {
+        const result = await invokeClaude(
+          `You are executing a scheduled task: "${title}". ` +
+          `You have access to the brain-platform MCP tools via Bash and gws CLI for email. ` +
+          `Complete the task and return a ONE-LINE summary of what happened or what you found. ` +
+          `If the task involves checking todos, use: curl -s -X POST "http://brain-platform.railway.internal:8100/api/tool" ` +
+          `-H "Authorization: Bearer ${AUTH_TOKEN}" -H "Content-Type: application/json" ` +
+          `-d '{"params":{"name":"get_todos","arguments":{"status":"open"}}}'`,
+          `task-${taskId.slice(0, 8)}`
+        );
+
+        const oneLiner = result.trim().split('\n')[0].slice(0, 200);
+        await postToSlack(TASK_CHANNEL_ID, `📋 *${title}*: ${oneLiner}`);
+
+        // Parse schedule to compute next_run for recurring tasks
+        const scheduleMatch = line.match(/cron: ([^)]+)/);
+        const isRecurring = scheduleMatch != null;
+
+        if (isRecurring) {
+          // Compute next run from cron expression
+          const nextRunAt = computeNextCron(scheduleMatch![1], now);
+          // Update via direct API call — markTaskRun needs an MCP tool
+          // For now just log it; the task stays active and will re-run
+          log(`  Recurring task "${title}" — next run: ${nextRunAt.toISOString()}`);
+        }
+
+        // Mark as run — for one-off tasks this completes them
+        // TODO: add mark_task_run MCP tool
+        if (!scheduleMatch) {
+          await callMcp('cancel_scheduled_task', { id: taskId }); // one-off → done
+        }
+
+        log(`  Task "${title}" completed: ${oneLiner}`);
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        await postToSlack(TASK_CHANNEL_ID, `⚠️ *${title}*: Error — ${errMsg.slice(0, 100)}`);
+        log(`  Task "${title}" failed: ${errMsg}`);
+      }
+    }
+  } catch (err) {
+    // Silently skip if brain-platform is unavailable
+  }
+}
+
+// Simple cron next-run calculator (handles basic patterns)
+function computeNextCron(expr: string, from: Date): Date {
+  const parts = expr.split(' ');
+  if (parts.length !== 5) return new Date(from.getTime() + 86400000); // fallback: +1 day
+
+  const [min, hour, dayOfMonth, month, dayOfWeek] = parts;
+  const next = new Date(from);
+
+  // Simple case: daily at specific time (e.g., "0 8 * * *")
+  if (dayOfMonth === '*' && month === '*' && dayOfWeek === '*') {
+    next.setUTCHours(parseInt(hour), parseInt(min), 0, 0);
+    if (next <= from) next.setDate(next.getDate() + 1);
+    return next;
+  }
+
+  // Weekly on specific day (e.g., "0 8 * * 1" = Monday 8am)
+  if (dayOfMonth === '*' && month === '*' && dayOfWeek !== '*') {
+    const targetDay = parseInt(dayOfWeek);
+    next.setUTCHours(parseInt(hour), parseInt(min), 0, 0);
+    while (next.getUTCDay() !== targetDay || next <= from) {
+      next.setDate(next.getDate() + 1);
+    }
+    return next;
+  }
+
+  // Fallback: +1 day
+  return new Date(from.getTime() + 86400000);
+}
+
 // ── Entry Point ───────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -478,14 +584,18 @@ async function main(): Promise<void> {
     log('Scanner will retry on next cycle.');
   }
 
+  // Start reaction poller for proposed alterations
+  startReactionPoller();
+
   // Run initial commitment scan after 30s delay
   setTimeout(() => runCommitmentCycle(), 30_000);
 
-  // Schedule recurring scans
+  // Schedule recurring cycles
   setInterval(() => runCommitmentCycle(), COMMITMENT_INTERVAL_MS);
   setInterval(() => runBriefCycle(), BRIEF_INTERVAL_MS);
+  setInterval(() => runScheduledTasks(), TASK_POLL_INTERVAL_MS);
 
-  log(`Scanner active: commitments every 5m, briefs every 1h`);
+  log(`Scanner active: commitments every 5m, briefs every 1h, tasks every 60s`);
 
   // Keep process alive
   process.on('SIGTERM', () => { log('Shutting down...'); process.exit(0); });
