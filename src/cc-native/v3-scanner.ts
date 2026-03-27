@@ -76,6 +76,7 @@ interface ContentCheckResult {
   sources: string[];           // which sources had new content
   gmailThreadIds: string[];    // specific new thread IDs to read
   slackChannels: string[];     // channels with new messages
+  firefliesMeetingIds: string[]; // meeting IDs with new transcripts
 }
 
 async function checkForNewContent(workstreamId: string, scanWindow: string): Promise<ContentCheckResult> {
@@ -146,16 +147,54 @@ async function checkForNewContent(workstreamId: string, scanWindow: string): Pro
     }
   } catch { /* fail open */ }
 
-  // 3. Check Fireflies — any new transcripts with workstream's people?
-  // TODO: lightweight Fireflies check (skip for now — less frequent than email/Slack)
+  // 3. Check Fireflies — any new meetings with workstream's people?
+  const firefliesMeetingIds: string[] = [];
+  try {
+    const peopleText = await callMcp('get_people_for_workstream', { workstream_id: workstreamId });
+    if (peopleText !== 'No people.' && peopleText.length > 0) {
+      // Extract people names for search
+      const nameMatches = peopleText.match(/\*\*(.+?)\*\*/g);
+      if (nameMatches) {
+        const names = nameMatches.map(m => m.replace(/\*\*/g, '')).slice(0, 5); // cap at 5 people
+        const lastScan = await getLastScanTime(workstreamId).catch(() => null);
+        const daysBack = lastScan
+          ? Math.max(1, Math.ceil((Date.now() - lastScan.getTime()) / 86400000))
+          : 7;
+
+        for (const name of names) {
+          try {
+            const { stdout } = await execFileAsync('npx', [
+              'tsx', 'tools/fireflies.ts', 'search',
+              '--query', name,
+              '--days-back', String(daysBack),
+              '--max-results', '5',
+            ], { timeout: 15_000, env: process.env });
+
+            // Parse meeting IDs from output lines like "- Title | Date | ... | ID: abc123"
+            const idMatches = stdout.match(/ID: (\S+)/g);
+            if (idMatches) {
+              for (const m of idMatches) {
+                const id = m.replace('ID: ', '');
+                if (!firefliesMeetingIds.includes(id)) firefliesMeetingIds.push(id);
+              }
+            }
+          } catch { /* skip this person */ }
+        }
+
+        if (firefliesMeetingIds.length > 0) {
+          sources.push('fireflies');
+        }
+      }
+    }
+  } catch { /* fail open */ }
 
   if (sources.length === 0) {
     log(`  ${workstreamId}: no new content on any channel, skipping`);
   } else {
-    log(`  ${workstreamId}: new content on ${sources.join(', ')} (${gmailThreadIds.length} threads, ${slackChannels.length} channels)`);
+    log(`  ${workstreamId}: new content on ${sources.join(', ')} (${gmailThreadIds.length} threads, ${slackChannels.length} channels, ${firefliesMeetingIds.length} meetings)`);
   }
 
-  return { hasNew: sources.length > 0, sources, gmailThreadIds, slackChannels };
+  return { hasNew: sources.length > 0, sources, gmailThreadIds, slackChannels, firefliesMeetingIds };
 }
 
 async function scanWorkstream(workstreamId: string): Promise<void> {
@@ -186,7 +225,7 @@ async function scanWorkstream(workstreamId: string): Promise<void> {
   if (!contentCheck.hasNew) return;
 
   const activeSources = contentCheck.sources;
-  const { gmailThreadIds, slackChannels: activeSlackChannels } = contentCheck;
+  const { gmailThreadIds, slackChannels: activeSlackChannels, firefliesMeetingIds } = contentCheck;
 
   // Get full context via MCP
   const contextText = await callMcp('get_workstream_context', { workstream_id: workstreamId });
@@ -219,7 +258,10 @@ Do NOT search for additional threads. Do NOT use format:"full" (too large). Only
 
 ${activeSources.includes('slack') ? `SLACK: New messages in ${activeSlackChannels.length} channel(s): ${activeSlackChannels.join(', ')}. Read recent history from ONLY these channels.` : '(Slack: no new content — skip)'}
 
-${activeSources.includes('fireflies') ? 'FIREFLIES: New transcripts detected. Use: npx tsx tools/fireflies.ts search "QUERY"' : '(Fireflies: no new content — skip)'}
+${activeSources.includes('fireflies') ? `FIREFLIES: ${firefliesMeetingIds.length} meeting(s) with workstream people detected. Read each transcript:
+${firefliesMeetingIds.map(id => `  npx tsx tools/fireflies.ts transcript --id "${id}"`).join('\n')}
+For a quick summary first: npx tsx tools/fireflies.ts summary --id "MEETING_ID"
+Do NOT search for additional meetings — only read the ones listed above.` : '(Fireflies: no new content — skip)'}
 
 4. IMPORTANT — TEMPORAL RECONCILIATION:
    You are reading emails, Slack messages, and meeting transcripts that may span days.
