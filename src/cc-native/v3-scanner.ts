@@ -121,8 +121,9 @@ async function checkForNewContent(workstreamId: string, scanWindow: string): Pro
         for (const match of channelMatches) {
           const channelId = match.replace('slack://', '');
           try {
-            const lastScan = await getLastScanTime(workstreamId);
-            const oldest = lastScan ? String(lastScan.getTime() / 1000) : String((Date.now() - 7 * 86400000) / 1000);
+            const lastScan = await getLastScanTime(workstreamId).catch(() => null);
+            if (!lastScan) continue; // No baseline yet — skip
+            const oldest = String(lastScan.getTime() / 1000);
 
             const response = await fetch('https://slack.com/api/conversations.history', {
               method: 'POST',
@@ -159,10 +160,22 @@ async function scanWorkstream(workstreamId: string): Promise<void> {
   log(`Scanning ${workstreamId}...`);
 
   // Determine scan window based on last scan time (persisted in DB)
-  const lastScan = await getLastScanTime(workstreamId);
-  const scanWindow = lastScan
-    ? `after:${lastScan.toISOString().split('T')[0]}`
-    : 'newer_than:7d'; // First scan: 7 days back
+  let lastScan: Date | null = null;
+  try {
+    lastScan = await getLastScanTime(workstreamId);
+  } catch {
+    // get_last_scan tool may not be deployed yet — treat as first run
+  }
+
+  if (!lastScan) {
+    // First run after deploy — seed the baseline so next cycle has a proper window
+    // Don't scan 7 days of history, just mark "now" and let the next cycle catch new content
+    log(`  ${workstreamId}: no scan history — seeding baseline, skipping this cycle`);
+    await setLastScanTime(workstreamId, new Date()).catch(() => {});
+    return;
+  }
+
+  const scanWindow = `after:${lastScan.toISOString().split('T')[0]}`;
 
   // Lightweight check — skip expensive LLM call if no new content on any channel
   const contentCheck = await checkForNewContent(workstreamId, scanWindow);
