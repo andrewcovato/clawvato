@@ -354,9 +354,112 @@ Return ONLY the brief text. No JSON, no markdown fences, no preamble.`;
     if (briefText && briefText.trim().length > 20) {
       await callMcp('update_brief', { workstream_id: workstreamId, content: briefText.trim() });
       log(`  Brief updated for ${workstreamId} (${briefText.length} chars)`);
+
+      // Reconcile open items against the fresh brief (Haiku, cheap)
+      await reconcileTodos(workstreamId);
     }
   } catch (err) {
     log(`  Error updating brief for ${workstreamId}: ${err}`);
+  }
+}
+
+// ── Post-Brief Reconciliation (brief vs open items) ────────
+
+async function reconcileTodos(workstreamId: string): Promise<void> {
+  log(`  Reconciling todos for ${workstreamId}...`);
+
+  // Fetch full workstream context (brief + open items + people + entities)
+  const contextText = await callMcp('get_workstream_context', { workstream_id: workstreamId });
+  if (!contextText || contextText.includes('not found')) return;
+  if (!contextText.includes('Open Items') || contextText.includes('No open items')) return;
+
+  const prompt = `You are reconciling open items against a freshly-updated workstream context.
+Today's date: ${new Date().toISOString().split('T')[0]}
+
+${contextText}
+
+Compare each open item against the brief. Identify items that are:
+- DONE: the brief shows clear evidence the item was completed (e.g., email was sent, response was received, document was delivered)
+- STALE: the brief shows the item is no longer relevant (superseded, cancelled, or the situation changed)
+- NEEDS UPDATE: due date, priority, or description should change based on new information
+
+Return ONLY a JSON array (no markdown fences):
+[{"todo_id": "the-uuid-from-the-list", "action": "complete|cancel|update", "reason": "cite specific evidence from the brief", "updates": {}}]
+If nothing needs changing, return []`;
+
+  try {
+    const result = await invokeClaudeLight(prompt, `reconcile-${workstreamId}`);
+
+    let alterations: { todo_id: string; action: string; reason: string; updates?: Record<string, unknown> }[] = [];
+    try {
+      let jsonStr = result.trim();
+      if (jsonStr.startsWith('```')) jsonStr = jsonStr.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
+      alterations = JSON.parse(jsonStr);
+    } catch {
+      log(`  Reconciliation: failed to parse response for ${workstreamId}`);
+      return;
+    }
+
+    if (!Array.isArray(alterations) || alterations.length === 0) {
+      log(`  Reconciliation: all items current for ${workstreamId}`);
+      return;
+    }
+
+    log(`  Reconciliation: ${alterations.length} alteration(s) for ${workstreamId}`);
+    for (const alt of alterations) {
+      await postProposedAlteration(alt);
+    }
+  } catch (err) {
+    log(`  Reconciliation error for ${workstreamId}: ${err}`);
+  }
+}
+
+// Lightweight Claude call — Haiku, no tools, just text in/out
+async function invokeClaudeLight(prompt: string, label: string): Promise<string> {
+  log(`  Invoking claude --print (haiku) for ${label}...`);
+  const startTime = Date.now();
+
+  const { stdout } = await execFileAsync('claude', [
+    '--print',
+    '--model', 'haiku',
+    '--output-format', 'json',
+    '-p', prompt,
+  ], {
+    timeout: 60_000,
+    maxBuffer: 2 * 1024 * 1024,
+    env: {
+      ...process.env,
+      ANTHROPIC_API_KEY: '',
+      CLAUDE_MCP_CONFIG: '',
+    },
+  });
+
+  const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+
+  try {
+    const envelope = JSON.parse(stdout);
+    const cost = envelope.total_cost_usd ?? 0;
+    const input = (envelope.usage?.input_tokens ?? 0) +
+                  (envelope.usage?.cache_creation_input_tokens ?? 0) +
+                  (envelope.usage?.cache_read_input_tokens ?? 0);
+    const output = envelope.usage?.output_tokens ?? 0;
+
+    sessionTotalCost += cost;
+    sessionTotalInputTokens += input;
+    sessionTotalOutputTokens += output;
+    sessionInvocations++;
+
+    log(`  ${label} completed in ${elapsed}s | $${cost.toFixed(4)} | ${input} in / ${output} out`);
+
+    const MONITOR_CHANNEL = 'C0APG26FLRJ';
+    await postToSlack(MONITOR_CHANNEL,
+      `\`${label}\` (haiku) — ${elapsed}s | $${cost.toFixed(4)} | ${input} in / ${output} out`
+    ).catch(() => {});
+
+    return envelope.result ?? '';
+  } catch {
+    log(`  ${label} completed in ${elapsed}s (failed to parse usage)`);
+    return stdout;
   }
 }
 
