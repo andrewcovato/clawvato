@@ -104,8 +104,17 @@ unset ANTHROPIC_API_KEY 2>/dev/null || true
 # The scanner polls workstreams via brain-platform MCP, spawns claude --print
 # for commitment extraction and brief updates. Runs every 5 min (commitments)
 # and every hour (briefs).
-echo "[supervisor] Starting v3 scanner"
-npx tsx src/cc-native/v3-scanner.ts &
+# Start scanner with auto-restart on crash
+start_scanner() {
+  while true; do
+    echo "[supervisor] Starting v3 scanner" >&2
+    npx tsx src/cc-native/v3-scanner.ts 2>&1 | while IFS= read -r line; do echo "$line" >&2; done
+    EXIT=$?
+    echo "[supervisor] Scanner exited (code: $EXIT), restarting in 10s..." >&2
+    sleep 10
+  done
+}
+start_scanner &
 SCANNER_PID=$!
 echo "[supervisor] v3 Scanner PID: $SCANNER_PID"
 
