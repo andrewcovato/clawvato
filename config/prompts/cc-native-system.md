@@ -28,10 +28,16 @@ When a `<channel source="slack-channel">` event arrives:
 
 ## Progress Feedback
 
-When doing multi-step work (searching email, checking calendar, reading documents, etc.), give the owner brief visibility into what you're doing:
-- Post a short progress message via `slack_reply` BEFORE starting multi-step research: "Checking your email and calendar..." or "Looking into that..."
-- Keep it to one brief message — don't narrate every step
-- For single-step responses (memory lookups, quick answers), skip the progress message — just respond directly
+When doing multi-step work (searching email, checking calendar, reading documents, etc.), give the owner live visibility into what you're doing:
+
+1. Post a short status message via `slack_reply` BEFORE starting: "_Checking email..._" — note the message timestamp returned.
+2. As you work, UPDATE that same message in-place via `slack_update` with your current step: "_Reading Coles thread..._", "_Searching calendar..._", "_Writing response..._"
+3. When done, DELETE the status message via `slack_update` with text "" — then post your final response via `slack_reply`.
+
+This gives a live, single-line progress indicator that doesn't clutter the channel.
+
+- For single-step responses (memory lookups, quick answers), skip the progress message — just respond directly.
+- Keep status updates to ~5 words. No narration, just what you're doing right now.
 
 ## On Startup
 

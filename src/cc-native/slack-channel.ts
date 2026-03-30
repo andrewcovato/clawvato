@@ -127,6 +127,19 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: 'slack_update',
+      description: 'Update an existing Slack message in-place. Use this to post a short status message when starting work, then update it with progress as you go (e.g., "Searching Gmail..." → "Reading transcript..." → "Writing response..."). Delete the status message before posting the final response by setting text to "".',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          channel_id: { type: 'string', description: 'Slack channel ID' },
+          timestamp: { type: 'string', description: 'Timestamp of the message to update (returned by slack_reply)' },
+          text: { type: 'string', description: 'New message text. Set to "" to delete the message.' },
+        },
+        required: ['channel_id', 'timestamp', 'text'],
+      },
+    },
+    {
       name: 'slack_react',
       description: 'Add or remove a reaction emoji on a Slack message.',
       inputSchema: {
@@ -205,6 +218,30 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       }
 
       return { content: [{ type: 'text', text: `Posted ${chunks.length} message(s) to ${channel_id}` }] };
+    }
+
+    if (name === 'slack_update') {
+      const { channel_id, timestamp, text } = args as {
+        channel_id: string; timestamp: string; text: string;
+      };
+
+      if (text === '') {
+        // Delete the message
+        await client.chat.delete({ channel: channel_id, ts: timestamp });
+        return { content: [{ type: 'text', text: `Deleted message ${timestamp}` }] };
+      }
+
+      // Scan for secrets
+      const scanResult = scanForSecrets(text);
+      const safeText = scanResult.hasSecrets ? scanResult.redacted : text;
+
+      await client.chat.update({
+        channel: channel_id,
+        ts: timestamp,
+        text: safeText,
+      });
+
+      return { content: [{ type: 'text', text: `Updated message ${timestamp}` }] };
     }
 
     if (name === 'slack_react') {
