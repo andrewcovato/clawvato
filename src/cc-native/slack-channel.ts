@@ -217,7 +217,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         if (!lastTs && result.ts) lastTs = result.ts;
       }
 
-      return { content: [{ type: 'text', text: `Posted ${chunks.length} message(s) to ${channel_id}` }] };
+      return { content: [{ type: 'text', text: `Posted to ${channel_id} (ts: ${lastTs})` }] };
     }
 
     if (name === 'slack_update') {
