@@ -112,7 +112,9 @@ async function checkForNewContent(workstreamId: string, scanWindow: string): Pro
         }
       }
     }
-  } catch { /* fail open */ }
+  } catch (err) {
+    log(`  ${workstreamId}: Gmail check failed: ${err}`);
+  }
 
   // 2. Check Slack — any new messages in workstream's channels?
   try {
@@ -145,7 +147,7 @@ async function checkForNewContent(workstreamId: string, scanWindow: string): Pro
         }
       }
     }
-  } catch { /* fail open */ }
+  } catch (err) { log(`  ${workstreamId}: source check failed: ${err}`); }
 
   // 3. Check Fireflies — any new meetings with workstream's people?
   const firefliesMeetingIds: string[] = [];
@@ -186,7 +188,7 @@ async function checkForNewContent(workstreamId: string, scanWindow: string): Pro
         }
       }
     }
-  } catch { /* fail open */ }
+  } catch (err) { log(`  ${workstreamId}: source check failed: ${err}`); }
 
   if (sources.length === 0) {
     log(`  ${workstreamId}: no new content on any channel, skipping`);
