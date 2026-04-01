@@ -370,20 +370,54 @@ Return ONLY the brief text. No JSON, no markdown fences, no preamble.`;
 async function reconcileTodos(workstreamId: string): Promise<void> {
   log(`  Reconciling todos for ${workstreamId}...`);
 
+  // Check what's already pending — don't re-propose
+  const pendingText = await callMcp('get_pending_alterations', {});
+  const pendingTodoIds = new Set<string>();
+  if (pendingText !== 'No pending alterations.') {
+    const idMatches = pendingText.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/g);
+    if (idMatches) {
+      // Pending alterations text contains both alteration IDs and todo IDs
+      // The todo IDs appear in the "for todo XXXX" part — parse from the propose_alteration output format
+      for (const id of idMatches) pendingTodoIds.add(id);
+    }
+  }
+
   // Fetch full workstream context (brief + open items + people + entities)
   const contextText = await callMcp('get_workstream_context', { workstream_id: workstreamId });
   if (!contextText || contextText.includes('not found')) return;
   if (!contextText.includes('Open Items') || contextText.includes('No open items')) return;
 
+  // Filter out items that already have pending alterations from the context
+  // so the LLM doesn't propose them again
+  const contextLines = contextText.split('\n');
+  const filteredLines = contextLines.filter(line => {
+    // Check if this line contains a todo UUID that already has a pending alteration
+    const uuidMatch = line.match(/\(([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\)/);
+    if (uuidMatch && pendingTodoIds.has(uuidMatch[1])) {
+      log(`  Skipping ${uuidMatch[1]} — already has pending alteration`);
+      return false;
+    }
+    return true;
+  });
+  const filteredContext = filteredLines.join('\n');
+
+  // If all open items were filtered out, nothing to reconcile
+  if (!filteredContext.includes('- [')) {
+    log(`  Reconciliation: all items already have pending alterations for ${workstreamId}`);
+    return;
+  }
+
   const prompt = `You are reconciling open items against a freshly-updated workstream context.
 Today's date: ${new Date().toISOString().split('T')[0]}
 
-${contextText}
+${filteredContext}
 
 Compare each open item against the brief. Identify items that are:
 - DONE: the brief shows clear evidence the item was completed (e.g., email was sent, response was received, document was delivered)
-- STALE: the brief shows the item is no longer relevant (superseded, cancelled, or the situation changed)
+- STALE: the item is no longer relevant (superseded, cancelled, or the situation changed)
 - NEEDS UPDATE: due date, priority, or description should change based on new information
+
+Only propose changes where you have CLEAR evidence. If unsure, leave the item alone.
 
 Return ONLY a JSON array (no markdown fences):
 [{"todo_id": "the-uuid-from-the-list", "action": "complete|cancel|update", "reason": "cite specific evidence from the brief", "updates": {}}]
@@ -404,6 +438,14 @@ If nothing needs changing, return []`;
 
     if (!Array.isArray(alterations) || alterations.length === 0) {
       log(`  Reconciliation: all items current for ${workstreamId}`);
+      return;
+    }
+
+    // Final filter — skip any that somehow still match pending
+    alterations = alterations.filter(a => !pendingTodoIds.has(a.todo_id));
+
+    if (alterations.length === 0) {
+      log(`  Reconciliation: all proposed items already pending for ${workstreamId}`);
       return;
     }
 
