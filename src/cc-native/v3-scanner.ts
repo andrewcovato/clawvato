@@ -806,8 +806,17 @@ async function postProposedAlteration(alteration: { todo_id: string; action: str
 
   const ts = await postToSlack(TASK_CHANNEL_ID, text);
   if (ts) {
+    // Store slack_ts on the alteration for reaction polling
+    // Parse alteration ID from the result string: "... [alt-uuid]"
+    const altIdMatch = result.match(/\[([0-9a-f-]{36})\]/);
+    if (altIdMatch) {
+      await callMcp('update_alteration_slack', {
+        id: altIdMatch[1],
+        slack_channel: TASK_CHANNEL_ID,
+        slack_ts: ts,
+      }).catch(err => log(`  Failed to store slack_ts: ${err}`));
+    }
     log(`  Posted to Slack: ${alteration.action} ${alteration.todo_id.slice(0, 8)}`);
-    // TODO: update the alteration record with slack_ts for reaction tracking
   }
 }
 
@@ -821,14 +830,75 @@ function startReactionPoller(): void {
 
   // Poll for reactions every 30s on pending alterations
   setInterval(async () => {
-    const pendingText = await callMcp('get_pending_alterations', {});
-    if (pendingText === 'No pending alterations.') return;
+    try {
+      const pendingText = await callMcp('get_pending_alterations', {});
+      if (pendingText === 'No pending alterations.') return;
 
-    // TODO: parse pending alterations, check their slack_ts for reactions
-    // For now, alterations are accepted via CoS ("accept alteration X") or
-    // the accept_alteration MCP tool. Slack reaction polling can be added
-    // once the alteration records store slack_ts.
+      // Parse alteration IDs from pending list
+      const altMatches = pendingText.match(/\(([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\)/g);
+      if (!altMatches) return;
 
+      // For each pending alteration, check if its Slack message has a ✅ reaction
+      for (const match of altMatches) {
+        const altId = match.replace(/[()]/g, '');
+        // Get the alteration's slack_ts by looking it up
+        const altInfo = await callMcp('get_alteration_by_slack_ts', { slack_ts: '' }).catch(() => '');
+        // We need to get slack_ts from the alteration — but we only have the ID
+        // Use a different approach: check each pending alteration's message directly
+      }
+
+      // Simpler approach: scan recent messages in the task channel for ✅ reactions
+      if (!SLACK_BOT_TOKEN || !TASK_CHANNEL_ID) return;
+
+      const response = await fetch('https://slack.com/api/conversations.history', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${SLACK_BOT_TOKEN}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ channel: TASK_CHANNEL_ID, limit: 20 }),
+      });
+      const data = await response.json() as { ok: boolean; messages?: any[] };
+      if (!data.ok || !data.messages) return;
+
+      for (const msg of data.messages) {
+        // Check if this message has a ✅ reaction from the owner
+        if (!msg.reactions) continue;
+        const checkReaction = msg.reactions.find((r: any) =>
+          (r.name === 'white_check_mark' || r.name === 'heavy_check_mark') &&
+          r.users?.includes(process.env.OWNER_SLACK_USER_ID)
+        );
+        if (!checkReaction) continue;
+
+        // Look up the alteration by this message's ts
+        const altResult = await callMcp('get_alteration_by_slack_ts', { slack_ts: msg.ts });
+        if (altResult === 'No pending alteration for that message.') continue;
+
+        // Parse alteration ID from result
+        const idMatch = altResult.match(/\(([0-9a-f-]{36})\)/);
+        if (!idMatch) continue;
+
+        // Accept it!
+        const acceptResult = await callMcp('accept_alteration', { id: idMatch[1] });
+        log(`  Reaction accepted: ${acceptResult}`);
+
+        // Update the Slack message to show it was accepted
+        try {
+          await fetch('https://slack.com/api/chat.update', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${SLACK_BOT_TOKEN}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              channel: TASK_CHANNEL_ID,
+              ts: msg.ts,
+              text: msg.text.replace('React ✅ to accept, or reply in thread to discuss.', '✅ *Accepted*'),
+            }),
+          });
+        } catch { /* non-critical */ }
+      }
+    } catch { /* silently skip on error */ }
   }, 30_000);
 
   log('Reaction poller started (30s interval)');
