@@ -365,62 +365,33 @@ Return ONLY the brief text. No JSON, no markdown fences, no preamble.`;
   }
 }
 
-// ── Post-Brief Reconciliation (brief vs open items) ────────
+// ── Post-Brief Reconciliation (auto-apply, no proposals) ────────
+
+// Track auto-completed items for canvas refresh
+const recentlyCompleted: { title: string; workstream: string; date: string }[] = [];
 
 async function reconcileTodos(workstreamId: string): Promise<void> {
   log(`  Reconciling todos for ${workstreamId}...`);
-
-  // Check what's already pending — don't re-propose
-  const pendingText = await callMcp('get_pending_alterations', {});
-  const pendingTodoIds = new Set<string>();
-  if (pendingText !== 'No pending alterations.') {
-    const idMatches = pendingText.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/g);
-    if (idMatches) {
-      // Pending alterations text contains both alteration IDs and todo IDs
-      // The todo IDs appear in the "for todo XXXX" part — parse from the propose_alteration output format
-      for (const id of idMatches) pendingTodoIds.add(id);
-    }
-  }
 
   // Fetch full workstream context (brief + open items + people + entities)
   const contextText = await callMcp('get_workstream_context', { workstream_id: workstreamId });
   if (!contextText || contextText.includes('not found')) return;
   if (!contextText.includes('Open Items') || contextText.includes('No open items')) return;
 
-  // Filter out items that already have pending alterations from the context
-  // so the LLM doesn't propose them again
-  const contextLines = contextText.split('\n');
-  const filteredLines = contextLines.filter(line => {
-    // Check if this line contains a todo UUID that already has a pending alteration
-    const uuidMatch = line.match(/\(([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\)/);
-    if (uuidMatch && pendingTodoIds.has(uuidMatch[1])) {
-      log(`  Skipping ${uuidMatch[1]} — already has pending alteration`);
-      return false;
-    }
-    return true;
-  });
-  const filteredContext = filteredLines.join('\n');
-
-  // If all open items were filtered out, nothing to reconcile
-  if (!filteredContext.includes('- [')) {
-    log(`  Reconciliation: all items already have pending alterations for ${workstreamId}`);
-    return;
-  }
-
   const prompt = `You are reconciling open items against a freshly-updated workstream context.
 Today's date: ${new Date().toISOString().split('T')[0]}
 
-${filteredContext}
+${contextText}
 
 Compare each open item against the brief. Identify items that are:
 - DONE: the brief shows clear evidence the item was completed (e.g., email was sent, response was received, document was delivered)
 - STALE: the item is no longer relevant (superseded, cancelled, or the situation changed)
 - NEEDS UPDATE: due date, priority, or description should change based on new information
 
-Only propose changes where you have CLEAR evidence. If unsure, leave the item alone.
+Only act where you have CLEAR evidence. If unsure, leave the item alone.
 
 Return ONLY a JSON array (no markdown fences):
-[{"todo_id": "the-uuid-from-the-list", "action": "complete|cancel|update", "reason": "cite specific evidence from the brief", "updates": {}}]
+[{"todo_id": "the-uuid-from-the-list", "action": "complete|cancel|update", "reason": "one-line evidence", "updates": {}}]
 If nothing needs changing, return []`;
 
   try {
@@ -441,18 +412,36 @@ If nothing needs changing, return []`;
       return;
     }
 
-    // Final filter — skip any that somehow still match pending
-    alterations = alterations.filter(a => !pendingTodoIds.has(a.todo_id));
-
-    if (alterations.length === 0) {
-      log(`  Reconciliation: all proposed items already pending for ${workstreamId}`);
-      return;
-    }
-
-    log(`  Reconciliation: ${alterations.length} alteration(s) for ${workstreamId}`);
+    log(`  Reconciliation: auto-applying ${alterations.length} change(s) for ${workstreamId}`);
     for (const alt of alterations) {
-      await postProposedAlteration(alt);
+      try {
+        if (alt.action === 'complete') {
+          await callMcp('complete_todo', { id: alt.todo_id });
+          // Extract title from context for the recently-completed list
+          const titleMatch = contextText.match(new RegExp(`\\] ([^(]+?)\\s*(?:→|\\(|\\[).*${alt.todo_id}`));
+          recentlyCompleted.push({
+            title: titleMatch?.[1]?.trim() ?? alt.todo_id.slice(0, 8),
+            workstream: workstreamId,
+            date: new Date().toISOString().split('T')[0],
+          });
+          log(`    ✓ Completed: ${alt.todo_id.slice(0, 8)} — ${alt.reason}`);
+        } else if (alt.action === 'cancel') {
+          await callMcp('cancel_todo', { id: alt.todo_id });
+          log(`    ✗ Cancelled: ${alt.todo_id.slice(0, 8)} — ${alt.reason}`);
+        } else if (alt.action === 'update' && alt.updates) {
+          // Build update args
+          const updateArgs: Record<string, unknown> = { id: alt.todo_id, ...alt.updates };
+          await callMcp('complete_todo', { id: 'noop' }).catch(() => {}); // no generic update via MCP yet
+          // For now, just log — update_todo MCP tool would need to be added
+          log(`    ~ Update needed: ${alt.todo_id.slice(0, 8)} — ${alt.reason} (manual)`);
+        }
+      } catch (err) {
+        log(`    Failed to apply ${alt.action} on ${alt.todo_id.slice(0, 8)}: ${err}`);
+      }
     }
+
+    // Refresh the canvas after changes
+    await refreshCanvas().catch(err => log(`  Canvas refresh failed: ${err}`));
   } catch (err) {
     log(`  Reconciliation error for ${workstreamId}: ${err}`);
   }
@@ -504,6 +493,128 @@ async function invokeClaudeLight(prompt: string, label: string): Promise<string>
   } catch {
     log(`  ${label} completed in ${elapsed}s (failed to parse usage)`);
     return stdout;
+  }
+}
+
+// ── Canvas Refresh ──────────────────────────────────────────
+
+const CANVAS_ID = 'F0AQKUH7U1L';
+
+async function refreshCanvas(): Promise<void> {
+  log('  Refreshing todo canvas...');
+
+  const todosText = await callMcp('get_todos', { status: 'open' });
+  if (!todosText) return;
+
+  // Parse todos into structured groups
+  const now = new Date();
+  const today = now.toISOString().split('T')[0];
+  const weekEnd = new Date(now.getTime() + 7 * 86400000).toISOString().split('T')[0];
+
+  interface TodoItem { title: string; type: string; priority: number; due?: string; workstream: string; direction?: string; id: string; }
+  const todos: TodoItem[] = [];
+
+  for (const line of todosText.split('\n')) {
+    if (!line.startsWith('- [')) continue;
+    const typeMatch = line.match(/\[(\w+)\|p(\d+)\]/);
+    const titleMatch = line.match(/\] (.+?)(?:\s*\(due:|$)/);
+    const dueMatch = line.match(/due: \w+ (\w+ \d+ \d+)/);
+    const wsMatch = line.match(/— (\S+),|workstream_id.*?(\S+)/);
+    const dirMatch = line.match(/\[(inbound|outbound)\]/);
+    const idMatch = line.match(/\(([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\)/);
+    if (!typeMatch || !idMatch) continue;
+
+    // Extract workstream from the todo — it's not in the line, we'd need to query per-workstream
+    // For now, parse what we can from the title
+    todos.push({
+      type: typeMatch[1],
+      priority: parseInt(typeMatch[2]),
+      title: titleMatch?.[1]?.trim() ?? line.slice(0, 80),
+      due: dueMatch?.[1],
+      direction: dirMatch?.[1],
+      id: idMatch[1],
+      workstream: '', // filled from context
+    });
+  }
+
+  // Build canvas markdown
+  const overdue: string[] = [];
+  const thisWeek: string[] = [];
+  const open: string[] = [];
+  const waiting: string[] = [];
+  const upcoming: string[] = [];
+
+  for (const t of todos) {
+    const emoji = t.type === 'commitment' ? '**[commitment]**' :
+                  t.type === 'follow_up' ? '**[follow-up]**' :
+                  '**[todo]**';
+    const dueStr = t.due ? ` *(due ${t.due})*` : '';
+    const line = `- ${emoji} ${t.title}${dueStr}`;
+
+    if (t.direction === 'inbound' || (t.type === 'follow_up' && t.title.toLowerCase().includes('waiting'))) {
+      waiting.push(line);
+    } else if (t.due) {
+      const dueDate = new Date(t.due);
+      if (dueDate < now) {
+        overdue.push(line);
+      } else if (t.due <= weekEnd) {
+        thisWeek.push(line);
+      } else {
+        upcoming.push(line);
+      }
+    } else {
+      open.push(line);
+    }
+  }
+
+  const recentLines = recentlyCompleted.slice(-10).map(r =>
+    `- ~~${r.title}~~ *(${r.workstream}, auto-completed ${r.date})*`
+  );
+
+  const content = `Last updated: ${now.toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })} — auto-refreshed by scanner
+
+## :red_circle: Overdue
+${overdue.length > 0 ? overdue.join('\n') : 'None — all caught up.'}
+
+## :large_yellow_circle: This Week
+${thisWeek.length > 0 ? thisWeek.join('\n') : 'Nothing due this week.'}
+
+## :hourglass_flowing_sand: Waiting on Others
+${waiting.length > 0 ? waiting.join('\n') : 'Nothing pending from others.'}
+
+## :white_circle: Open
+${open.length > 0 ? open.join('\n') : 'No undated items.'}
+
+## :white_large_square: Upcoming
+${upcoming.length > 0 ? upcoming.join('\n') : 'Nothing scheduled ahead.'}
+
+## :white_check_mark: Recently Auto-Completed
+${recentLines.length > 0 ? recentLines.join('\n') : 'No recent completions.'}`;
+
+  // Update canvas via Slack API
+  try {
+    const response = await fetch('https://slack.com/api/canvases.edit', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${SLACK_BOT_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        canvas_id: CANVAS_ID,
+        changes: [{
+          operation: 'replace',
+          document_content: { type: 'markdown', markdown: content },
+        }],
+      }),
+    });
+    const data = await response.json() as { ok: boolean; error?: string };
+    if (data.ok) {
+      log('  Canvas refreshed');
+    } else {
+      log(`  Canvas refresh failed: ${data.error}`);
+    }
+  } catch (err) {
+    log(`  Canvas refresh error: ${err}`);
   }
 }
 
