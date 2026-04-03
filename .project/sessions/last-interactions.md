@@ -1,27 +1,38 @@
-# Last Interactions — Session 29
+# Last Interactions — Session 31
 
-### Backfill Verification + Architecture Pivot
-**User**: Asked to verify backfill status and check cloud brief staleness.
-**Assistant**: Found Acorns brain had 496 facts (mostly misrouted — Coles, Vail, Roblox, DraftKings all landing in Acorns). GYG/Vail/Ad Platforms brains were empty. Root cause: "Andrew Covato" entity dominated scoring. Cloud brief was stale (8h) despite 7:51 AM interaction.
-**Decision**: Entity routing is fundamentally broken. Need architectural change.
+### MemoryOS Comparison
+**User**: Shared BAI-LAB/MemoryOS GitHub repo, asked for comparison to what we built.
+**Assistant**: Deep analysis — MemoryOS is academic chatbot personalization (3-tier memory, 90-dimension profiling). Clawvato is a business OS. Different problems entirely. User confirmed v3 is right for their use case.
 
-### Architecture Design — Dumb Brains, Smart Agents
-**User**: "When you looked at Acorns, you immediately knew stuff was wrong. Why don't we lean into that?" Pushed toward LLM judgment over scoring engines. Proposed dedicated CC instances per entity brain. Decided on Sonnet curator + Opus entity agents. Insisted on full content ingestion (entire email threads, transcripts). Wanted direct human input via CoS (store_fact, correct). Materialized brain.md files as instant context. business-state.md as CoS meta-summary.
-**Assistant**: Wrote comprehensive design doc (DESIGN_AGENT_ARCHITECTURE_V2.md). Architecture: CoS (Channels, always-on) + Curator (--print --session, Sonnet) + Entity agents (--print --session, on-demand Opus). Mailbox for inter-agent comms. Three-layer freshness (push + hourly sweep + query-time). NOTIFY triggers for mechanical brain.md regeneration.
-**Decision**: Brains are dumb storage. CC CLI agents are the intelligence. Delete entity-router, triage, Haiku NER from brain-platform.
+### Scanner Stabilization (Major)
+**User**: Scanner was burning through Max plan session limits — $2.70/call, 1.8M input tokens on Coles.
+**Assistant**: Found and fixed compounding bugs:
+1. In-memory scan times reset on every deploy → persisted in DB via new MCP tools
+2. Gmail `after:YYYY-MM-DD` had day-level granularity → switched to epoch seconds
+3. `setInterval` caused overlapping scan cycles → sequential while loops
+4. `growthbyscience.com` in domain list matched ALL email → owner domain filtering
+5. CLAWVATO_MEMORY_INTERNAL_URL pointed to /mcp instead of /api/tool → fixed
+6. CoS MCP tools down for 4 sessions → separate URLs for CoS (StreamableHTTP) vs scanner (legacy JSON)
+7. Scanner errors silently swallowed → added logging
+8. Added token monitoring → posts to #clawvato-monitoring
+9. Implemented Fireflies scanning
+10. Two-phase catchall (metadata triage → deep read)
+11. Post-brief Haiku reconciliation
+12. Auto-apply alterations + Slack canvas for todo list
+**Decisions**: Multiple architecture decisions, ultimately leading to v4 proposal.
 
-### Build — Phase 1 Complete
-**User**: "PLAN AND BUILD! Full autonomous, I'll be away."
-**Assistant**: Built Phase 1 infrastructure in brain-platform:
-- engine/mailbox.ts: inbox + agent_messages tables, CRUD, NOTIFY triggers, 11 tests
-- engine/brain-state.ts: brain.md + business-state.md generation, NOTIFY listener, debounce, 8 tests
-- adapters/mcp.ts: 11 new MCP tools (mailbox + inbox + brain state)
-- Deleted: entity-router.ts, triage.ts, entity-router.test.ts, triage.test.ts
-- Modified: poll-scheduler.ts (discovery-only), config.ts (removed entityRouting), brain-config.ts (removed refreshEntityList), server/index.ts (schema migrations + brain state listener)
-- Version: 1.5.0, 61 tests all passing
+### Todo List Accuracy Problems
+**User**: Todo list was ~70% accurate — stale items, missing items, duplicate proposals spamming Slack.
+**Assistant**: Did manual full audit — completed 15+ stale items, cancelled superseded ones, created 15+ missing items from fresh email/Slack/Fireflies crawl. Exposed fundamental weakness: keyword/domain-based filtering misses things that require contextual understanding.
 
-Built Phase 2 in clawvato:
-- scripts/curator-loop.sh: always-on Sonnet curator with --print --session
-- src/cc-native/agent-supervisor.ts: LISTEN/NOTIFY message router, agent lifecycle
-- config/prompts/curator-system.md + entity-agent-system.md: system prompts
-- scripts/cc-native-entrypoint.sh: updated with curator + supervisor startup
+### v4 Master Crawl Proposal
+**User**: "Discrete todos are what's messing this up. Think of what an admin would say to an exec."
+**Assistant**: Iterated through ~10 design rounds arriving at v4 architecture:
+- Kill per-workstream scanner, replace with single Opus master crawl 2x/day
+- Read ALL email (no domain filter), Opus routes by understanding
+- Action brief in admin voice (human-readable + agent-parseable)
+- Workstreams defined by people + purpose, not domains
+- Direct apply, no proposal flow
+- Untracked activity section catches things outside workstreams
+**Decision**: Owner approved direction. Design doc written at docs/DESIGN_V4_MASTER_CRAWL.md. Pending detailed review before implementation.
+**Pending**: Owner needs to review design doc and confirm before building.

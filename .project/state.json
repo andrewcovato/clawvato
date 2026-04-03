@@ -1,228 +1,70 @@
 {
   "project": {
     "name": "Clawvato",
-    "description": "Business operating system for solo technical founders — memory-powered AI agent across Slack, email, calendar, Drive, meetings, and Claude Code. Brain Platform is the core intelligence system.",
-    "version": "0.15.0",
+    "description": "Business operating system for solo technical founders. Workstream-based context management with Opus-driven master crawl, admin-voice action briefs, and cloud-accessible state via MCP.",
+    "version": "0.19.0",
     "status": "active",
-    "phase": "inter-brain-intelligence",
+    "phase": "v4-master-crawl-proposed",
     "startDate": "2026-03-06",
     "adoptedDate": "2026-03-07"
   },
   "phases": {
-    "1": { "name": "Build the Agent", "status": "complete", "description": "Reactive agent that responds when asked. Slack, memory, Google, Fireflies, sweeps, tasks." },
-    "2": { "name": "Build the Brain", "status": "complete", "description": "Smart memory plugin: embeddings, hybrid search, reranking, dedup, clustering, journaling, reflection. Agent-agnostic." },
-    "3": { "name": "Build the Nervous System", "status": "in_progress", "description": "Brain Platform: multi-brain architecture, inter-brain feeds, concept-aware extraction, sidecar connectors. Migration complete, feeds system live." },
-    "4": { "name": "Build the Judgment", "status": "planned", "description": "Autonomous workflows — CRM, project tracking, proactive surfacing. Good autonomous decisions." }
-  },
-  "tracks": {
-    "A": { "name": "Core Foundation", "status": "complete", "completedDate": "2026-03-06" },
-    "B": { "name": "Slack MCP + Agent Core", "status": "complete", "completedDate": "2026-03-17" },
-    "C": { "name": "Google Workspace", "status": "complete", "completedDate": "2026-03-19" },
-    "D": { "name": "Memory + Embeddings", "status": "complete", "completedDate": "2026-03-19" },
-    "E": { "name": "Proactive Intelligence", "status": "complete", "completedDate": "2026-03-25", "notes": "Connectors + sidecar in brain-platform. 15-min sweep frequency. Brain-specific extraction prompts." },
-    "F": { "name": "Security Hardening", "status": "partial", "notes": "Training wheels removed. Pre-tool security checks + output sanitization remain." },
-    "G": { "name": "GitHub + Self-Development", "status": "deferred", "notes": "Designed (three-gate safety model). Deferred until Phase 3/4 stable." },
-    "H": { "name": "Smart Plugin Brain", "status": "superseded", "completedDate": "2026-03-24", "notes": "Superseded by Brain Platform (Track Q)." },
-    "I": { "name": "Fireflies.ai", "status": "complete", "completedDate": "2026-03-18" },
-    "J": { "name": "Hybrid Architecture", "status": "deleted", "notes": "Code deleted in S27. CC-Native is the only engine." },
-    "K": { "name": "Postgres Migration", "status": "complete", "completedDate": "2026-03-19" },
-    "L": { "name": "Autonomous Task Queue", "status": "complete", "completedDate": "2026-03-20" },
-    "M": { "name": "Background Sweeps", "status": "complete", "completedDate": "2026-03-25", "notes": "Sidecar + connectors live in brain-platform. 15-min Slack/Gmail/Fireflies sweeps." },
-    "N": { "name": "Context Planner", "status": "superseded", "notes": "Superseded by CC-Native Engine." },
-    "O": { "name": "CC-Native Engine", "status": "deployed", "notes": "Claude Code as core engine via Channels." },
-    "P": { "name": "Smart Plugin Migration", "status": "superseded", "completedDate": "2026-03-24" },
-    "Q": { "name": "Brain Platform", "status": "in_progress", "notes": "Multi-brain with inter-brain feeds. Migration complete. Feeds system live (raw + synthesized). Per-entity brain architecture under discussion." },
-    "R": { "name": "Inter-Brain Feeds", "status": "deployed", "completedDate": "2026-03-25", "notes": "Generic feed system: raw + synthesized modes, cycle prevention, origin tracking. comms↔primary↔dev all connected." }
+    "1": { "name": "Build the Agent", "status": "complete", "description": "Reactive agent. Slack, memory, Google, Fireflies." },
+    "2": { "name": "Build the Brain", "status": "superseded", "description": "Smart memory plugin. Superseded by v3." },
+    "3": { "name": "v3 Operating System", "status": "complete", "description": "Workstreams + entities + todos + briefs + scanner. Built, deployed, stabilized. Fundamental limitations discovered." },
+    "4": { "name": "v4 Master Crawl", "status": "proposed", "description": "Single Opus crawl 2x/day replaces all scanner components. Intelligence at write time. Action briefs in admin voice. Design doc written, pending owner review." }
   },
   "infrastructure": {
-    "local": "macOS, .mcp.json runs brain-platform as local stdio process with Railway DB URL + BRAIN_CONFIG_DIR",
+    "local": "macOS, brain-platform MCP via local stdio + global ~/.claude.json",
     "cloud": "Railway (Growth By Science workspace)",
     "railwayProject": "99ecf42e-5142-442c-a79a-2f6fd0864ecf",
-    "railwayServices": ["clawvato (thin agent — task poller + event feed)", "brain-platform (core intelligence + sidecar + feeds)", "Postgres (managed DB)"],
-    "decommissioned": ["brain-platform (old: clawvato-memory) (stopped 2026-03-25)"],
-    "database": "Railway managed Postgres (automatic backups, pgvector, tsvector)",
+    "railwayServices": ["clawvato (CoS + v3 scanner)", "brain-platform v2.0.0 (MCP tools + DB)", "Postgres"],
+    "database": "Railway Postgres — v3 schema (10 tables)",
     "taskChannel": "C0AN5J0LCP3 (#clawvato-tasks)",
-    "dataVolume": "/data (Claude CLI auth + gws config)",
-    "deployMethod": "brain-platform: railway up (manual). clawvato: GitHub auto-deploy from cc-native-engine branch.",
-    "maxPlan": "Claude Max subscription — CC-native engine costs $0",
-    "brainPlatform": "github.com/andrewcovato/brain-platform — core intelligence on Railway. brain-platform-production.up.railway.app",
-    "npmPackage": "@andrewcovato/brain-platform@1.4.0 on GitHub Packages (unpublished — publish pending)",
-    "brainPlatformAuth": "Bearer token via MCP_AUTH_TOKEN env var",
-    "brainPlatformModels": "nomic-embed-text-v1.5 (embeddings, 384d), ms-marco-MiniLM-L-6-v2 (reranking), HDBSCAN (recursive concept-aware clustering)",
-    "brains": {
-      "primary": "Business intelligence — ~185 memories, 12 clusters. Clients, deals, strategy, relationships. Receives feeds from comms + dev.",
-      "dev": "Technical context — ~90 memories, 4 clusters. Architecture decisions, patterns, bugs, project state. Feeds milestones to primary.",
-      "comms": "Communications — ~50 memories, growing. Email, Slack, meetings. Feeds commitments/follow-ups/outcomes to primary. 15-min sweep frequency."
-    },
-    "feedConnections": [
-      "comms→primary: raw (commitments, follow-ups, meeting outcomes, 1h)",
-      "comms→primary: synthesized (relationship signals, 6h)",
-      "primary→comms: synthesized (deal status, commitment status, 6h)",
-      "primary→dev: raw (commitments, 1h)",
-      "dev→primary: raw (milestones, 1h)"
-    ]
-  },
-  "metrics": {
-    "clawvatoLinesDeleted": 9822,
-    "brainPlatformTests": 53,
-    "memoriesStored": "~325+ active (185 primary + 90 dev + 50 comms + client brains backfilling)",
-    "memoryClusters": "16+ (12 primary + 4 dev, comms + client brains growing)",
-    "embeddingCoverage": "100%",
-    "brainPlatformVersion": "1.4.0",
-    "brainPlatformTools": 41,
-    "brainPlatformModels": 2,
-    "brainConfigs": 7,
-    "feedConnections": 5
+    "monitoringChannel": "C0APG26FLRJ (#clawvato-monitoring)",
+    "canvas": "F0AQKUH7U1L (Open Items — Clawvato)",
+    "maxPlan": "Claude Max — all LLM via claude --print ($0)",
+    "brainPlatform": "github.com/andrewcovato/brain-platform v2.0.0"
   },
   "currentSprint": {
-    "id": "S28",
-    "name": "Per-Entity Brain Intelligence + Backfill",
+    "id": "S31",
+    "name": "v4 Master Crawl — Design & Build",
     "goals": [
-      "Per-entity brain architecture — DONE (6 milestones, 41→53 tests)",
-      "Entity intelligence (status model, entity routing, corrections) — DONE",
-      "Cleanup (rename, agent SDK, security reviews) — DONE",
-      "Create client brains (Acorns, GYG, Vail, Ad Platforms) — DONE",
-      "Historical backfill Nov 2025→present — RUNNING",
-      "Verify triage routing + client brain populations — NEXT SESSION",
-      "Test correction engine end-to-end — NEXT SESSION"
+      "Review v4 design doc — PENDING OWNER REVIEW",
+      "Build masterCrawl() — single Opus call, reads all sources",
+      "Build urgencyCheck() — lightweight, no LLM",
+      "Test with live crawl (prototyped manually in S31)",
+      "Delete v3 scanner code",
+      "Update CLAUDE.md for v4 architecture"
     ],
-    "progress": "85% — architecture built, backfill running, verification next"
-  },
-  "completedSprints": {
-    "S10": {
-      "name": "Memory Excellence",
-      "completedDate": "2026-03-24",
-      "workstreams": [
-        "WS1: Memory scoping — soft signals (domain 1.3x, surface 1.1x boost)",
-        "WS2: Write-time dedup — ADD/UPDATE/NOOP/DELETE via Haiku",
-        "WS3: Embedding upgrade — nomic-embed-text-v1.5 (Matryoshka 384d)",
-        "WS4: Cross-encoder reranking — local ms-marco-MiniLM ($0, 48x faster)",
-        "WS5: Memory instructions — comprehensive prompt + XML-tagged context",
-        "Bonus: Entity-hop traversal, domain taxonomy, scoping refactor"
-      ]
-    },
-    "S24": {
-      "name": "Smart Plugin Migration",
-      "completedDate": "2026-03-24",
-      "workstreams": [
-        "Phase 0: Module restructure (798→142 line entrypoint)",
-        "Phase 1-5: Full intelligence migration to plugin",
-        "Conversation journaling, HDBSCAN clustering, agent wiring"
-      ]
-    },
-    "S25": {
-      "name": "Nervous System — Sidecar Rebuild + Task UX",
-      "completedDate": "2026-03-24",
-      "workstreams": [
-        "Journal hook + insights scratch pad + brief auto-update",
-        "Sonnet extraction upgrade + plugin sync command",
-        "Sidecar rebuild: tiered sweeps, event feed, -685 lines",
-        "Pub/Sub webhook spec"
-      ]
-    },
-    "S26": {
-      "name": "Brain Platform Migration",
-      "completedDate": "2026-03-25",
-      "workstreams": [
-        "brain-platform repo (36 files, ~4,700 lines), recursive concept-aware HDBSCAN",
-        "Deploy to Railway + cutover from brain-platform (old: clawvato-memory)",
-        "Comms brain + sidecar wiring (3 connectors: Slack, Gmail, Fireflies)",
-        "Kill old sidecar — task poller only in clawvato",
-        "Thin clawvato — 9,822 lines deleted (memory, sweeps, hybrid agent, drive-sync)",
-        "npm package: @andrewcovato/brain-platform@1.1.0 published",
-        "Decommission brain-platform (old: clawvato-memory) Railway service",
-        "Inter-brain feed system: raw + synthesized modes, cycle prevention, 5 connections",
-        "Brain-specific extraction prompts wired into ingest pipeline"
-      ]
-    }
-  },
-  "upcomingSprints": {
-    "S28": {
-      "name": "Per-Entity Brain Architecture",
-      "goals": [
-        "Design per-client/project/department brain architecture",
-        "Dynamic brain creation from YAML templates",
-        "All channels → all brains with entity-based filtering",
-        "Deep context per entity vs broad shallow coverage"
-      ],
-      "dependsOn": "S27 backfill complete + feed system stable"
-    },
-    "S29": {
-      "name": "Autonomous Workflows",
-      "goals": [
-        "Trigger engine (concept conditions → actions)",
-        "First autonomous workflows",
-        "Proactive surfacing",
-        "CRM-like behavior from brain intelligence"
-      ]
-    }
+    "progress": "20% — design doc written, manual crawl prototype tested"
   },
   "lastSession": {
-    "number": 28,
-    "date": "2026-03-25",
-    "type": "Per-entity brain architecture + entity intelligence + cleanup + backfill",
+    "number": 31,
+    "date": "2026-04-02",
+    "type": "Stabilization + major design pivot",
     "keyDecisions": [
-      "Unified feed model: raw + synthesized modes, same code path",
-      "Cycle prevention via origin_brain exclusion in feed queries",
-      "Feed sweep every 30min, per-connection intervals (1h raw, 6h synthesized)",
-      "No automatic cross-brain retirement — dedup + consolidation handle conflicts",
-      "15-min sweep frequency for Slack/Gmail/Fireflies",
-      "Brain-specific extraction prompts wired into ingest pipeline",
-      "Historical backfill paused — need context-down working first",
-      "Per-entity brain architecture proposed (1 brain per client/project)"
+      "Kill domain-based content filtering — Opus reads everything",
+      "Kill incremental updates — full rewrite every crawl",
+      "Kill proposal/approval flow — auto-apply",
+      "Action brief format: admin voice, human + agent readable",
+      "Workstreams = people + purpose, NOT domains",
+      "Brain stores output of intelligence, not raw facts",
+      "2x daily master crawl replaces 30+ fragmented scanner calls"
     ]
   },
   "immediateBacklog": [
-    { "id": "VERIFY-BACKFILL", "title": "Check backfill progress — how many facts per client brain? Triage routing working?", "status": "next" },
-    { "id": "TEST-CORRECTIONS", "title": "Test correction engine end-to-end (entity transition, fact correction)", "status": "next" },
-    { "id": "CHECK-PROMOTIONS", "title": "Check promotion engine — any entities emerging from froth?", "status": "next" },
-    { "id": "PUBLISH-NPM", "title": "Publish @andrewcovato/brain-platform@1.4.0 to GitHub Packages", "status": "next" }
+    { "id": "V4-REVIEW", "title": "Owner reviews docs/DESIGN_V4_MASTER_CRAWL.md", "status": "next" },
+    { "id": "V4-BUILD", "title": "Build masterCrawl() + urgencyCheck()", "status": "blocked", "blockedBy": "V4-REVIEW" },
+    { "id": "V4-TEST", "title": "Test v4 with live data", "status": "blocked", "blockedBy": "V4-BUILD" },
+    { "id": "V4-DEPLOY", "title": "Deploy v4, delete v3 scanner", "status": "blocked", "blockedBy": "V4-TEST" },
+    { "id": "UPDATE-CLAUDE-MD", "title": "Rewrite CLAUDE.md for v4 architecture", "status": "next" }
   ],
   "backlog": [
-    { "id": "ENTITY-RESOLUTION", "priority": "high", "title": "Entity resolution system (Phil Clark = Phil = phil@acorns.com)" },
-    { "id": "GMAIL-WEBHOOK", "priority": "medium", "title": "Gmail Pub/Sub webhook (may not need if 15-min polling suffices)" },
-    { "id": "CALENDAR-WEBHOOK", "priority": "medium", "title": "Calendar events.watch() webhook" },
-    { "id": "MCP-RENAME", "priority": "low", "title": "Rename MCP server from 'brain-platform (old: clawvato-memory)' to 'brain'" },
-    { "id": "PERF-OPTIMIZATION", "priority": "medium", "title": "Performance optimization pass" },
-    { "id": "GITHUB-PHASE1", "priority": "medium", "title": "Track G Phase 1: read-only GitHub access" },
-    { "id": "FINANCE-001", "priority": "low", "title": "Finance integration" },
-    { "id": "TURBO-QUANT", "priority": "low", "title": "Investigate TurboQuant for vector compression at scale" },
-    { "id": "SESSION-MAILBOX", "priority": "medium", "title": "Inter-session mailbox — send_message/get_messages MCP tools for direct session-to-session communication via brain-platform. Enables local↔cloud↔cowork real-time coordination." }
+    { "id": "CROSS-SESSION", "priority": "medium", "title": "Cross-session context via log_activity MCP tool" },
+    { "id": "AGENT-DISPATCH", "priority": "medium", "title": "Workstream blocks dispatchable to agents" },
+    { "id": "NEWMAIL", "priority": "low", "title": "Newmail digest — reads action brief for context" }
   ],
-  "thingsNotToRedo": [
-    "DON'T REBUILD WHAT COMES NATIVELY WITH CLAUDE CODE",
-    "Don't hardcode prompts in TypeScript — all prompts in config/prompts/*.md (or brain.yaml)",
-    "Always take the pain now — build for durability, no short-term hacks",
-    "Always build for the future — adopt Anthropic tech as it ships",
-    "Bug reports → investigate + plan + confirm before coding",
-    "Plan before coding — don't jump straight to implementation",
-    "Check memory before researching — don't explore when the answer is in context",
-    "Brain stores intelligence + source pointers, NOT content. Source APIs store content.",
-    "Concepts are per-brain config, not global. Each brain has different understanding of the world.",
-    "Default brain_id = 'primary' — business intelligence is the majority, dev is the minority",
-    "Recursive HDBSCAN: let HDBSCAN decide when to stop recursing, don't force fixed depth",
-    "Composite clustering text: [concept_type] entities: content — separates structure from semantics",
-    "Cluster identity preservation: match new→old by centroid similarity, don't wipe IDs every re-cluster",
-    "postgres.js tagged templates silently drop ::vector cast on INSERT — use INSERT then UPDATE",
-    "Entity parsing: DB stores entities as JSON string, always parse defensively",
-    "Always soft-delete memories (valid_until = NOW()), never hard DELETE",
-    "MCP SDK Server.connect() is 1:1 — new Server+Transport per HTTP request",
-    "Journal hook uses /ingest REST endpoint (not MCP) — fire-and-forget",
-    "Sonnet > Haiku for extraction quality",
-    "Two schedulers: brain (consolidation, reflection, clustering, decay, feeds) and agent (user tasks)",
-    "Sweeps: HWM + dedup = two-layer idempotency",
-    "Feed query must check BOTH concept_type AND type columns (extraction stores in type, not always concept_type)",
-    "Non-blocking startup for Railway health checks — use setTimeout, not await, for heavy startup work",
-    "Don't backfill historical data without context-down working — orphaned commitments rot"
-  ],
-  "designDocs": [
-    "docs/DESIGN_CC_NATIVE.md",
-    "docs/DESIGN_REMOTE_MEMORY_PLUGIN.md",
-    "docs/DESIGN_PHASE2_PROACTIVE_INTELLIGENCE.md",
-    "docs/DESIGN_SMART_PLUGIN_MIGRATION.md",
-    "docs/DESIGN_PUBSUB_WEBHOOKS.md",
-    "docs/DESIGN_BRAIN_PLATFORM.md",
-    "~/.claude/plans/serene-leaping-music.md (inter-brain feed system)"
-  ],
-  "lastUpdated": "2026-03-25"
+  "designDoc": "docs/DESIGN_V4_MASTER_CRAWL.md",
+  "lastUpdated": "2026-04-02"
 }

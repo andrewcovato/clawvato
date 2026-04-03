@@ -1,105 +1,86 @@
 # Session Handoff
 
-> Last updated: 2026-03-26 | Session 29 | Agent Architecture v2
+> Last updated: 2026-04-02 | Session 31 | Scanner Stabilization → v4 Design
 
 ## Quick Resume
 
 ```
-Phase: 3 IN PROGRESS — Agent Architecture v2 (dumb brains, smart agents)
-Branch: cc-native-engine (clawvato), main (brain-platform)
-Build: Clean (both repos compile, 61 tests green on brain-platform)
-State: INFRASTRUCTURE COMPLETE — mailbox, inbox, brain-state all built and tested
+Phase: 3 → proposing v4
+Branch: cc-native-engine
+Build: DEPLOYED (brain-platform + clawvato on Railway)
+State: v3 scanner running but fundamentally limited.
+       v4 Master Crawl design proposed, pending owner review.
 
-brain-platform v1.5.0:
-  - Mailbox (agent_messages) + inbox tables with NOTIFY triggers
-  - Brain state generator (brain.md + business-state.md materialized views)
-  - 11 new MCP tools (mailbox, inbox, brain-state)
-  - Deleted: entity-router.ts, triage.ts (routing now handled by agents)
-  - 61 tests, all passing
+Canvas: F0AQKUH7U1L (https://growthbyscience.slack.com/docs/T05CQ396M8V/F0AQKUH7U1L)
+  - Last updated Apr 2 with full manual crawl
+  - Action brief format with admin-voice workstream blocks
 
-clawvato:
-  - Agent supervisor (LISTEN/NOTIFY → route to CC --print --session agents)
-  - Curator loop (Sonnet, always-on, --print --session)
-  - System prompts for curator + entity agents
-  - Entrypoint updated with curator + supervisor startup
+Design doc: docs/DESIGN_V4_MASTER_CRAWL.md (927 lines)
 ```
 
-## Session 29 — What Was Built
+## Session 31 — What Happened
 
-### Architecture Pivot
-- Diagnosed backfill failure: entity routing put all 496 facts in Acorns, 0 in other brains
-- Root cause: "Andrew Covato" entity dominated scoring
-- Designed Agent Architecture v2: dumb brains + smart CC CLI agents
-- Full design doc: docs/DESIGN_AGENT_ARCHITECTURE_V2.md
+### First Half: Scanner Stabilization
+Fixed ~12 bugs in the v3 scanner that were burning through Max plan session limits:
+- Persisted scan times in DB (no more 7-day re-read on restart)
+- Epoch-second Gmail filtering (no more re-scanning same-day threads)
+- Sequential scan loops (no more overlapping cycles)
+- Separate MCP URLs for CoS vs scanner
+- Token monitoring → #clawvato-monitoring
+- Fireflies scanning implemented
+- Two-phase catchall (metadata triage → deep read)
+- Post-brief Haiku reconciliation
+- Auto-apply alterations
+- Living Slack canvas for todo list
 
-### Brain-Platform Infrastructure (Phase 1)
-1. **Mailbox system**: engine/mailbox.ts — inbox + agent_messages tables, CRUD, NOTIFY triggers
-2. **Brain state generator**: engine/brain-state.ts — per-brain .md files + business-state.md rollup
-3. **MCP tools**: 11 new tools — send_message, get_messages, mark_message_done, reply_to_message, add_to_inbox, get_pending_inbox, mark_inbox_processed, mark_inbox_failed, get_brain_state, get_business_state, regenerate_brain_states
-4. **NOTIFY triggers**: brain_updated on memories table (triggers brain.md regeneration), agent_mail on agent_messages
-5. **Deleted**: entity-router.ts, triage.ts, and their tests
-6. **Simplified**: poll-scheduler.ts (discovery-only, no triage), config.ts (removed entityRouting)
+### Second Half: v4 Design
+Despite all fixes, fundamental problems remained:
+- Todo list accuracy was ~70% — stale items, missing items, duplicates
+- Domain-based content check missed contacts outside tracked domains
+- Incremental updates compounded errors over time
+- Too many moving parts (6+ separate processes, each with failure modes)
 
-### Clawvato Agent Layer (Phase 2)
-7. **Agent supervisor**: src/cc-native/agent-supervisor.ts — LISTEN/NOTIFY message router, invokes CC --print --session
-8. **Curator loop**: scripts/curator-loop.sh — Sonnet, always-on, processes inbox, audits brains
-9. **System prompts**: curator-system.md, entity-agent-system.md
-10. **Entrypoint**: updated to start curator + supervisor as background processes
+Arrived at v4 proposal through ~10 design iterations:
+- Single Opus master crawl 2x/day replaces all scanner components
+- Reads ALL email (no domain filter), Opus routes by understanding
+- Action brief in admin voice replaces discrete todo list
+- Workstreams defined by people + purpose, not domains
+- Lightweight urgency check between crawls (zero LLM tokens)
 
-## Current State
+### Key Decisions
+1. Kill domain-based content filtering — Opus reads everything
+2. Kill incremental updates — full rewrite every crawl
+3. Kill proposal/approval flow — auto-apply (AI takes the wheel)
+4. Action brief format: human-readable prose + agent-parseable actions
+5. Workstreams = people + purpose + context, NOT domains
+6. Canvas as the primary human-facing view
+7. Brain-platform stores output of intelligence, not raw facts
 
-### What Works
-- Mailbox: send/receive messages between agents ✓ (11 tests)
-- Inbox: content discovery pointers, processing lifecycle ✓
-- Brain state: .md file generation from DB facts ✓ (8 tests)
-- NOTIFY: triggers fire on fact changes, debounced regeneration ✓
-- All 61 brain-platform tests pass ✓
-- Both repos compile clean ✓
+### Files Created/Modified
+- docs/DESIGN_V4_MASTER_CRAWL.md (NEW — full design doc)
+- src/cc-native/v3-scanner.ts (MODIFIED — many fixes, will be replaced by v4)
+- src/cc-native/slack-channel.ts (MODIFIED — added slack_update tool)
+- scripts/cc-native-entrypoint.sh (MODIFIED — scanner auto-restart, separate MCP URLs)
+- config/prompts/cc-native-system.md (MODIFIED — progress update instructions)
+- ~/.claude.json (MODIFIED — global brain-platform MCP config)
+- ~/.claude/.mcp.json (MODIFIED — updated to v3 server)
 
-### What's Not Yet Tested End-to-End
-1. Curator processing real inbox items (needs deployment or local run with CLI)
-2. Agent supervisor routing real messages to CC --print
-3. Brain.md regeneration via NOTIFY in production (tested in unit tests)
-4. Full flow: content → inbox → curator → store_fact → brain.md → entity agent reads
-
-### Known Issues
-1. Acorns brain still has 496 misrouted facts — needs cleanup (curator audit job will handle this)
-2. GYG/Vail/Ad Platforms brains still empty — need re-backfill with curator
-3. business-state.md truncates purpose text at 80 chars (cosmetic)
-4. brain.md for dev brain is 76K chars (~20K tokens) — may need pruning for large brains
+### brain-platform changes (separate repo, deployed)
+- engine/v3-cron.ts — exported getLastRun/updateLastRun, optional timestamp
+- engine/v3-context.ts — include todo UUIDs in context output
+- adapters/v3-mcp.ts — added get_last_scan, set_last_scan, update_alteration_slack, get_alteration_by_slack_ts
 
 ## Next Steps
-1. **Push brain-platform to main** → auto-deploy to Railway
-2. **Push clawvato to cc-native-engine** → auto-deploy to Railway
-3. **Test curator end-to-end** — verify it processes inbox items and files facts correctly
-4. **Clean up Acorns brain** — run curator audit to retire misrouted facts
-5. **Re-backfill** with curator doing the extraction (not the old triage pipeline)
-6. **Test entity agent** — CoS sends message via mailbox, entity agent responds
-7. **Wire up webhooks** (Phase 5 in design doc) — Gmail Pub/Sub, Calendar watches
 
-## Files Created/Modified
+1. **Owner reviews docs/DESIGN_V4_MASTER_CRAWL.md** — confirm direction before building
+2. **Build masterCrawl()** — single function, reads all sources, produces all outputs
+3. **Build urgencyCheck()** — lightweight, no LLM
+4. **Test with live crawl** — already prototyped manually this session (worked well)
+5. **Delete v3 scanner code** — checkForNewContent, scanWorkstream, reconcileTodos, scanCatchall
+6. **Update CLAUDE.md** — architecture has fundamentally changed (again)
 
-### brain-platform
-- engine/mailbox.ts (NEW) — inbox + agent_messages + NOTIFY
-- engine/brain-state.ts (NEW) — brain.md + business-state.md generation
-- adapters/mcp.ts (MODIFIED) — 11 new tools, deprecated triage refs
-- server/index.ts (MODIFIED) — schema migrations, brain state listener
-- sidecar/poll-scheduler.ts (MODIFIED) — discovery-only, no triage
-- engine/config.ts (MODIFIED) — removed entityRouting
-- engine/brain-config.ts (MODIFIED) — removed refreshEntityList
-- config/default.json (MODIFIED) — removed entityRouting, triage disabled
-- connectors/types.ts (MODIFIED) — added contentIds to CollectorResult
-- tests/mailbox.test.ts (NEW) — 11 tests
-- tests/brain-state.test.ts (NEW) — 8 tests
-- engine/entity-router.ts (DELETED)
-- engine/triage.ts (DELETED)
-- tests/entity-router.test.ts (DELETED)
-- tests/triage.test.ts (DELETED)
-
-### clawvato
-- src/cc-native/agent-supervisor.ts (NEW) — message routing
-- scripts/curator-loop.sh (NEW) — always-on curator
-- config/prompts/curator-system.md (NEW) — curator instructions
-- config/prompts/entity-agent-system.md (NEW) — entity agent template
-- scripts/cc-native-entrypoint.sh (MODIFIED) — starts curator + supervisor
-- docs/DESIGN_AGENT_ARCHITECTURE_V2.md (NEW) — full design document
+## Open Questions
+- Should the master crawl also update entity back-of-books, or just briefs?
+- How to handle the "activity log" concept for cross-session context?
+- Should workstream_domains table be dropped entirely or kept as optional metadata?
+- Exact prompt structure for the master crawl output format
