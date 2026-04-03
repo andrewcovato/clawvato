@@ -88,15 +88,17 @@ export async function runMasterCrawl(opts: {
     try {
       const envelope = JSON.parse(stdout);
       const cost = envelope.total_cost_usd ?? 0;
-      const input = (envelope.usage?.input_tokens ?? 0) +
-                    (envelope.usage?.cache_creation_input_tokens ?? 0) +
-                    (envelope.usage?.cache_read_input_tokens ?? 0);
+      const newInput = envelope.usage?.input_tokens ?? 0;
+      const cacheCreate = envelope.usage?.cache_creation_input_tokens ?? 0;
+      const cacheRead = envelope.usage?.cache_read_input_tokens ?? 0;
       const output = envelope.usage?.output_tokens ?? 0;
       const turns = envelope.num_turns ?? 0;
+      const totalInput = newInput + cacheCreate + cacheRead;
 
-      log(`Crawl complete in ${durationMin}min | $${cost.toFixed(4)} | ${input} in / ${output} out | ${turns} turns`);
+      log(`Crawl complete in ${durationMin}min | $${cost.toFixed(4)} | ${totalInput} total in (${newInput} new + ${cacheCreate} cache-create + ${cacheRead} cache-read) / ${output} out | ${turns} turns`);
       await postToSlack(MONITORING_CHANNEL,
-        `✅ Master crawl complete — ${durationMin}min | $${cost.toFixed(4)} | ${input} in / ${output} out | ${turns} turns`
+        `✅ Master crawl complete — ${durationMin}min | $${cost.toFixed(4)} | ${turns} turns\n` +
+        `📊 Tokens: ${totalInput.toLocaleString()} in (${newInput.toLocaleString()} new + ${cacheCreate.toLocaleString()} cache-write + ${cacheRead.toLocaleString()} cache-read) | ${output.toLocaleString()} out`
       );
     } catch {
       log(`Crawl complete in ${durationMin}min (couldn't parse usage envelope)`);
