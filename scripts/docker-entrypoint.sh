@@ -76,8 +76,13 @@ fi
 
 chown -R clawvato:clawvato "$CLAWVATO_HOME" 2>/dev/null || true
 
-# ── Start the agent as non-root user ──
-if [ "${ENGINE:-hybrid}" = "cc-native" ]; then
+# ── Start the right process as non-root user ──
+ROLE="${ROLE:-cos}"
+
+if [ "$ROLE" = "sidecar" ]; then
+  echo "[entrypoint] Starting Crawl Sidecar (as clawvato user)"
+  exec su -p -s /bin/bash clawvato -c "/app/scripts/sidecar-entrypoint.sh"
+elif [ "${ENGINE:-hybrid}" = "cc-native" ]; then
   echo "[entrypoint] Starting CC-Native Engine (as clawvato user)"
   exec su -p -s /bin/bash clawvato -c "/app/scripts/cc-native-entrypoint.sh"
 else

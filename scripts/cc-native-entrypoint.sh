@@ -100,29 +100,12 @@ echo "[supervisor] MCP config written to $MCP_CONFIG"
 # Brain-platform handles extraction server-side via its own ANTHROPIC_API_KEY.
 unset ANTHROPIC_API_KEY 2>/dev/null || true
 
-# ── Start sidecar in background ──
-# The sidecar runs: task poller (60s) + master crawl cron (2x daily) + urgency check (5min).
-# Master crawl spawns ephemeral claude --print sessions. Sidecar auto-restarts on crash.
-export CANVAS_ID="${CANVAS_ID:-}"
-export MONITORING_CHANNEL_ID="${MONITORING_CHANNEL_ID:-}"
-
-start_sidecar() {
-  while true; do
-    echo "[supervisor] Starting sidecar (task poller + master crawl + urgency check)" >&2
-    npx tsx src/cc-native/task-scheduler-standalone.ts 2>&1 | while IFS= read -r line; do echo "$line" >&2; done
-    EXIT=$?
-    echo "[supervisor] Sidecar exited (code: $EXIT), restarting in 10s..." >&2
-    sleep 10
-  done
-}
-start_sidecar &
-SIDECAR_PID=$!
-echo "[supervisor] Sidecar PID: $SIDECAR_PID"
+# Sidecar (task poller + master crawl + urgency check) runs as a SEPARATE Railway service.
+# Set ROLE=sidecar on the crawl-sidecar service. This entrypoint is CoS-only.
 
 # ── Cleanup on exit ──
 cleanup() {
   echo "[supervisor] Shutting down..."
-  kill "$SIDECAR_PID" 2>/dev/null || true
   rm -f "$MCP_CONFIG"
   exit 0
 }
