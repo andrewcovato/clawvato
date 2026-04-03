@@ -239,9 +239,30 @@ setInterval(async () => {
 }, urgencyMs);
 
 // Initial ticks after brief delay
-setTimeout(() => {
+setTimeout(async () => {
   void taskTick().catch(err => logger.warn({ error: err }, 'Initial task tick failed'));
-  void crawlTick().catch(err => logger.warn({ error: err }, 'Initial crawl tick failed'));
+
+  // Manual crawl trigger: set RUN_CRAWL_NOW=1 env var to fire immediately on startup
+  if (process.env.RUN_CRAWL_NOW === '1') {
+    logger.info('RUN_CRAWL_NOW=1 detected — triggering immediate crawl');
+    crawlRunning = true;
+    try {
+      const result = await runMasterCrawl({
+        lookbackDays: config.crawl.lookbackDays,
+        canvasId: process.env.CANVAS_ID ?? '',
+        timeoutMs: config.crawl.timeoutMs,
+        maxTurns: config.crawl.maxTurns,
+      });
+      lastCrawlTime = new Date();
+      logger.info({ success: result.success, durationMs: result.durationMs }, 'Manual crawl finished');
+    } catch (err) {
+      logger.error({ error: err }, 'Manual crawl threw unexpectedly');
+    } finally {
+      crawlRunning = false;
+    }
+  } else {
+    void crawlTick().catch(err => logger.warn({ error: err }, 'Initial crawl tick failed'));
+  }
 }, 5000);
 
 logger.info('Sidecar running — task poller + master crawl + urgency check');

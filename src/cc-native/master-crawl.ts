@@ -4,8 +4,9 @@
 
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { readFileSync } from 'fs';
-import { resolve } from 'path';
+import { readFileSync, writeFileSync, unlinkSync } from 'fs';
+import { resolve, join } from 'path';
+import { tmpdir } from 'os';
 
 const execFileAsync = promisify(execFile);
 
@@ -39,16 +40,19 @@ export async function runMasterCrawl(opts: {
   log(`Starting master crawl — lookback: ${opts.lookbackDays}d, canvas: ${opts.canvasId}`);
   await postToSlack(MONITORING_CHANNEL, `🔄 Master crawl starting — ${timestamp}`);
 
-  // Load and template the prompt
+  // Load and template the prompt, write to temp file
   const promptPath = resolve(process.cwd(), 'config/prompts/master-crawl.md');
-  let prompt: string;
+  const tmpPromptPath = join(tmpdir(), `master-crawl-${Date.now()}.md`);
   try {
-    prompt = readFileSync(promptPath, 'utf-8')
+    const raw = readFileSync(promptPath, 'utf-8');
+    const templated = raw
       .replace(/\{\{LOOKBACK_DAYS\}\}/g, String(opts.lookbackDays))
       .replace(/\{\{CANVAS_ID\}\}/g, opts.canvasId)
       .replace(/\{\{TIMESTAMP\}\}/g, timestamp);
+    writeFileSync(tmpPromptPath, templated);
+    log(`Prompt written to ${tmpPromptPath} (${templated.length} chars)`);
   } catch (e) {
-    const err = `Failed to load prompt: ${e}`;
+    const err = `Failed to load/write prompt: ${e}`;
     log(err);
     return { success: false, durationMs: Date.now() - startTime, error: err };
   }
@@ -56,6 +60,7 @@ export async function runMasterCrawl(opts: {
   try {
     const mcpConfig = process.env.MCP_CONFIG ?? '/tmp/cc-native-mcp.json';
 
+    // Point claude at the prompt file instead of passing via -p (avoids shell arg limits)
     const { stdout } = await execFileAsync('claude', [
       '--print',
       '--model', 'opus',
@@ -64,7 +69,7 @@ export async function runMasterCrawl(opts: {
       '--allowedTools', 'Bash,mcp__brain-platform__*,mcp__claude_ai_Slack__*,mcp__claude_ai_Fireflies__*',
       '--dangerously-skip-permissions',
       '--max-turns', String(opts.maxTurns ?? 100),
-      '-p', prompt,
+      '-p', `Read and follow the instructions in ${tmpPromptPath}. Execute all phases in order.`,
     ], {
       timeout: opts.timeoutMs ?? 900_000, // 15 min default
       maxBuffer: 20 * 1024 * 1024,
@@ -101,8 +106,12 @@ export async function runMasterCrawl(opts: {
   } catch (e: any) {
     const durationMs = Date.now() - startTime;
     const err = e.killed ? `Timed out after ${(durationMs / 60_000).toFixed(1)}min` : String(e.message ?? e);
-    log(`Crawl failed: ${err}`);
-    await postToSlack(MONITORING_CHANNEL, `❌ Master crawl failed — ${err}`);
+    // Include stderr if available for debugging
+    const stderr = e.stderr ? `\nstderr: ${String(e.stderr).slice(0, 500)}` : '';
+    log(`Crawl failed: ${err}${stderr}`);
+    await postToSlack(MONITORING_CHANNEL, `❌ Master crawl failed — ${err}${stderr}`);
     return { success: false, durationMs, error: err };
+  } finally {
+    try { unlinkSync(tmpPromptPath); } catch { /* cleanup best-effort */ }
   }
 }
