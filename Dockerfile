@@ -2,7 +2,7 @@ FROM node:22-slim
 
 # CA certificates — node:22-slim strips them, causing TLS UnknownIssuer errors
 # expect — automates interactive programs with proper PTY (trust prompt, etc.)
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates expect && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates expect curl && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
