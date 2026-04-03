@@ -37,19 +37,35 @@ At the end of Phase 1, you should have a complete picture of:
 - Open items: todos, commitments, follow-ups
 - What your previous crawl told you to watch for
 
+Post progress: "📡 Crawl progress: Phase 1 complete — brain state loaded (N workstreams, N crawl notes)"
+
 ### Phase 2: Gather Sources
 
 Read all communication from the last {{LOOKBACK_DAYS}} days. You decide what matters, not a filter.
 
-**Email (Gmail via gws CLI):**
-
-Step 1 — Scan all threads (subject + snippet):
+**IMPORTANT: Progress reporting.** After completing each source, post a progress update to #clawvato-monitoring so the owner can see the crawl is working:
+```bash
+curl -s -X POST -H "Authorization: Bearer $SLACK_BOT_TOKEN" -H "Content-Type: application/json" \
+  -d '{"channel":"{{MONITORING_CHANNEL_ID}}","text":"📡 Crawl progress: [what you just finished]"}' \
+  "https://slack.com/api/chat.postMessage"
 ```
-gws gmail users threads list --params '{"userId":"me","q":"newer_than:{{LOOKBACK_DAYS}}d -category:promotions -category:social -category:updates","maxResults":500}'
-```
-If the response includes a `nextPageToken`, paginate until exhausted or you hit 2000 threads. Log the total thread count.
 
-Step 2 — Deep-read selectively. Call `threads get` (full format) for threads that:
+**Email (Gmail REST API via curl):**
+
+Step 1 — Get an access token (do this ONCE at the start):
+```bash
+curl -s -X POST -d "client_id=$GOOGLE_CLIENT_ID&client_secret=$GOOGLE_CLIENT_SECRET&refresh_token=$GOOGLE_REFRESH_TOKEN&grant_type=refresh_token" https://oauth2.googleapis.com/token
+```
+Extract the `access_token` from the JSON response. Use it for all subsequent Gmail calls.
+
+Step 2 — Scan all threads (subject + snippet):
+```bash
+curl -s -H "Authorization: Bearer ACCESS_TOKEN" \
+  "https://gmail.googleapis.com/gmail/v1/users/me/threads?q=newer_than:{{LOOKBACK_DAYS}}d%20-category:promotions%20-category:social%20-category:updates&maxResults=500"
+```
+If the response includes a `nextPageToken`, paginate until exhausted or you hit 2000 threads.
+
+Step 3 — Deep-read selectively. Call threads.get for threads that:
 - Involve known people (from brain state)
 - Involve known workstreams (by topic, not just domain)
 - Are from unknown senders who appear substantive (not automated)
@@ -58,17 +74,24 @@ Step 2 — Deep-read selectively. Call `threads get` (full format) for threads t
 
 Skip ONLY: shipping confirmations, password resets, marketing newsletters, automated notifications with no human content.
 
-If more than 150 threads qualify for deep read, prioritize by recency, then by crawl_notes relevance. Log how many threads were scanned vs deep-read.
+If more than 150 threads qualify for deep read, prioritize by recency, then by crawl_notes relevance.
 
+```bash
+curl -s -H "Authorization: Bearer ACCESS_TOKEN" \
+  "https://gmail.googleapis.com/gmail/v1/users/me/threads/THREAD_ID?format=full"
 ```
-gws gmail users threads get --params '{"userId":"me","id":"THREAD_ID","format":"full"}'
-```
+
+Post progress: "📡 Crawl progress: Gmail complete — N threads scanned, N deep-read"
 
 **Slack (via Bash + curl):**
 Use the Slack API via curl (see Tools section). Read recent history from key channels — focus on #clawvato-main (C0AMELZCDLP) and any channels where the owner is active. Use the search API for targeted searches when crawl notes direct you to look for something specific.
 
+Post progress: "📡 Crawl progress: Slack complete — N channels read, N messages"
+
 **Fireflies (via Bash + curl):**
 Use the Fireflies GraphQL API via curl (see Tools section). List transcripts from the lookback window, then read full transcripts for each meeting. Meeting transcripts contain commitments, decisions, and action items that don't appear anywhere else. Do not skip them or rely only on summaries.
+
+Post progress: "📡 Crawl progress: Fireflies complete — N meetings read"
 
 ### Phase 3: Analyze and Route
 
@@ -83,6 +106,8 @@ Now you have brain state AND source data. Analyze:
 4. **Check your crawl notes.** Your previous self told you to watch for specific things. Report on EVERY watch_for item: resolved, still open, or no evidence found. Do not silently drop any.
 
 5. **Check for stale context.** Compare what you read against entity contexts (Layer 1) and workstream contexts (Layer 2). If the brain says "MSA in final signature stage" but you just read that the MSA was signed last week, that's a context flag.
+
+Post progress: "📡 Crawl progress: Phase 3 complete — analysis done, N workstreams with activity, N context flags, N untracked items"
 
 ### Phase 4: Write Outputs
 
@@ -411,10 +436,15 @@ All tool names below are shown in their full namespaced form. Use these exact na
 - `mcp__brain-platform__create_entity` — create a new entity (Layer 1 context only)
 - `mcp__brain-platform__list_entities` / `mcp__brain-platform__get_entity` — read entity context (do NOT update)
 
-### Gmail (via Bash + gws CLI)
-- `gws gmail users threads list --params '{"userId":"me","q":"...","maxResults":N}'`
-- `gws gmail users threads get --params '{"userId":"me","id":"THREAD_ID","format":"full"}'`
-- Paginate with `pageToken` if response includes `nextPageToken`
+### Gmail (via Bash + curl + OAuth)
+First, exchange the refresh token for an access token (once per crawl):
+```bash
+curl -s -X POST -d "client_id=$GOOGLE_CLIENT_ID&client_secret=$GOOGLE_CLIENT_SECRET&refresh_token=$GOOGLE_REFRESH_TOKEN&grant_type=refresh_token" https://oauth2.googleapis.com/token
+```
+Then use the access token for all Gmail calls:
+- List threads: `curl -s -H "Authorization: Bearer TOKEN" "https://gmail.googleapis.com/gmail/v1/users/me/threads?q=QUERY&maxResults=N"`
+- Get thread: `curl -s -H "Authorization: Bearer TOKEN" "https://gmail.googleapis.com/gmail/v1/users/me/threads/THREAD_ID?format=full"`
+- Paginate with `pageToken` query param if response includes `nextPageToken`
 
 ### Slack (via Bash + curl + SLACK_BOT_TOKEN)
 The Slack Bot Token is available as $SLACK_BOT_TOKEN in the environment.
