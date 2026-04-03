@@ -2,9 +2,9 @@
   "project": {
     "name": "Clawvato",
     "description": "Business operating system for solo technical founders. Workstream-based context management with Opus-driven master crawl, admin-voice action briefs, and cloud-accessible state via MCP.",
-    "version": "0.19.0",
+    "version": "0.20.0",
     "status": "active",
-    "phase": "v4-master-crawl-proposed",
+    "phase": "v4-master-crawl-building",
     "startDate": "2026-03-06",
     "adoptedDate": "2026-03-07"
   },
@@ -12,53 +12,54 @@
     "1": { "name": "Build the Agent", "status": "complete", "description": "Reactive agent. Slack, memory, Google, Fireflies." },
     "2": { "name": "Build the Brain", "status": "superseded", "description": "Smart memory plugin. Superseded by v3." },
     "3": { "name": "v3 Operating System", "status": "complete", "description": "Workstreams + entities + todos + briefs + scanner. Built, deployed, stabilized. Fundamental limitations discovered." },
-    "4": { "name": "v4 Master Crawl", "status": "proposed", "description": "Single Opus crawl 2x/day replaces all scanner components. Intelligence at write time. Action briefs in admin voice. Design doc written, pending owner review." }
+    "4": { "name": "v4 Master Crawl", "status": "building", "description": "Ephemeral Opus crawl 2x/day. Code complete, brain-platform deployed with tracked items. Crawl agent deployed but not yet completing successfully. Needs separate Railway service." }
   },
   "infrastructure": {
     "local": "macOS, brain-platform MCP via local stdio + global ~/.claude.json",
     "cloud": "Railway (Growth By Science workspace)",
     "railwayProject": "99ecf42e-5142-442c-a79a-2f6fd0864ecf",
-    "railwayServices": ["clawvato (CoS + v3 scanner)", "brain-platform v2.0.0 (MCP tools + DB)", "Postgres"],
-    "database": "Railway Postgres — v3 schema (10 tables)",
+    "railwayServices": ["clawvato (CoS + sidecar)", "brain-platform v2.0.0 (MCP tools + DB)", "Postgres"],
+    "database": "Railway Postgres — v3 schema + tracked_items table (11 tables)",
     "taskChannel": "C0AN5J0LCP3 (#clawvato-tasks)",
-    "monitoringChannel": "C0APG26FLRJ (#clawvato-monitoring)",
+    "monitoringChannel": "C0APG26FLRJ (#clawvato-monitoring / #clawvato-tokens)",
     "canvas": "F0AQKUH7U1L (Open Items — Clawvato)",
     "maxPlan": "Claude Max — all LLM via claude --print ($0)",
-    "brainPlatform": "github.com/andrewcovato/brain-platform v2.0.0"
+    "brainPlatform": "github.com/andrewcovato/brain-platform (auto-deploy from main)"
   },
   "currentSprint": {
-    "id": "S31",
-    "name": "v4 Master Crawl — Design & Build",
+    "id": "S32",
+    "name": "v4 Master Crawl — Build & Deploy",
     "goals": [
-      "Review v4 design doc — PENDING OWNER REVIEW",
-      "Build masterCrawl() — single Opus call, reads all sources",
-      "Build urgencyCheck() — lightweight, no LLM",
-      "Test with live crawl (prototyped manually in S31)",
-      "Delete v3 scanner code",
-      "Update CLAUDE.md for v4 architecture"
+      "Design doc complete with three-layer model, tracked items, agent architecture ✅",
+      "Brain-platform: tracked items table + MCP tools ✅",
+      "Clawvato: master crawl launcher + prompt + sidecar + config ✅",
+      "Entity data cleanup (11 entities) ✅",
+      "Deploy and test crawl — NOT WORKING (3 starts, 0 completions)",
+      "Set up separate Railway service for crawl sidecar — NEXT",
+      "Debug crawl with isolated logs — NEXT",
+      "End-to-end test: crawl → briefs → tracked items → canvas → crawl notes"
     ],
-    "progress": "20% — design doc written, manual crawl prototype tested"
+    "progress": "60% — code complete, deployed, but crawl not completing"
   },
   "lastSession": {
-    "number": 31,
-    "date": "2026-04-02",
-    "type": "Stabilization + major design pivot",
+    "number": 32,
+    "date": "2026-04-03",
+    "type": "Design refinement + full build + deploy debugging",
     "keyDecisions": [
-      "Kill domain-based content filtering — Opus reads everything",
-      "Kill incremental updates — full rewrite every crawl",
-      "Kill proposal/approval flow — auto-apply",
-      "Action brief format: admin voice, human + agent readable",
-      "Workstreams = people + purpose, NOT domains",
-      "Brain stores output of intelligence, not raw facts",
-      "2x daily master crawl replaces 30+ fragmented scanner calls"
+      "Three-layer data model: entity BoB / workstream BoB / brief",
+      "Crawl agent must be ephemeral (Memento argument)",
+      "Tracked items replace granular todos (semantic keys, status-driven deltas)",
+      "Separate Railway service for crawl sidecar (owner decision)",
+      "Owner feedback: diagnose first, don't jump to fixes"
     ]
   },
   "immediateBacklog": [
-    { "id": "V4-REVIEW", "title": "Owner reviews docs/DESIGN_V4_MASTER_CRAWL.md", "status": "next" },
-    { "id": "V4-BUILD", "title": "Build masterCrawl() + urgencyCheck()", "status": "blocked", "blockedBy": "V4-REVIEW" },
-    { "id": "V4-TEST", "title": "Test v4 with live data", "status": "blocked", "blockedBy": "V4-BUILD" },
-    { "id": "V4-DEPLOY", "title": "Deploy v4, delete v3 scanner", "status": "blocked", "blockedBy": "V4-TEST" },
-    { "id": "UPDATE-CLAUDE-MD", "title": "Rewrite CLAUDE.md for v4 architecture", "status": "next" }
+    { "id": "V4-SEPARATE-SERVICE", "title": "Set up separate Railway service for crawl sidecar", "status": "next" },
+    { "id": "V4-DEBUG-CRAWL", "title": "Debug crawl with isolated logs", "status": "blocked", "blockedBy": "V4-SEPARATE-SERVICE" },
+    { "id": "V4-FIX-URGENCY", "title": "Fix urgency check gws binary path", "status": "backlog" },
+    { "id": "V4-E2E-TEST", "title": "End-to-end crawl test", "status": "blocked", "blockedBy": "V4-DEBUG-CRAWL" },
+    { "id": "V4-DELETE-V3", "title": "Delete v3-scanner.ts after v4 confirmed", "status": "blocked", "blockedBy": "V4-E2E-TEST" },
+    { "id": "UPDATE-CLAUDE-MD", "title": "Rewrite CLAUDE.md for v4 architecture", "status": "blocked", "blockedBy": "V4-E2E-TEST" }
   ],
   "backlog": [
     { "id": "CROSS-SESSION", "priority": "medium", "title": "Cross-session context via log_activity MCP tool" },
@@ -66,5 +67,5 @@
     { "id": "NEWMAIL", "priority": "low", "title": "Newmail digest — reads action brief for context" }
   ],
   "designDoc": "docs/DESIGN_V4_MASTER_CRAWL.md",
-  "lastUpdated": "2026-04-02"
+  "lastUpdated": "2026-04-03"
 }

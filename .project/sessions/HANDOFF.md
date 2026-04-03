@@ -1,86 +1,109 @@
 # Session Handoff
 
-> Last updated: 2026-04-02 | Session 31 | Scanner Stabilization → v4 Design
+> Last updated: 2026-04-03 | Session 32 | v4 Master Crawl — Build + Deploy
 
 ## Quick Resume
 
 ```
-Phase: 3 → proposing v4
+Phase: v4 Master Crawl — implementation
 Branch: cc-native-engine
-Build: DEPLOYED (brain-platform + clawvato on Railway)
-State: v3 scanner running but fundamentally limited.
-       v4 Master Crawl design proposed, pending owner review.
+Build: Code complete, deployed, CRAWL NOT YET WORKING
+State: Brain-platform deployed with tracked items (tested, working).
+       Clawvato deployed but crawl agent has never completed successfully.
+       Three crawl starts, zero completions. Likely MCP_CONFIG issue (fixed)
+       but untested since fix deployed.
 
-Canvas: F0AQKUH7U1L (https://growthbyscience.slack.com/docs/T05CQ396M8V/F0AQKUH7U1L)
-  - Last updated Apr 2 with full manual crawl
-  - Action brief format with admin-voice workstream blocks
+Canvas: F0AQKUH7U1L
+Design doc: docs/DESIGN_V4_MASTER_CRAWL.md (comprehensive)
+Crawl prompt: config/prompts/master-crawl.md (blind-reviewed)
 
-Design doc: docs/DESIGN_V4_MASTER_CRAWL.md (927 lines)
+IMMEDIATE: Set up separate Railway service for crawl sidecar.
+           Owner explicitly requested cloud testing, not local.
 ```
 
-## Session 31 — What Happened
+## Session 32 — What Happened
 
-### First Half: Scanner Stabilization
-Fixed ~12 bugs in the v3 scanner that were burning through Max plan session limits:
-- Persisted scan times in DB (no more 7-day re-read on restart)
-- Epoch-second Gmail filtering (no more re-scanning same-day threads)
-- Sequential scan loops (no more overlapping cycles)
-- Separate MCP URLs for CoS vs scanner
-- Token monitoring → #clawvato-monitoring
-- Fireflies scanning implemented
-- Two-phase catchall (metadata triage → deep read)
-- Post-brief Haiku reconciliation
-- Auto-apply alterations
-- Living Slack canvas for todo list
+### Design Refinements
+1. Three-layer data model (entity BoB / workstream BoB / brief) with separation enforcement
+2. Agent architecture: CoS (always-on, writes nothing proactively) vs Crawl Agent (ephemeral, autonomous writer)
+3. Tracked items: structured anchors with semantic keys replacing granular todos
+4. Brief continuity: delta-first format driven by tracked item status changes
+5. Artifacts: multi-type reference materials (email, meeting, doc, Slack, Drive)
+6. Crawl notes: Memento-style durable attention between ephemeral runs
+7. Entity/workstream creation permissions: crawl can create entities, recommends workstreams via monitoring channel
 
-### Second Half: v4 Design
-Despite all fixes, fundamental problems remained:
-- Todo list accuracy was ~70% — stale items, missing items, duplicates
-- Domain-based content check missed contacts outside tracked domains
-- Incremental updates compounded errors over time
-- Too many moving parts (6+ separate processes, each with failure modes)
+### Code Built
 
-Arrived at v4 proposal through ~10 design iterations:
-- Single Opus master crawl 2x/day replaces all scanner components
-- Reads ALL email (no domain filter), Opus routes by understanding
-- Action brief in admin voice replaces discrete todo list
-- Workstreams defined by people + purpose, not domains
-- Lightweight urgency check between crawls (zero LLM tokens)
+#### brain-platform (deployed, tested, working)
+- `engine/v3-schema.ts` — tracked_items table
+- `engine/v3-types.ts` — TrackedItem types
+- `engine/v3-tracked-items.ts` — CRUD module (upsert, list, complete, cancel)
+- `engine/v3-context.ts` — tracked items in get_workstream_context
+- `adapters/v3-mcp.ts` — 5 MCP tools + router cases
+- Integration tested against Railway DB: all 7 tests pass
+
+#### clawvato (deployed, crawl NOT working yet)
+- `config/prompts/master-crawl.md` — full system prompt (blind-reviewed, tuned)
+- `src/cc-native/master-crawl.ts` — ephemeral Opus launcher (file-based prompt, --mcp-config, stderr logging)
+- `src/cc-native/urgency-check.ts` — disabled (gws GLIBC mismatch from Node sidecar)
+- `src/cc-native/task-scheduler-standalone.ts` — sidecar with crawl cron + urgency + RUN_CRAWL_NOW trigger
+- `config/default.json` + `src/config.ts` — crawl + urgencyCheck config
+- `scripts/cc-native-entrypoint.sh` — MCP_CONFIG exported, sidecar replaces scanner
+
+### Data Cleanup
+- 11 entity contexts cleaned (10 contaminated + 1 missing Acorns)
+- All entities now pure Layer 1 company profiles
+
+### Bugs Found and Fixed
+1. Missing `--mcp-config` on claude --print (critical)
+2. UTC timezone in cron (used Intl.DateTimeFormat for Eastern)
+3. Double-fire on restart (persist lastCrawlHour to disk)
+4. Upsert parameter ambiguity (resolve in JS before SQL)
+5. Summary empty string on insert (use placeholder)
+6. MCP_CONFIG not exported in entrypoint (local bash var, not env var)
+7. gws GLIBC mismatch in urgency check (disabled for now)
+
+### What DIDN'T Work
+- Three crawl attempts on Railway, all started but none completed
+- Logs unreadable (CoS TUI ANSI codes overwhelm sidecar stderr)
+- Can't tell where the crawl hangs — zero output between "starting" and timeout/silence
+- Owner correctly flagged: need separate Railway service for isolated logs
 
 ### Key Decisions
-1. Kill domain-based content filtering — Opus reads everything
-2. Kill incremental updates — full rewrite every crawl
-3. Kill proposal/approval flow — auto-apply (AI takes the wheel)
-4. Action brief format: human-readable prose + agent-parseable actions
-5. Workstreams = people + purpose + context, NOT domains
-6. Canvas as the primary human-facing view
-7. Brain-platform stores output of intelligence, not raw facts
-
-### Files Created/Modified
-- docs/DESIGN_V4_MASTER_CRAWL.md (NEW — full design doc)
-- src/cc-native/v3-scanner.ts (MODIFIED — many fixes, will be replaced by v4)
-- src/cc-native/slack-channel.ts (MODIFIED — added slack_update tool)
-- scripts/cc-native-entrypoint.sh (MODIFIED — scanner auto-restart, separate MCP URLs)
-- config/prompts/cc-native-system.md (MODIFIED — progress update instructions)
-- ~/.claude.json (MODIFIED — global brain-platform MCP config)
-- ~/.claude/.mcp.json (MODIFIED — updated to v3 server)
-
-### brain-platform changes (separate repo, deployed)
-- engine/v3-cron.ts — exported getLastRun/updateLastRun, optional timestamp
-- engine/v3-context.ts — include todo UUIDs in context output
-- adapters/v3-mcp.ts — added get_last_scan, set_last_scan, update_alteration_slack, get_alteration_by_slack_ts
+1. Crawl agent must be ephemeral (Memento argument)
+2. Three-layer data model with mechanical enforcement
+3. Tracked items replace todos (semantic keys, brief rendered from status changes)
+4. Separate Railway service for crawl sidecar (owner decision, not yet built)
+5. Owner feedback: "Don't jump to fixes. Find all failure modes first, present solutions."
+6. Owner feedback: "gws CLI DOES work on Railway" — issue is Node calling system gws vs Claude's gws
 
 ## Next Steps
 
-1. **Owner reviews docs/DESIGN_V4_MASTER_CRAWL.md** — confirm direction before building
-2. **Build masterCrawl()** — single function, reads all sources, produces all outputs
-3. **Build urgencyCheck()** — lightweight, no LLM
-4. **Test with live crawl** — already prototyped manually this session (worked well)
-5. **Delete v3 scanner code** — checkForNewContent, scanWorkstream, reconcileTodos, scanCatchall
-6. **Update CLAUDE.md** — architecture has fundamentally changed (again)
+1. **Set up separate Railway service** for the crawl sidecar (owner explicitly requested this)
+   - Needs: its own container, own logs, same Railway project
+   - Runs: task-scheduler-standalone.ts (task poller + crawl cron + urgency check)
+   - Connects to: same Postgres, same brain-platform MCP, same Slack
+   - Does NOT run: CoS (that stays in the main service)
+
+2. **Debug the crawl** with isolated logs — figure out WHERE it hangs:
+   - Does `claude --print` start? (check for process spawn)
+   - Does MCP connect? (check for brain-platform tool calls)
+   - Does the prompt load? (check for file read)
+   - Does the LLM start generating? (check for any output)
+
+3. **Fix urgency check gws** — find the correct gws binary path on Railway (it works inside claude subprocess but not from Node directly)
+
+4. **Remove RUN_CRAWL_NOW=1** after testing (currently set to 0, should be removed entirely once crawl works)
+
+5. **Test end-to-end**: crawl completes, briefs updated, tracked items created, canvas refreshed, crawl notes written
 
 ## Open Questions
-- Should the master crawl also update entity back-of-books, or just briefs?
-- How to handle the "activity log" concept for cross-session context?
-- Should workstream_domains table be dropped entirely or kept as optional metadata?
-- Exact prompt structure for the master crawl output format
+- Is the prompt too large for `claude --print` to handle? (unlikely — v3 scanner passed larger prompts)
+- Is there a Railway resource limit being hit? (memory, CPU)
+- Does `claude --print` need different MCP config than the CoS? (HTTP transport may behave differently for --print)
+- Should the crawl service use `railway run` for manual triggers instead of RUN_CRAWL_NOW env var?
+
+## Railway Env Vars Set This Session
+- `CANVAS_ID=F0AQKUH7U1L`
+- `MONITORING_CHANNEL_ID=C0APG26FLRJ`
+- `RUN_CRAWL_NOW=0` (was 1, set back to 0)
