@@ -88,6 +88,8 @@ export async function runMasterCrawl(opts: {
     // Parse JSON envelope for usage stats
     try {
       const envelope = JSON.parse(stdout);
+      const resultText = envelope.result ?? '';
+      log(`Crawl result (first 2000 chars):\n${String(resultText).slice(0, 2000)}`);
       const cost = envelope.total_cost_usd ?? 0;
       const newInput = envelope.usage?.input_tokens ?? 0;
       const cacheCreate = envelope.usage?.cache_creation_input_tokens ?? 0;
