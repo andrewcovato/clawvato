@@ -41,7 +41,8 @@ export async function runMasterCrawl(opts: {
   await postToSlack(MONITORING_CHANNEL, `🔄 Master crawl starting — ${timestamp}`);
 
   // Load and template the prompt, write to temp file
-  const promptPath = resolve(process.cwd(), 'config/prompts/master-crawl.md');
+  const promptFile = process.env.CRAWL_PROMPT_OVERRIDE ?? 'config/prompts/master-crawl.md';
+  const promptPath = resolve(process.cwd(), promptFile);
   const tmpPromptPath = join(tmpdir(), `master-crawl-${Date.now()}.md`);
   try {
     const raw = readFileSync(promptPath, 'utf-8');
