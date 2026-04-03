@@ -41,37 +41,11 @@ export async function runUrgencyCheck(opts: {
 }): Promise<void> {
   const keywordsLower = opts.keywords.map(k => k.toLowerCase());
 
-  // Gmail: check for new threads with urgency signals
-  try {
-    const { stdout } = await execFileAsync('gws', [
-      'gmail', 'users', 'threads', 'list',
-      '--params', JSON.stringify({
-        userId: 'me',
-        q: 'newer_than:1h -category:promotions -category:social -category:updates',
-        maxResults: 50,
-      }),
-    ], { timeout: 15_000, maxBuffer: 2 * 1024 * 1024 });
-
-    const data = JSON.parse(stdout);
-    const threads = data.threads ?? [];
-
-    for (const thread of threads) {
-      const snippet = (thread.snippet ?? '').toLowerCase();
-      const subject = (thread.subject ?? '').toLowerCase();
-      const combined = `${subject} ${snippet}`;
-
-      const matched = keywordsLower.find(k => combined.includes(k));
-      if (matched) {
-        const from = thread.from ?? 'unknown sender';
-        log(`Urgency signal: "${matched}" in email from ${from}: ${thread.subject}`);
-        await postToOwner(
-          `🚨 *Urgent email detected*\nFrom: ${from}\nSubject: ${thread.subject}\nMatched: "${matched}"`
-        );
-      }
-    }
-  } catch (e) {
-    log(`Gmail urgency check failed: ${e}`);
-  }
+  // Gmail urgency check — disabled until we have a direct Gmail API solution.
+  // The gws CLI binary requires GLIBC 2.39 which Railway's container doesn't have.
+  // The master crawl agent uses gws via claude --print (which has its own gws binary),
+  // but the urgency check runs directly in the Node sidecar.
+  // TODO: Implement via Google OAuth + fetch to Gmail API directly.
 
   // Slack: check for new DMs or mentions since last crawl
   // (Slack's native push via channel events handles most of this — this is a safety net)

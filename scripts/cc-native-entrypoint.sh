@@ -67,7 +67,7 @@ export MCP_AUTH_TOKEN="${MCP_AUTH_TOKEN:-}"
 # CoS uses StreamableHTTP MCP protocol → /mcp endpoint
 # Scanner uses legacy JSON → /api/tool (via CLAWVATO_MEMORY_INTERNAL_URL)
 MEMORY_URL="${CLAWVATO_MCP_URL:-http://brain-platform.railway.internal:8100/mcp}"
-MCP_CONFIG="/tmp/cc-native-mcp.json"
+export MCP_CONFIG="/tmp/cc-native-mcp.json"
 OLD_UMASK=$(umask)
 umask 077
 cat > "$MCP_CONFIG" <<MCPJSON
