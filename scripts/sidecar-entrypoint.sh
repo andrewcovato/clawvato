@@ -74,12 +74,12 @@ echo "[sidecar] Claude OAuth: ${CLAUDE_CODE_OAUTH_TOKEN:+set}"
 echo "[sidecar] Running tool access diagnostic..."
 echo "[sidecar] claude auth status:"
 claude auth status 2>&1 || echo "[sidecar] auth status failed"
-echo "[sidecar] Testing claude --print tool access (max 3 turns, 30s timeout)..."
+echo "[sidecar] Testing claude --print tool access (Bash + brain-platform MCP)..."
 DIAG_RESULT=$(timeout 60 claude --print --output-format json --max-turns 3 \
   --mcp-config "$MCP_CONFIG" \
-  --allowedTools "Bash,mcp__brain-platform__*,mcp__claude_ai_Slack__*,mcp__claude_ai_Gmail__*,mcp__claude_ai_Fireflies__*" \
+  --allowedTools "Bash,mcp__brain-platform__*" \
   --dangerously-skip-permissions \
-  -p "List every MCP tool name you have access to that starts with mcp__claude_ai. Just the names, one per line. If you have zero such tools, say NONE." 2>/dev/null) || true
+  -p "Test: 1) Run: gws gmail users threads list --params '{\"userId\":\"me\",\"q\":\"newer_than:1d\",\"maxResults\":1}' and say SUCCESS or FAILURE. 2) Call mcp__brain-platform__list_workstreams and say SUCCESS or FAILURE. Just the two results." 2>/dev/null) || true
 echo "[sidecar] Diagnostic result:"
 echo "$DIAG_RESULT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('result','')[:1000])" 2>/dev/null || echo "$DIAG_RESULT" | tail -20
 echo "[sidecar] Diagnostic complete."

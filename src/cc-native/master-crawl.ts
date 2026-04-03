@@ -48,6 +48,7 @@ export async function runMasterCrawl(opts: {
     const templated = raw
       .replace(/\{\{LOOKBACK_DAYS\}\}/g, String(opts.lookbackDays))
       .replace(/\{\{CANVAS_ID\}\}/g, opts.canvasId)
+      .replace(/\{\{MONITORING_CHANNEL_ID\}\}/g, MONITORING_CHANNEL)
       .replace(/\{\{TIMESTAMP\}\}/g, timestamp);
     writeFileSync(tmpPromptPath, templated);
     log(`Prompt written to ${tmpPromptPath} (${templated.length} chars)`);
@@ -66,7 +67,7 @@ export async function runMasterCrawl(opts: {
       '--model', 'opus',
       '--output-format', 'json',
       '--mcp-config', mcpConfig,
-      '--allowedTools', 'Bash,mcp__brain-platform__*,mcp__claude_ai_Slack__*,mcp__claude_ai_Fireflies__*',
+      '--allowedTools', 'Bash,mcp__brain-platform__*',
       '--dangerously-skip-permissions',
       '--max-turns', String(opts.maxTurns ?? 100),
       '-p', `Read and follow the instructions in ${tmpPromptPath}. Execute all phases in order.`,

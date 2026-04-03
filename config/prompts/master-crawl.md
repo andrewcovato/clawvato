@@ -64,14 +64,11 @@ If more than 150 threads qualify for deep read, prioritize by recency, then by c
 gws gmail users threads get --params '{"userId":"me","id":"THREAD_ID","format":"full"}'
 ```
 
-**Slack (via native MCP tools):**
-Use `mcp__claude_ai_Slack__slack_read_channel` for key channels. Focus on DMs and channels where the owner is active. Use `mcp__claude_ai_Slack__slack_search_public_and_private` for targeted searches when crawl notes direct you to look for something specific.
+**Slack (via Bash + curl):**
+Use the Slack API via curl (see Tools section). Read recent history from key channels — focus on #clawvato-main (C0AMELZCDLP) and any channels where the owner is active. Use the search API for targeted searches when crawl notes direct you to look for something specific.
 
-**Fireflies (via native MCP tools):**
-```
-mcp__claude_ai_Fireflies__fireflies_get_transcripts — list meetings in lookback window
-```
-For each meeting in the lookback window: read the full transcript via `mcp__claude_ai_Fireflies__fireflies_get_transcript`. Meeting transcripts contain commitments, decisions, and action items that don't appear anywhere else. Do not skip them or rely only on summaries.
+**Fireflies (via Bash + curl):**
+Use the Fireflies GraphQL API via curl (see Tools section). List transcripts from the lookback window, then read full transcripts for each meeting. Meeting transcripts contain commitments, decisions, and action items that don't appear anywhere else. Do not skip them or rely only on summaries.
 
 ### Phase 3: Analyze and Route
 
@@ -235,7 +232,7 @@ Watch items: N resolved, N still open, N new
 Threads scanned: N | Deep-read: N | Meetings read: N
 ```
 
-Update the canvas via `mcp__claude_ai_Slack__slack_update_canvas` with canvas_id `{{CANVAS_ID}}`. Replace the full canvas content.
+Update the canvas via the Slack API (see Tools section for curl command). Canvas ID: `{{CANVAS_ID}}`. Replace the full canvas content.
 
 #### 4d. Artifacts
 
@@ -419,17 +416,63 @@ All tool names below are shown in their full namespaced form. Use these exact na
 - `gws gmail users threads get --params '{"userId":"me","id":"THREAD_ID","format":"full"}'`
 - Paginate with `pageToken` if response includes `nextPageToken`
 
-### Slack (native MCP — use full namespaced names)
-- `mcp__claude_ai_Slack__slack_read_channel` — read channel history
-- `mcp__claude_ai_Slack__slack_search_public_and_private` — search across Slack
-- `mcp__claude_ai_Slack__slack_update_canvas` — update the living canvas
-- `mcp__claude_ai_Slack__slack_send_message` — post to #clawvato-monitoring
+### Slack (via Bash + curl + SLACK_BOT_TOKEN)
+The Slack Bot Token is available as $SLACK_BOT_TOKEN in the environment.
 
-### Fireflies (native MCP — use full namespaced names)
-- `mcp__claude_ai_Fireflies__fireflies_get_transcripts` — list meetings with date/keyword filters
-- `mcp__claude_ai_Fireflies__fireflies_get_transcript` — full transcript for a meeting
-- `mcp__claude_ai_Fireflies__fireflies_get_summary` — AI summary for a meeting
-- `mcp__claude_ai_Fireflies__fireflies_search` — search by keyword, date, participants
+Read channel history:
+```bash
+curl -s -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+  "https://slack.com/api/conversations.history?channel=CHANNEL_ID&limit=100"
+```
+
+Search messages:
+```bash
+curl -s -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+  "https://slack.com/api/search.messages?query=QUERY&count=20"
+```
+
+Post message (for monitoring posts):
+```bash
+curl -s -X POST -H "Authorization: Bearer $SLACK_BOT_TOKEN" -H "Content-Type: application/json" \
+  -d '{"channel":"CHANNEL_ID","text":"MESSAGE"}' \
+  "https://slack.com/api/chat.postMessage"
+```
+
+Update canvas:
+```bash
+curl -s -X POST -H "Authorization: Bearer $SLACK_BOT_TOKEN" -H "Content-Type: application/json" \
+  -d '{"canvas_id":"{{CANVAS_ID}}","changes":[{"operation":"replace","document_content":{"type":"markdown","markdown":"CONTENT"}}]}' \
+  "https://slack.com/api/canvases.edit"
+```
+
+Key channel IDs:
+- #clawvato-main: C0AMELZCDLP
+- #clawvato-tasks: C0AN5J0LCP3
+- #clawvato-monitoring: {{MONITORING_CHANNEL_ID}}
+
+### Fireflies (via Bash + curl + FIREFLIES_API_KEY)
+The Fireflies API key is available as $FIREFLIES_API_KEY in the environment.
+
+List recent transcripts:
+```bash
+curl -s -X POST -H "Content-Type: application/json" -H "Authorization: Bearer $FIREFLIES_API_KEY" \
+  -d '{"query":"query { transcripts(limit: 20) { id title date organizer_email participants duration } }"}' \
+  "https://api.fireflies.ai/graphql"
+```
+
+Get full transcript:
+```bash
+curl -s -X POST -H "Content-Type: application/json" -H "Authorization: Bearer $FIREFLIES_API_KEY" \
+  -d '{"query":"query { transcript(id: \"TRANSCRIPT_ID\") { id title sentences { text speaker_name start_time } } }"}' \
+  "https://api.fireflies.ai/graphql"
+```
+
+Get meeting summary:
+```bash
+curl -s -X POST -H "Content-Type: application/json" -H "Authorization: Bearer $FIREFLIES_API_KEY" \
+  -d '{"query":"query { transcript(id: \"TRANSCRIPT_ID\") { id title summary { overview action_items } } }"}' \
+  "https://api.fireflies.ai/graphql"
+```
 
 ## Failure Modes to Avoid
 
