@@ -25,6 +25,8 @@ import {
   markReminderSent,
   type ScheduledTask,
 } from '../tasks/store.js';
+import { runMasterCrawl } from './master-crawl.js';
+import { runUrgencyCheck } from './urgency-check.js';
 
 // Redirect console to stderr
 const stderrWrite = (msg: string) => process.stderr.write(msg + '\n');
@@ -129,13 +131,70 @@ async function postTaskToSlack(task: ScheduledTask): Promise<void> {
   logger.info({ taskId: task.id, title: task.title, channel }, 'Task posted to Slack for CC');
 }
 
+// ── Master Crawl Cron ──
+
+function parseCronHours(schedule: string): number[] {
+  // Handles "0 8,18 * * *" → [8, 18]
+  const parts = schedule.split(/\s+/);
+  if (parts.length < 2) return [];
+  return parts[1].split(',').map(Number).filter(n => !isNaN(n));
+}
+
+let lastCrawlHour = -1;
+let lastCrawlTime = new Date();
+let crawlRunning = false;
+
+async function crawlTick(): Promise<void> {
+  if (!config.crawl.enabled || crawlRunning) return;
+
+  const now = new Date();
+  const currentHour = now.getHours();
+  const crawlHours = parseCronHours(config.crawl.schedule);
+
+  if (crawlHours.includes(currentHour) && currentHour !== lastCrawlHour) {
+    lastCrawlHour = currentHour;
+    crawlRunning = true;
+
+    logger.info({ hour: currentHour }, 'Master crawl cron firing');
+    try {
+      const result = await runMasterCrawl({
+        lookbackDays: config.crawl.lookbackDays,
+        canvasId: process.env.CANVAS_ID ?? '',
+        timeoutMs: config.crawl.timeoutMs,
+        maxTurns: config.crawl.maxTurns,
+      });
+      lastCrawlTime = new Date();
+      logger.info({ success: result.success, durationMs: result.durationMs }, 'Master crawl finished');
+    } catch (err) {
+      logger.error({ error: err }, 'Master crawl threw unexpectedly');
+    } finally {
+      crawlRunning = false;
+    }
+  }
+}
+
+// ── Urgency Check ──
+
+async function urgencyTick(): Promise<void> {
+  if (!config.urgencyCheck.enabled) return;
+  try {
+    await runUrgencyCheck({
+      lastCrawlTime,
+      keywords: config.urgencyCheck.keywords,
+    });
+  } catch (err) {
+    logger.debug({ error: err }, 'Urgency check failed — non-critical');
+  }
+}
+
 // ── Start ──
 
 const taskPollMs = config.tasks.schedulerPollMs;
+const urgencyMs = config.urgencyCheck.intervalMs;
 
-logger.info({ taskPollMs }, 'Sidecar starting — task poller only (sweeps moved to brain-platform)');
+logger.info({ taskPollMs, urgencyMs, crawlSchedule: config.crawl.schedule }, 'Sidecar starting — task poller + master crawl + urgency check');
 
-// Task poller
+// Task poller (every 60s)
 setInterval(async () => {
   try {
     await taskTick();
@@ -144,10 +203,31 @@ setInterval(async () => {
   }
 }, taskPollMs);
 
-// Initial task tick after brief delay
-setTimeout(() => void taskTick().catch(err => logger.warn({ error: err }, 'Initial task tick failed')), 5000);
+// Master crawl cron check (every 60s — checks if it's time to fire)
+setInterval(async () => {
+  try {
+    await crawlTick();
+  } catch (err) {
+    logger.warn({ error: err }, 'Crawl tick failed');
+  }
+}, 60_000);
 
-logger.info('Sidecar running — task poller + event feed');
+// Urgency check (every 5 min)
+setInterval(async () => {
+  try {
+    await urgencyTick();
+  } catch (err) {
+    logger.warn({ error: err }, 'Urgency tick failed');
+  }
+}, urgencyMs);
+
+// Initial ticks after brief delay
+setTimeout(() => {
+  void taskTick().catch(err => logger.warn({ error: err }, 'Initial task tick failed'));
+  void crawlTick().catch(err => logger.warn({ error: err }, 'Initial crawl tick failed'));
+}, 5000);
+
+logger.info('Sidecar running — task poller + master crawl + urgency check');
 
 // Keep alive
 process.on('SIGTERM', () => {

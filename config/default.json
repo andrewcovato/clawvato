@@ -121,6 +121,18 @@
     "maxRejectionRate": 0.05,
     "recentWindow": 5
   },
+  "crawl": {
+    "enabled": true,
+    "schedule": "0 8,18 * * *",
+    "lookbackDays": 7,
+    "timeoutMs": 900000,
+    "maxTurns": 100
+  },
+  "urgencyCheck": {
+    "enabled": true,
+    "intervalMs": 300000,
+    "keywords": ["ASAP", "urgent", "today", "critical", "immediately", "time-sensitive"]
+  },
   "google": {},
   "github": {}
 }

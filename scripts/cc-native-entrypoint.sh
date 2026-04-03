@@ -100,28 +100,29 @@ echo "[supervisor] MCP config written to $MCP_CONFIG"
 # Brain-platform handles extraction server-side via its own ANTHROPIC_API_KEY.
 unset ANTHROPIC_API_KEY 2>/dev/null || true
 
-# ── Start v3 scanner in background ──
-# The scanner polls workstreams via brain-platform MCP, spawns claude --print
-# for commitment extraction and brief updates. Runs every 5 min (commitments)
-# and every hour (briefs).
-# Start scanner with auto-restart on crash
-start_scanner() {
+# ── Start sidecar in background ──
+# The sidecar runs: task poller (60s) + master crawl cron (2x daily) + urgency check (5min).
+# Master crawl spawns ephemeral claude --print sessions. Sidecar auto-restarts on crash.
+export CANVAS_ID="${CANVAS_ID:-}"
+export MONITORING_CHANNEL_ID="${MONITORING_CHANNEL_ID:-}"
+
+start_sidecar() {
   while true; do
-    echo "[supervisor] Starting v3 scanner" >&2
-    npx tsx src/cc-native/v3-scanner.ts 2>&1 | while IFS= read -r line; do echo "$line" >&2; done
+    echo "[supervisor] Starting sidecar (task poller + master crawl + urgency check)" >&2
+    npx tsx src/cc-native/task-scheduler-standalone.ts 2>&1 | while IFS= read -r line; do echo "$line" >&2; done
     EXIT=$?
-    echo "[supervisor] Scanner exited (code: $EXIT), restarting in 10s..." >&2
+    echo "[supervisor] Sidecar exited (code: $EXIT), restarting in 10s..." >&2
     sleep 10
   done
 }
-start_scanner &
-SCANNER_PID=$!
-echo "[supervisor] v3 Scanner PID: $SCANNER_PID"
+start_sidecar &
+SIDECAR_PID=$!
+echo "[supervisor] Sidecar PID: $SIDECAR_PID"
 
 # ── Cleanup on exit ──
 cleanup() {
   echo "[supervisor] Shutting down..."
-  kill "$SCANNER_PID" 2>/dev/null || true
+  kill "$SIDECAR_PID" 2>/dev/null || true
   rm -f "$MCP_CONFIG"
   exit 0
 }
