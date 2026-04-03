@@ -140,19 +140,36 @@ function parseCronHours(schedule: string): number[] {
   return parts[1].split(',').map(Number).filter(n => !isNaN(n));
 }
 
+import { readFileSync, writeFileSync } from 'fs';
+
+const LAST_CRAWL_FILE = '/tmp/last-master-crawl-hour';
 let lastCrawlHour = -1;
 let lastCrawlTime = new Date();
 let crawlRunning = false;
+
+// Restore last crawl hour from disk (prevents double-fire on sidecar restart)
+try {
+  lastCrawlHour = parseInt(readFileSync(LAST_CRAWL_FILE, 'utf-8').trim(), 10);
+  logger.info({ lastCrawlHour }, 'Restored last crawl hour from disk');
+} catch { /* first start */ }
+
+function getEasternHour(date: Date): number {
+  return parseInt(
+    new Intl.DateTimeFormat('en-US', { hour: 'numeric', hour12: false, timeZone: 'America/New_York' }).format(date),
+    10,
+  );
+}
 
 async function crawlTick(): Promise<void> {
   if (!config.crawl.enabled || crawlRunning) return;
 
   const now = new Date();
-  const currentHour = now.getHours();
+  const currentHour = getEasternHour(now);
   const crawlHours = parseCronHours(config.crawl.schedule);
 
   if (crawlHours.includes(currentHour) && currentHour !== lastCrawlHour) {
     lastCrawlHour = currentHour;
+    try { writeFileSync(LAST_CRAWL_FILE, String(currentHour)); } catch { /* non-critical */ }
     crawlRunning = true;
 
     logger.info({ hour: currentHour }, 'Master crawl cron firing');

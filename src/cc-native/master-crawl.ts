@@ -54,10 +54,13 @@ export async function runMasterCrawl(opts: {
   }
 
   try {
+    const mcpConfig = process.env.MCP_CONFIG ?? '/tmp/cc-native-mcp.json';
+
     const { stdout } = await execFileAsync('claude', [
       '--print',
       '--model', 'opus',
       '--output-format', 'json',
+      '--mcp-config', mcpConfig,
       '--allowedTools', 'Bash,mcp__brain-platform__*,mcp__claude_ai_Slack__*,mcp__claude_ai_Fireflies__*',
       '--dangerously-skip-permissions',
       '--max-turns', String(opts.maxTurns ?? 100),
