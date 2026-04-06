@@ -141,6 +141,7 @@ function parseCronHours(schedule: string): number[] {
 }
 
 import { readFileSync, writeFileSync } from 'fs';
+import { createServer, type IncomingMessage, type ServerResponse } from 'http';
 
 const LAST_CRAWL_FILE = '/tmp/last-master-crawl-hour';
 let lastCrawlHour = -1;
@@ -160,6 +161,38 @@ function getEasternHour(date: Date): number {
   );
 }
 
+// ── Shared crawl trigger — used by cron, HTTP, and manual trigger ──
+
+async function triggerCrawl(opts?: {
+  promptOverride?: string;
+  lookbackDays?: number;
+  source?: string;
+}): Promise<{ success: boolean; durationMs: number; error?: string }> {
+  if (crawlRunning) {
+    return { success: false, durationMs: 0, error: 'Crawl already running' };
+  }
+  crawlRunning = true;
+  const source = opts?.source ?? 'unknown';
+  logger.info({ source }, 'Master crawl triggered');
+  try {
+    const result = await runMasterCrawl({
+      lookbackDays: opts?.lookbackDays ?? config.crawl.lookbackDays,
+      canvasId: process.env.CANVAS_ID ?? '',
+      timeoutMs: config.crawl.timeoutMs,
+      maxTurns: config.crawl.maxTurns,
+      promptOverride: opts?.promptOverride,
+    });
+    lastCrawlTime = new Date();
+    logger.info({ source, success: result.success, durationMs: result.durationMs }, 'Master crawl finished');
+    return result;
+  } catch (err) {
+    logger.error({ error: err, source }, 'Master crawl threw unexpectedly');
+    return { success: false, durationMs: 0, error: String(err) };
+  } finally {
+    crawlRunning = false;
+  }
+}
+
 async function crawlTick(): Promise<void> {
   if (!config.crawl.enabled || crawlRunning) return;
 
@@ -170,23 +203,7 @@ async function crawlTick(): Promise<void> {
   if (crawlHours.includes(currentHour) && currentHour !== lastCrawlHour) {
     lastCrawlHour = currentHour;
     try { writeFileSync(LAST_CRAWL_FILE, String(currentHour)); } catch { /* non-critical */ }
-    crawlRunning = true;
-
-    logger.info({ hour: currentHour }, 'Master crawl cron firing');
-    try {
-      const result = await runMasterCrawl({
-        lookbackDays: config.crawl.lookbackDays,
-        canvasId: process.env.CANVAS_ID ?? '',
-        timeoutMs: config.crawl.timeoutMs,
-        maxTurns: config.crawl.maxTurns,
-      });
-      lastCrawlTime = new Date();
-      logger.info({ success: result.success, durationMs: result.durationMs }, 'Master crawl finished');
-    } catch (err) {
-      logger.error({ error: err }, 'Master crawl threw unexpectedly');
-    } finally {
-      crawlRunning = false;
-    }
+    await triggerCrawl({ source: `cron (hour ${currentHour})` });
   }
 }
 
@@ -241,34 +258,101 @@ setInterval(async () => {
 // Initial ticks after brief delay
 setTimeout(async () => {
   void taskTick().catch(err => logger.warn({ error: err }, 'Initial task tick failed'));
-
-  // Manual crawl trigger: set RUN_CRAWL_NOW=1 env var to fire immediately on startup
-  if (process.env.RUN_CRAWL_NOW === '1') {
-    logger.info('RUN_CRAWL_NOW=1 detected — triggering immediate crawl');
-    crawlRunning = true;
-    try {
-      const result = await runMasterCrawl({
-        lookbackDays: config.crawl.lookbackDays,
-        canvasId: process.env.CANVAS_ID ?? '',
-        timeoutMs: config.crawl.timeoutMs,
-        maxTurns: config.crawl.maxTurns,
-      });
-      lastCrawlTime = new Date();
-      logger.info({ success: result.success, durationMs: result.durationMs }, 'Manual crawl finished');
-    } catch (err) {
-      logger.error({ error: err }, 'Manual crawl threw unexpectedly');
-    } finally {
-      crawlRunning = false;
-    }
-  } else {
-    void crawlTick().catch(err => logger.warn({ error: err }, 'Initial crawl tick failed'));
-  }
+  void crawlTick().catch(err => logger.warn({ error: err }, 'Initial crawl tick failed'));
 }, 5000);
 
-logger.info('Sidecar running — task poller + master crawl + urgency check');
+// ── HTTP API for ad-hoc crawl triggers ──
+
+const AUTH_TOKEN = process.env.MCP_AUTH_TOKEN ?? '';
+const HTTP_PORT = parseInt(process.env.PORT ?? '8080', 10);
+
+function readBody(req: IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', () => resolve(Buffer.concat(chunks).toString()));
+    req.on('error', reject);
+  });
+}
+
+const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+  const url = req.url ?? '/';
+  const method = req.method ?? 'GET';
+
+  // Health check — no auth required
+  if (url === '/status' && method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      ok: true,
+      crawlRunning,
+      lastCrawlTime: lastCrawlTime.toISOString(),
+      lastCrawlHour,
+      uptime: process.uptime(),
+    }));
+    return;
+  }
+
+  // Auth check for crawl endpoints
+  const authHeader = req.headers.authorization ?? '';
+  const token = authHeader.replace(/^Bearer\s+/i, '');
+  if (!AUTH_TOKEN || token !== AUTH_TOKEN) {
+    res.writeHead(401, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Unauthorized' }));
+    return;
+  }
+
+  if (url === '/crawl' && method === 'POST') {
+    let body: { promptOverride?: string; lookbackDays?: number } = {};
+    try { body = JSON.parse(await readBody(req)); } catch { /* empty body is fine */ }
+
+    if (crawlRunning) {
+      res.writeHead(409, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Crawl already running' }));
+      return;
+    }
+
+    // Respond immediately, run crawl in background
+    res.writeHead(202, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ accepted: true, message: 'Crawl triggered' }));
+
+    void triggerCrawl({
+      source: 'http',
+      promptOverride: body.promptOverride,
+      lookbackDays: body.lookbackDays,
+    });
+    return;
+  }
+
+  if (url === '/crawl/smoke' && method === 'POST') {
+    if (crawlRunning) {
+      res.writeHead(409, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Crawl already running' }));
+      return;
+    }
+
+    res.writeHead(202, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ accepted: true, message: 'Smoke test triggered' }));
+
+    void triggerCrawl({
+      source: 'http/smoke',
+      promptOverride: 'config/prompts/crawl-smoke-test.md',
+    });
+    return;
+  }
+
+  res.writeHead(404, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ error: 'Not found' }));
+});
+
+server.listen(HTTP_PORT, () => {
+  logger.info({ port: HTTP_PORT }, 'Sidecar HTTP API listening');
+});
+
+logger.info('Sidecar running — task poller + master crawl + urgency check + HTTP API');
 
 // Keep alive
 process.on('SIGTERM', () => {
   logger.info('Sidecar shutting down');
+  server.close();
   process.exit(0);
 });

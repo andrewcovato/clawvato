@@ -33,6 +33,7 @@ export async function runMasterCrawl(opts: {
   canvasId: string;
   timeoutMs?: number;
   maxTurns?: number;
+  promptOverride?: string;
 }): Promise<{ success: boolean; durationMs: number; error?: string }> {
   const startTime = Date.now();
   const timestamp = new Date().toISOString();
@@ -41,8 +42,7 @@ export async function runMasterCrawl(opts: {
   await postToSlack(MONITORING_CHANNEL, `🔄 Master crawl starting — ${timestamp}`);
 
   // Load and template the prompt, write to temp file
-  const override = process.env.CRAWL_PROMPT_OVERRIDE;
-  const promptFile = (override && override !== 'none') ? override : 'config/prompts/master-crawl.md';
+  const promptFile = opts.promptOverride || 'config/prompts/master-crawl.md';
   const promptPath = resolve(process.cwd(), promptFile);
   const tmpPromptPath = join(tmpdir(), `master-crawl-${Date.now()}.md`);
   try {
