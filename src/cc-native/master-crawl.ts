@@ -2,13 +2,10 @@
 // Spawns an ephemeral Opus agent that reads all sources, writes structured output to the brain.
 // Called by the sidecar on a cron schedule (2x daily).
 
-import { execFile } from 'child_process';
-import { promisify } from 'util';
+import { spawn } from 'child_process';
 import { readFileSync, writeFileSync, unlinkSync } from 'fs';
 import { resolve, join } from 'path';
 import { tmpdir } from 'os';
-
-const execFileAsync = promisify(execFile);
 
 const log = (msg: string) => process.stderr.write(`[master-crawl] ${msg}\n`);
 
@@ -62,35 +59,76 @@ export async function runMasterCrawl(opts: {
     return { success: false, durationMs, error: err };
   }
 
-  try {
-    const mcpConfig = process.env.MCP_CONFIG ?? '/tmp/cc-native-mcp.json';
+  const mcpConfig = process.env.MCP_CONFIG ?? '/tmp/cc-native-mcp.json';
+  const timeoutMs = opts.timeoutMs ?? 900_000;
 
-    // Point claude at the prompt file instead of passing via -p (avoids shell arg limits)
-    const { stdout } = await execFileAsync('claude', [
-      '--print',
-      '--model', 'opus',
-      '--output-format', 'json',
-      '--mcp-config', mcpConfig,
-      '--allowedTools', 'Bash,mcp__brain-platform__*',
-      '--dangerously-skip-permissions',
-      '--max-turns', String(opts.maxTurns ?? 100),
-      '-p', `Read and follow the instructions in ${tmpPromptPath}. Execute all phases in order.`,
-    ], {
-      timeout: opts.timeoutMs ?? 900_000, // 15 min default
-      maxBuffer: 20 * 1024 * 1024,
-      env: {
-        ...process.env,
-        // Force Max plan OAuth ($0) — strip API key
-        ANTHROPIC_API_KEY: '',
-      },
+  try {
+    const result = await new Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean }>((resolve) => {
+      const stdoutChunks: Buffer[] = [];
+      const stderrChunks: Buffer[] = [];
+      let timedOut = false;
+
+      const proc = spawn('claude', [
+        '--print',
+        '--model', 'opus',
+        '--output-format', 'json',
+        '--mcp-config', mcpConfig,
+        '--allowedTools', 'Bash,mcp__brain-platform__*',
+        '--dangerously-skip-permissions',
+        '--max-turns', String(opts.maxTurns ?? 100),
+        '-p', `Read and follow the instructions in ${tmpPromptPath}. Execute all phases in order.`,
+      ], {
+        env: { ...process.env, ANTHROPIC_API_KEY: '' },
+      });
+
+      proc.stdout.on('data', (chunk: Buffer) => stdoutChunks.push(chunk));
+
+      // Stream stderr in real-time for visibility
+      proc.stderr.on('data', (chunk: Buffer) => {
+        stderrChunks.push(chunk);
+        const line = chunk.toString().trim();
+        if (line) log(`[stderr] ${line.slice(0, 500)}`);
+      });
+
+      const timer = setTimeout(() => {
+        timedOut = true;
+        proc.kill('SIGTERM');
+        setTimeout(() => proc.kill('SIGKILL'), 5000);
+      }, timeoutMs);
+
+      proc.on('close', (code) => {
+        clearTimeout(timer);
+        resolve({
+          stdout: Buffer.concat(stdoutChunks).toString(),
+          stderr: Buffer.concat(stderrChunks).toString(),
+          code,
+          timedOut,
+        });
+      });
     });
 
     const durationMs = Date.now() - startTime;
     const durationMin = (durationMs / 60_000).toFixed(1);
 
+    if (result.timedOut) {
+      const err = `Timed out after ${durationMin}min`;
+      const stderrTail = result.stderr.slice(-500);
+      log(`Crawl failed: ${err}\nLast stderr: ${stderrTail}`);
+      await postToSlack(MONITORING_CHANNEL, `❌ Master crawl failed — ${err}\nLast stderr: ${stderrTail.slice(0, 300)}`);
+      return { success: false, durationMs, error: err };
+    }
+
+    if (result.code !== 0) {
+      const err = `Exited with code ${result.code}`;
+      const stderrTail = result.stderr.slice(-500);
+      log(`Crawl failed: ${err}\nstderr: ${stderrTail}`);
+      await postToSlack(MONITORING_CHANNEL, `❌ Master crawl failed — ${err}\nstderr: ${stderrTail.slice(0, 300)}`);
+      return { success: false, durationMs, error: `${err}: ${stderrTail}` };
+    }
+
     // Parse JSON envelope for usage stats
     try {
-      const envelope = JSON.parse(stdout);
+      const envelope = JSON.parse(result.stdout);
       const resultText = envelope.result ?? '';
       log(`Crawl result (first 2000 chars):\n${String(resultText).slice(0, 2000)}`);
       const cost = envelope.total_cost_usd ?? 0;
@@ -112,14 +150,6 @@ export async function runMasterCrawl(opts: {
     }
 
     return { success: true, durationMs };
-  } catch (e: any) {
-    const durationMs = Date.now() - startTime;
-    const err = e.killed ? `Timed out after ${(durationMs / 60_000).toFixed(1)}min` : String(e.message ?? e);
-    // Include stderr if available for debugging
-    const stderr = e.stderr ? `\nstderr: ${String(e.stderr).slice(0, 500)}` : '';
-    log(`Crawl failed: ${err}${stderr}`);
-    await postToSlack(MONITORING_CHANNEL, `❌ Master crawl failed — ${err}${stderr}`);
-    return { success: false, durationMs, error: err };
   } finally {
     try { unlinkSync(tmpPromptPath); } catch { /* cleanup best-effort */ }
   }
