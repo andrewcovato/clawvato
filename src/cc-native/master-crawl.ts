@@ -41,7 +41,8 @@ export async function runMasterCrawl(opts: {
   await postToSlack(MONITORING_CHANNEL, `🔄 Master crawl starting — ${timestamp}`);
 
   // Load and template the prompt, write to temp file
-  const promptFile = process.env.CRAWL_PROMPT_OVERRIDE ?? 'config/prompts/master-crawl.md';
+  const override = process.env.CRAWL_PROMPT_OVERRIDE;
+  const promptFile = (override && override !== 'none') ? override : 'config/prompts/master-crawl.md';
   const promptPath = resolve(process.cwd(), promptFile);
   const tmpPromptPath = join(tmpdir(), `master-crawl-${Date.now()}.md`);
   try {
@@ -54,9 +55,11 @@ export async function runMasterCrawl(opts: {
     writeFileSync(tmpPromptPath, templated);
     log(`Prompt written to ${tmpPromptPath} (${templated.length} chars)`);
   } catch (e) {
+    const durationMs = Date.now() - startTime;
     const err = `Failed to load/write prompt: ${e}`;
     log(err);
-    return { success: false, durationMs: Date.now() - startTime, error: err };
+    await postToSlack(MONITORING_CHANNEL, `❌ Master crawl failed — ${err}`);
+    return { success: false, durationMs, error: err };
   }
 
   try {
