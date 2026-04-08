@@ -26,7 +26,7 @@ Read the current state of the brain. This is your ONLY source of truth about the
 
 1. Call `mcp__brain-platform__list_workstreams` — get all active workstreams
 2. For each workstream, call `mcp__brain-platform__get_workstream_context` — this returns: back-of-book context, linked entities with their context, all people, open todos/commitments/follow-ups, current brief, artifacts, and tracked domains
-3. Call `mcp__brain-platform__get_handoff(surface: "crawl")` — these are the notes your previous self left you: watch_for items, patterns, open questions. Read them carefully. They are your directed attention.
+3. Call `mcp__brain-platform__get_crawl_notes` — these are the notes your previous self left you: watch_for items, patterns, open questions, key facts per workstream. Read them carefully. They are your directed attention.
 4. Call `mcp__brain-platform__get_all_briefs` — read the current briefs. These are what you will REPLACE. Save them mentally as "previous briefs" — you will compare against them to produce the "since last crawl" delta.
 
 At the end of Phase 1, you should have a complete picture of:
@@ -322,7 +322,7 @@ The owner or CoS creates workstreams.
 
 #### 4g. Crawl Notes (for your next self)
 
-At the very end, write notes for the next crawl. Call `mcp__brain-platform__update_handoff(surface: "crawl", mode: "replace")` with:
+At the very end, write notes for the next crawl. Call `mcp__brain-platform__update_crawl_notes` with the `notes` parameter containing:
 
 ```
 ## Crawl Notes — {{TIMESTAMP}}
@@ -425,8 +425,8 @@ All tool names below are shown in their full namespaced form. Use these exact na
 - `mcp__brain-platform__add_person` — register a new contact
 - `mcp__brain-platform__get_people` — all known people
 - `mcp__brain-platform__search_people` — find by name/email
-- `mcp__brain-platform__update_handoff` — write crawl notes (surface: "crawl", mode: "replace")
-- `mcp__brain-platform__get_handoff` — read previous crawl notes (surface: "crawl")
+- `mcp__brain-platform__get_crawl_notes` — read previous crawl notes (watch_for, patterns, open questions, key facts)
+- `mcp__brain-platform__update_crawl_notes` — write crawl notes for the next crawl (notes: markdown, stats?: execution metrics)
 - `mcp__brain-platform__get_all_briefs` — cross-surface briefs
 - `mcp__brain-platform__list_tracked_items` — all tracked items for a workstream
 - `mcp__brain-platform__upsert_tracked_item` — create or update by key (workstream_id, key, type, status, summary, due?, blocking?, ref?)
