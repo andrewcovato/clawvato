@@ -125,7 +125,7 @@
     "enabled": true,
     "schedule": "0 8,18 * * *",
     "lookbackDays": 7,
-    "timeoutMs": 900000,
+    "timeoutMs": 1800000,
     "maxTurns": 100
   },
   "urgencyCheck": {
