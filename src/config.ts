@@ -289,13 +289,13 @@ const ConfigSchema = z.object({
     enabled: z.boolean().default(true),
     schedule: z.string().default('0 8,18 * * *'),
     lookbackDays: z.number().int().min(1).max(30).default(7),
-    timeoutMs: z.number().int().min(60000).default(900000),
+    timeoutMs: z.number().int().min(60000).default(1_800_000),
     maxTurns: z.number().int().min(10).default(100),
   }).default(() => ({
     enabled: true,
     schedule: '0 8,18 * * *',
     lookbackDays: 7,
-    timeoutMs: 900000,
+    timeoutMs: 1_800_000,
     maxTurns: 100,
   })),
 

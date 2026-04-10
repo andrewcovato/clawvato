@@ -60,7 +60,7 @@ export async function runMasterCrawl(opts: {
   }
 
   const mcpConfig = process.env.MCP_CONFIG ?? '/tmp/cc-native-mcp.json';
-  const timeoutMs = opts.timeoutMs ?? 900_000;
+  const timeoutMs = opts.timeoutMs ?? 1_800_000;
 
   try {
     const result = await new Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean }>((resolve) => {
@@ -131,6 +131,9 @@ export async function runMasterCrawl(opts: {
       const envelope = JSON.parse(result.stdout);
       const resultText = envelope.result ?? '';
       log(`Crawl result (first 2000 chars):\n${String(resultText).slice(0, 2000)}`);
+      // Log model usage to verify which model ran
+      const models = envelope.modelUsage ?? envelope.model_usage ?? {};
+      log(`Models used: ${JSON.stringify(Object.keys(models))}`);
       const cost = envelope.total_cost_usd ?? 0;
       const newInput = envelope.usage?.input_tokens ?? 0;
       const cacheCreate = envelope.usage?.cache_creation_input_tokens ?? 0;
