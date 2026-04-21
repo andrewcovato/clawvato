@@ -60,6 +60,8 @@ export GWS_CONFIG_B64="${GWS_CONFIG_B64:-}"
 export DATA_DIR="${DATA_DIR:-/data}"
 export TZ="${TZ:-America/New_York}"
 export MCP_AUTH_TOKEN="${MCP_AUTH_TOKEN:-}"
+export GBS_LEDGER_MCP_URL="${GBS_LEDGER_MCP_URL:-https://gbs-ledger-app-production.up.railway.app/mcp/}"
+export GBS_LEDGER_MCP_TOKEN="${GBS_LEDGER_MCP_TOKEN:-}"
 
 # ── Generate MCP config with auth token ──
 # The memory MCP server runs as a separate Railway service (HTTP transport).
@@ -80,6 +82,13 @@ cat > "$MCP_CONFIG" <<MCPJSON
         "Authorization": "Bearer ${MCP_AUTH_TOKEN}",
         "Accept": "application/json, text/event-stream",
         "Content-Type": "application/json"
+      }
+    },
+    "gbs-ledger": {
+      "type": "http",
+      "url": "${GBS_LEDGER_MCP_URL}",
+      "headers": {
+        "Authorization": "Bearer ${GBS_LEDGER_MCP_TOKEN}"
       }
     },
     "slack-channel": {
