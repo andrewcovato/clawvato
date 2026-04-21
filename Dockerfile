@@ -2,7 +2,7 @@ FROM node:22-slim
 
 # CA certificates — node:22-slim strips them, causing TLS UnknownIssuer errors
 # expect — automates interactive programs with proper PTY (trust prompt, etc.)
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates expect curl && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates expect curl jq && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -38,7 +38,8 @@ RUN useradd -m -s /bin/bash clawvato && \
 
 # Copy scripts and cc-native source (needed by tsx at runtime)
 COPY --chown=clawvato:clawvato scripts/ /app/scripts/
-RUN chmod +x /app/scripts/*.sh
+COPY --chown=clawvato:clawvato .claude/ /app/.claude/
+RUN chmod +x /app/scripts/*.sh /app/scripts/hooks/*.sh
 
 # NOTE: Don't set USER here — entrypoint needs root to fix /data permissions
 # on Railway's volume mount, then drops to clawvato user for CC

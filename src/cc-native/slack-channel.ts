@@ -24,7 +24,7 @@ import {
   CallToolRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { App } from '@slack/bolt';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { scanForSecrets } from '../security/output-sanitizer.js';
@@ -347,6 +347,20 @@ async function flushBatch(key: string): Promise<void> {
       name: 'eyes',
     });
   } catch { /* may fail if already reacted — non-critical */ }
+
+  // Record the active channel for PreToolUse hooks (e.g. gbs-ledger channel gate).
+  // CC processes dispatched events serially, so the file reflects what CC is
+  // responding to when its tool calls fire. Best-effort — hook is fail-closed
+  // so a missing file correctly blocks gated write tools.
+  try {
+    writeFileSync(
+      process.env.CC_ACTIVE_CHANNEL_FILE ?? '/tmp/cc-active-channel',
+      batch.channel,
+      { mode: 0o600 },
+    );
+  } catch (err) {
+    console.error('Failed to write active-channel file:', err);
+  }
 
   // Push as channel event
   await mcp.notification({

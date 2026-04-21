@@ -62,6 +62,10 @@ export TZ="${TZ:-America/New_York}"
 export MCP_AUTH_TOKEN="${MCP_AUTH_TOKEN:-}"
 export GBS_LEDGER_MCP_URL="${GBS_LEDGER_MCP_URL:-https://gbs-ledger-app-production.up.railway.app/mcp/}"
 export GBS_LEDGER_MCP_TOKEN="${GBS_LEDGER_MCP_TOKEN:-}"
+# Channel gate for gbs-ledger write tools (see scripts/hooks/gbs-ledger-gate.sh).
+# Fail-closed: write tools are blocked unless FINANCE_CHANNEL_ID is set AND
+# the active channel (written by slack-channel.ts) matches.
+export FINANCE_CHANNEL_ID="${FINANCE_CHANNEL_ID:-}"
 
 # ── Generate MCP config with auth token ──
 # The memory MCP server runs as a separate Railway service (HTTP transport).

@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "mcp__gbs-ledger__(classify|reclassify|apply_internal_transfer|apply_intercompany)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash scripts/hooks/gbs-ledger-gate.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

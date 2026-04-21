@@ -11,5 +11,6 @@ dist/
 coverage/
 .project/
 .workspaces/
-.claude/
+.claude/*
+!.claude/settings.json
 .mcp.json
