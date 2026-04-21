@@ -61,53 +61,71 @@ export DATA_DIR="${DATA_DIR:-/data}"
 export TZ="${TZ:-America/New_York}"
 export MCP_AUTH_TOKEN="${MCP_AUTH_TOKEN:-}"
 export GBS_LEDGER_MCP_URL="${GBS_LEDGER_MCP_URL:-https://gbs-ledger-app-production.up.railway.app/mcp/}"
-export GBS_LEDGER_MCP_TOKEN="${GBS_LEDGER_MCP_TOKEN:-}"
+export GBS_LEDGER_MCP_READ_TOKEN="${GBS_LEDGER_MCP_READ_TOKEN:-}"
+export GBS_LEDGER_MCP_WRITE_TOKEN="${GBS_LEDGER_MCP_WRITE_TOKEN:-}"
 # Channel gate for gbs-ledger write tools (see scripts/hooks/gbs-ledger-gate.sh).
-# Fail-closed: write tools are blocked unless FINANCE_CHANNEL_ID is set AND
-# the active channel (written by slack-channel.ts) matches.
+# Preferred: resolved at boot by slack-channel.ts via Slack API → /tmp/cc-finance-channel-id.
+# Fallback/override: FINANCE_CHANNEL_ID env var (used if lookup fails).
 export FINANCE_CHANNEL_ID="${FINANCE_CHANNEL_ID:-}"
 
-# ── Generate MCP config with auth token ──
-# The memory MCP server runs as a separate Railway service (HTTP transport).
-# We template the config at runtime to inject the auth token from env vars.
-# CoS uses StreamableHTTP MCP protocol → /mcp endpoint
-# Scanner uses legacy JSON → /api/tool (via CLAWVATO_MEMORY_INTERNAL_URL)
+# ── Generate MCP config with auth tokens ──
+# Built via Node so optional entries (gbs-ledger-*) can be conditionally skipped
+# when their env vars aren't set. Brain-platform and slack-channel are always
+# registered; gbs-ledger-{read,write} are included only when their tokens exist.
 MEMORY_URL="${CLAWVATO_MCP_URL:-http://brain-platform.railway.internal:8100/mcp}"
 export MCP_CONFIG="/tmp/cc-native-mcp.json"
 OLD_UMASK=$(umask)
 umask 077
-cat > "$MCP_CONFIG" <<MCPJSON
-{
-  "mcpServers": {
-    "brain-platform": {
-      "type": "http",
-      "url": "${MEMORY_URL}",
-      "headers": {
-        "Authorization": "Bearer ${MCP_AUTH_TOKEN}",
-        "Accept": "application/json, text/event-stream",
-        "Content-Type": "application/json"
-      }
-    },
-    "gbs-ledger": {
-      "type": "http",
-      "url": "${GBS_LEDGER_MCP_URL}",
-      "headers": {
-        "Authorization": "Bearer ${GBS_LEDGER_MCP_TOKEN}"
-      }
-    },
-    "slack-channel": {
-      "command": "npx",
-      "args": ["tsx", "src/cc-native/slack-channel.ts"],
-      "env": {
-        "LOG_DESTINATION": "stderr"
-      }
-    }
+MEMORY_URL="$MEMORY_URL" node <<'NODE' > "$MCP_CONFIG"
+const warn = (msg) => console.error("[supervisor] " + msg);
+const cfg = { mcpServers: {} };
+
+cfg.mcpServers["brain-platform"] = {
+  type: "http",
+  url: process.env.MEMORY_URL,
+  headers: {
+    Authorization: "Bearer " + (process.env.MCP_AUTH_TOKEN || ""),
+    Accept: "application/json, text/event-stream",
+    "Content-Type": "application/json",
+  },
+};
+
+// gbs-ledger: two scoped servers (read-only + full-write). Skipped if unconfigured.
+const gbsUrl = process.env.GBS_LEDGER_MCP_URL;
+if (!gbsUrl) {
+  warn("WARN: GBS_LEDGER_MCP_URL unset — skipping all gbs-ledger MCP entries");
+} else {
+  if (process.env.GBS_LEDGER_MCP_READ_TOKEN) {
+    cfg.mcpServers["gbs-ledger-read"] = {
+      type: "http",
+      url: gbsUrl,
+      headers: { Authorization: "Bearer " + process.env.GBS_LEDGER_MCP_READ_TOKEN },
+    };
+  } else {
+    warn("WARN: GBS_LEDGER_MCP_READ_TOKEN unset — skipping gbs-ledger-read MCP entry");
+  }
+  if (process.env.GBS_LEDGER_MCP_WRITE_TOKEN) {
+    cfg.mcpServers["gbs-ledger-write"] = {
+      type: "http",
+      url: gbsUrl,
+      headers: { Authorization: "Bearer " + process.env.GBS_LEDGER_MCP_WRITE_TOKEN },
+    };
+  } else {
+    warn("WARN: GBS_LEDGER_MCP_WRITE_TOKEN unset — skipping gbs-ledger-write MCP entry");
   }
 }
-MCPJSON
+
+cfg.mcpServers["slack-channel"] = {
+  command: "npx",
+  args: ["tsx", "src/cc-native/slack-channel.ts"],
+  env: { LOG_DESTINATION: "stderr" },
+};
+
+process.stdout.write(JSON.stringify(cfg, null, 2) + "\n");
+NODE
 umask "$OLD_UMASK"
 chmod 600 "$MCP_CONFIG"  # defense-in-depth
-echo "[supervisor] MCP config written to $MCP_CONFIG"
+echo "[supervisor] MCP config written to $MCP_CONFIG (entries: $(node -e 'console.log(Object.keys(JSON.parse(require("fs").readFileSync(process.env.MCP_CONFIG,"utf8")).mcpServers).join(","))'))"
 
 # Do NOT export ANTHROPIC_API_KEY — force CC to use Max plan OAuth.
 # Brain-platform handles extraction server-side via its own ANTHROPIC_API_KEY.

@@ -455,6 +455,56 @@ slackApp.event('app_mention', async ({ event }) => {
 await slackApp.start();
 console.error('Slack Channel connected via Socket Mode — listening for messages');
 
+// ── Resolve #clawvato-finance channel ID at boot ──
+// Written to /tmp/cc-finance-channel-id so the PreToolUse hook
+// (scripts/hooks/gbs-ledger-gate.sh) can gate gbs-ledger write tools
+// without a hard-coded channel ID.
+async function resolveFinanceChannelId(): Promise<void> {
+  const targetName = 'clawvato-finance';
+  const outFile = process.env.CC_FINANCE_CHANNEL_FILE ?? '/tmp/cc-finance-channel-id';
+  let found: string | undefined;
+
+  for (const type of ['private_channel', 'public_channel'] as const) {
+    try {
+      const result = await slackApp!.client.conversations.list({
+        types: type,
+        exclude_archived: true,
+        limit: 1000,
+      });
+      for (const ch of (result.channels ?? [])) {
+        if (!ch.id || !ch.name) continue;
+        if (ch.name === targetName) {
+          found = ch.id;
+          break;
+        }
+      }
+      if (found) break;
+    } catch (err) {
+      console.error(`Finance-channel lookup (${type}) failed:`, err);
+    }
+  }
+
+  if (!found) {
+    const fallback = process.env.FINANCE_CHANNEL_ID;
+    if (fallback) {
+      console.error(`#${targetName} not visible to bot; using FINANCE_CHANNEL_ID env var fallback: ${fallback}`);
+      found = fallback;
+    } else {
+      console.error(`WARN: could not resolve #${targetName} — bot may not be a member yet. gbs-ledger write tools will stay blocked until a restart after the bot joins.`);
+      return;
+    }
+  }
+
+  try {
+    writeFileSync(outFile, found, { mode: 0o600 });
+    console.error(`Resolved #${targetName} → ${found} (cached at ${outFile})`);
+  } catch (err) {
+    console.error(`Failed to write finance-channel file ${outFile}:`, err);
+  }
+}
+
+void resolveFinanceChannelId();
+
 // ── Startup crawl — notify CC to check for missed messages ──
 // Push a system event so CC knows it just started and should catch up.
 // CC uses slack_get_history + working context to resume seamlessly.

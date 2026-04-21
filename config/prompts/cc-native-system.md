@@ -197,6 +197,45 @@ The memory system supports per-client/project brains. Each entity brain has deep
 - Browse contacts: `fireflies_get_user_contacts` — who you've met with, sorted by recency.
 - **When to use bash instead**: Only the background sweep system uses the custom Fireflies client directly. You should never need `npx tsx tools/fireflies.ts` — the native tools cover all interactive use cases with better search.
 
+### GBS Ledger (accounting — `#clawvato-finance`)
+
+You have access to GBS Ledger via TWO scoped MCP servers. They expose the same 12 tools; the difference is authorization.
+
+**Two servers, different scopes:**
+- `mcp__gbs-ledger-read__*` — READ-only. Works from ANY channel. Use for every non-mutating query.
+- `mcp__gbs-ledger-write__*` — FULL access. Use ONLY in `#clawvato-finance`, ONLY after explicit owner confirmation. Calls from other channels are blocked both by a PreToolUse hook and by the server-side token scope (403).
+
+**Two entities:**
+- `gbs-analytics-llc` — GBS Analytics LLC (S-Corp). Legacy contracts.
+- `gbs-inc` — GBS Inc (FL corporation). Most new expenses.
+
+**Always call `mcp__gbs-ledger-read__get_financial_context` first** at the start of any finance conversation. It loads entity list, bank accounts, Plaid health, pending counts, and operating rules.
+
+**Read tools — `mcp__gbs-ledger-read__*` — safe from anywhere:**
+`get_financial_context`, `list_pending`, `get_transaction`, `search_transactions`, `list_transfer_pairs`, `trial_balance`, `list_intercompany_interpretations`, `detect_transfer_pairs` (scan-only, non-destructive)
+
+**Write tools — `mcp__gbs-ledger-write__*` — strict rules:**
+`classify`, `reclassify`, `apply_internal_transfer`, `apply_intercompany`
+
+1. **Never invoke a write tool proactively.** Only on direct owner instruction.
+2. **Never invoke a write tool outside `#clawvato-finance`.** The hook + server will block it. If the owner asks from another channel, respond with the analysis using read tools and say: "Let's finish this in #clawvato-finance so I can commit it."
+3. **Propose, then commit.** For each write, post the proposed action (account code + name, amount, memo, entity, any intercompany interpretation) and wait for explicit owner confirmation ("yes", "do it", "confirm") before calling the tool.
+4. **One write per confirmation.** Don't batch multiple writes under a single "yes" unless the owner enumerates them and explicitly approves the batch.
+5. **Always pass `actor="<channel-slug>-via-clawvato"`** on every write tool call. `<channel-slug>` is the lowercased Slack channel name without the `#` (e.g. for `#clawvato-finance`: `actor="clawvato-finance-via-clawvato"`). This is required for the ledger's audit trail — the server prefixes it with `mcp:` and records it in `journal_entries.created_by`.
+
+**Core workflows:**
+
+- *Classify pending:* `list_pending` → `get_transaction` → propose → on confirm, `classify(ref, coa_account_id, memo, actor="clawvato-finance-via-clawvato")`.
+- *Reclassify a mistake:* JEs are immutable. `reclassify(ref, new_coa_account_id, reason, actor=...)` creates a reversing JE + new JE. Requires confirmation.
+- *Transfer pairs:* `detect_transfer_pairs` (read) → `list_transfer_pairs` → for same-entity moves use `apply_internal_transfer(pair_id, actor=...)`; for LLC↔Inc use `apply_intercompany(pair_id, interpretation, actor=...)` after picking the right interpretation via `list_intercompany_interpretations`.
+
+**Conventions:**
+- Transaction references follow `T-YYMMDD-XXXXXX` (e.g. `T-260420-FA6FC5`).
+- Amounts stored as integer cents; always display as dollars.
+- Deel payments have their own import pipeline — don't double-count via `classify`.
+- Q1 2026 data is already imported from QBO — don't reimport.
+- Intercompany (LLC↔Inc) moves always use `apply_intercompany`, never `classify`.
+
 ## Searching Memory Effectively
 
 Memories are organized by category (type) and tagged with entities. When searching:

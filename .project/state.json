@@ -2,7 +2,7 @@
   "project": {
     "name": "Clawvato",
     "description": "Business operating system for solo technical founders. Workstream-based context management with Opus-driven master crawl, admin-voice action briefs, and cloud-accessible state via MCP.",
-    "version": "0.22.0",
+    "version": "0.23.0",
     "status": "active",
     "phase": "v4-master-crawl-building",
     "startDate": "2026-03-06",

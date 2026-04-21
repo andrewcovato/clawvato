@@ -14,13 +14,15 @@ set -euo pipefail
 INPUT=$(cat)
 TOOL_NAME=$(printf '%s' "$INPUT" | jq -r '.tool_name // ""')
 
-# Only gate gbs-ledger JE-mutating tools. `detect_transfer_pairs` is read-like
-# (populates pair suggestions, no JE mutation) and stays open.
+# Only gate gbs-ledger-write JE-mutating tools. `detect_transfer_pairs` is
+# read-like (populates pair suggestions, no JE mutation) and stays open.
+# Server-side scope enforcement is the primary defense — this hook is a
+# client-side channel gate that runs BEFORE the HTTP call is made.
 case "$TOOL_NAME" in
-  mcp__gbs-ledger__classify \
-  |mcp__gbs-ledger__reclassify \
-  |mcp__gbs-ledger__apply_internal_transfer \
-  |mcp__gbs-ledger__apply_intercompany)
+  mcp__gbs-ledger-write__classify \
+  |mcp__gbs-ledger-write__reclassify \
+  |mcp__gbs-ledger-write__apply_internal_transfer \
+  |mcp__gbs-ledger-write__apply_intercompany)
     ;;
   *)
     exit 0
@@ -33,9 +35,20 @@ block() {
   exit 0
 }
 
-# Fail-closed: if the gate isn't configured, block.
-if [ -z "${FINANCE_CHANNEL_ID:-}" ]; then
-  block "GBS Ledger write tool '$TOOL_NAME' blocked: FINANCE_CHANNEL_ID env var is unset. Cannot verify the request originated from #clawvato-finance."
+# Resolve finance channel ID: cached file (written by slack-channel.ts at boot)
+# takes precedence over the FINANCE_CHANNEL_ID env var. Both are optional;
+# fail-closed when neither is available.
+FINANCE_FILE="${CC_FINANCE_CHANNEL_FILE:-/tmp/cc-finance-channel-id}"
+FINANCE_ID=""
+if [ -f "$FINANCE_FILE" ]; then
+  FINANCE_ID=$(cat "$FINANCE_FILE" 2>/dev/null || printf '')
+fi
+if [ -z "$FINANCE_ID" ]; then
+  FINANCE_ID="${FINANCE_CHANNEL_ID:-}"
+fi
+
+if [ -z "$FINANCE_ID" ]; then
+  block "GBS Ledger write tool '$TOOL_NAME' blocked: #clawvato-finance channel ID is unresolved (neither $FINANCE_FILE nor FINANCE_CHANNEL_ID env var set). Ensure the bot is a member of #clawvato-finance and restart."
 fi
 
 ACTIVE_CHANNEL_FILE="${CC_ACTIVE_CHANNEL_FILE:-/tmp/cc-active-channel}"
@@ -45,7 +58,7 @@ fi
 
 ACTIVE_CHANNEL=$(cat "$ACTIVE_CHANNEL_FILE" 2>/dev/null || printf '')
 
-if [ "$ACTIVE_CHANNEL" != "$FINANCE_CHANNEL_ID" ]; then
+if [ "$ACTIVE_CHANNEL" != "$FINANCE_ID" ]; then
   block "GBS Ledger write tool '$TOOL_NAME' is restricted to #clawvato-finance. Current channel: ${ACTIVE_CHANNEL:-(unknown)}. Ask the owner to run this in #clawvato-finance, or propose the action and let them confirm there."
 fi
 

@@ -2,7 +2,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "mcp__gbs-ledger__(classify|reclassify|apply_internal_transfer|apply_intercompany)",
+        "matcher": "mcp__gbs-ledger-write__(classify|reclassify|apply_internal_transfer|apply_intercompany)",
         "hooks": [
           {
             "type": "command",
